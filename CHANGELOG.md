@@ -23,8 +23,9 @@
   `break`. Zero shared functions. The header over-declared an obligation the
   code never contracted, and has been corrected. Full evidence in
   [`docs/RELICENSING.md`](./docs/RELICENSING.md).
-- X-Raym's own scripts in `Legacy/` keep their GPL v3 and their authorship, now
-  declared explicitly in [`Legacy/LICENSE-NOTICE.md`](./Legacy/LICENSE-NOTICE.md).
+- X-Raym's own scripts included in the v3.0 release keep their GPL v3 and
+  authorship. They were later removed from the current distribution and remain
+  available in the immutable v3.0 tag and repository history.
 - New [`CONTRIBUTING.md`](./CONTRIBUTING.md) with a contributor licence
   agreement, so contributions can be used in ReaSet Pro.
 
@@ -117,7 +118,7 @@ travelled.
 *July 28, 2026*
 
 ### Installation & reliability
-- **`Reaset.lua`: one script instead of three.** Merges the native-loop engine, the lyrics bridge and the chords bridge into a single persistent background script. Lyrics/chords tracks are now optional — no error box if absent — and `ULT_GetMediaItemNote` is called defensively so a missing SWS install no longer breaks transport/loop control. No Action ID setup needed; the web UI auto-detects it. The original three scripts remain under `Requirements/` as a legacy/advanced path.
+- **`Reaset.lua`: one script instead of three.** Merges the native-loop engine, the lyrics bridge and the chords bridge into a single persistent background script. Lyrics/chords tracks are now optional — no error box if absent — and `ULT_GetMediaItemNote` is called defensively so a missing SWS install no longer breaks transport/loop control. No Action ID setup needed; the web UI auto-detects it. The original helper scripts shipped with this historical release but are no longer part of the current distribution.
 - **Wi-Fi drop / reconnect phantom-seek fix.** ReaSet issues absolute `SET/POS` commands based on its last polled position. If the poll stream cuts out (a tablet losing Wi-Fi) while REAPER keeps playing, the first fresh reply on reconnect used to trigger a stale loop/boundary decision that seeked REAPER *backward* to the pre-outage position — indistinguishable from a phantom tap. ReaSet now detects the gap (plus browser online/offline events) and suppresses only its own *automatic* transport commands for a short guard window while silently adopting REAPER's real position; explicit user taps are never suppressed.
 - **Decorated track names.** Lyrics/chords tracks no longer need to be named exactly `lyrics`/`chords` — prefixes, numbering and symbol decoration are stripped before matching (`*Lyrics`, `01 - Chords`, `[Lyrics]`, etc.), while names with an extra word (`Backing Lyrics`) are deliberately left alone.
 - **Real per-bridge status.** Instead of one generic "make sure you have a track named lyrics" hint for four different causes, the empty-state message now reports the actual one: script not running, no track matched, SWS missing, or track found with no item under the cursor.
@@ -174,8 +175,9 @@ travelled.
   compartidas. La cabecera declaraba una obligación que el código no contrajo, y
   se corrigió. La evidencia completa está en
   [`docs/RELICENSING.md`](./docs/RELICENSING.md).
-- Los scripts de X-Raym en `Legacy/` conservan su GPL v3 y su autoría, ahora
-  declaradas explícitamente en [`Legacy/LICENSE-NOTICE.md`](./Legacy/LICENSE-NOTICE.md).
+- Los scripts de X-Raym incluidos en la release v3.0 conservan su GPL v3 y su
+  autoría. Posteriormente se retiraron de la distribución actual y permanecen
+  disponibles en el tag inmutable v3.0 y el historial del repositorio.
 - Nuevo [`CONTRIBUTING.md`](./CONTRIBUTING.md) con acuerdo de contribución, para
   que las contribuciones puedan usarse en ReaSet Pro.
 
@@ -273,7 +275,7 @@ se iba. Copiabas el proyecto a la máquina de respaldo y viajaba solo el audio.
 *28 de julio de 2026*
 
 ### Instalación y fiabilidad
-- **`Reaset.lua`: un script en vez de tres.** Combina el motor de loop nativo, el puente de letras y el puente de acordes en un único script de fondo persistente. Los tracks de letras/acordes ahora son opcionales — sin cuadro de error si no existen — y `ULT_GetMediaItemNote` se llama defensivamente para que la falta de SWS ya no rompa el control de transporte/loop. No requiere configurar un Action ID; la web lo detecta sola. Los tres scripts originales siguen disponibles en `Requirements/` como ruta legacy/avanzada.
+- **`Reaset.lua`: un script en vez de tres.** Combina el motor de loop nativo, el puente de letras y el puente de acordes en un único script de fondo persistente. Los tracks de letras/acordes ahora son opcionales — sin cuadro de error si no existen — y `ULT_GetMediaItemNote` se llama defensivamente para que la falta de SWS ya no rompa el control de transporte/loop. No requiere configurar un Action ID; la web lo detecta sola. Los helpers originales se incluyeron en esta release histórica, pero ya no forman parte de la distribución actual.
 - **Corrección del salto fantasma al reconectar Wi-Fi.** ReaSet emite comandos `SET/POS` absolutos basados en la última posición sondeada. Si el flujo de sondeo se corta (una tablet que pierde Wi-Fi) mientras REAPER sigue reproduciendo, la primera respuesta fresca al reconectar solía disparar una decisión de loop/límite obsoleta que saltaba REAPER *hacia atrás* a la posición previa al corte — indistinguible de un tap fantasma. Ahora ReaSet detecta el corte (además de los eventos online/offline del navegador) y suprime solo sus propios comandos de transporte *automáticos* durante una ventana breve, adoptando en silencio la posición real de REAPER; los taps explícitos del usuario nunca se suprimen.
 - **Nombres de track decorados.** Los tracks de letras/acordes ya no necesitan llamarse exactamente `lyrics`/`chords` — prefijos, numeración y símbolos decorativos se eliminan antes de comparar (`*Lyrics`, `01 - Chords`, `[Lyrics]`, etc.), mientras que nombres con una palabra extra (`Backing Lyrics`) se dejan intencionalmente sin marcar.
 - **Estado real por puente.** En vez de un único aviso genérico "asegurate de tener un track llamado lyrics" para cuatro causas distintas, el mensaje de estado vacío ahora informa la causa real: script no corriendo, ningún track coincide, falta SWS, o track encontrado sin ítem bajo el cursor.

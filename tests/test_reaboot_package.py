@@ -11,9 +11,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-INDEX = ROOT / "index.xml"
+INDEX = ROOT / "reaboot/index.xml"
 RECIPE = ROOT / "reaboot.json"
-REPO_INDEX_URL = "https://raw.githubusercontent.com/djenttleman/ReaSet/main/index.xml"
+REPO_INDEX_URL = "https://raw.githubusercontent.com/djenttleman/ReaSet/main/reaboot/index.xml"
 RELEASE_VERSION = "3.0"
 RELEASE_COMMIT = "dea2bbda162a16750ca65bcb82ad684f84079629"
 
@@ -174,6 +174,36 @@ def test_readme_is_digestible_and_full_manuals_are_preserved():
     assert "docs/USER_GUIDE.es.md" in spanish_readme
 
 
+def test_public_tree_excludes_retired_legacy_and_roadmap_content():
+    assert not (ROOT / "Legacy").exists()
+    assert not (ROOT / "ROADMAP.md").exists()
+
+    searchable = [
+        ROOT / "README.md",
+        ROOT / "README.es.md",
+        ROOT / "docs/USER_GUIDE.md",
+        ROOT / "docs/USER_GUIDE.es.md",
+        ROOT / "CHANGELOG.md",
+        ROOT / "LICENSE",
+        ROOT / "Reaset.lua",
+        ROOT / "ReaSet.html",
+    ]
+    for path in searchable:
+        content = path.read_text()
+        assert "Legacy/" not in content, f"retired Legacy path remains in {path}"
+        assert "ROADMAP.md" not in content, f"retired roadmap remains in {path}"
+
+
+def test_reaboot_distribution_files_are_grouped_without_breaking_recipe_url():
+    assert RECIPE.is_file(), "root recipe is the stable public installer endpoint"
+    assert INDEX.is_file()
+    assert (ROOT / "reaboot/README.md").is_file()
+    compatibility_index = ROOT / "index.xml"
+    assert compatibility_index.is_file(), "existing ReaPack remotes need the old URL"
+    assert compatibility_index.read_bytes() == INDEX.read_bytes()
+    assert not (ROOT / "docs/REABOOT.md").exists()
+
+
 def test_local_markdown_links_resolve():
     import re
 
@@ -182,6 +212,7 @@ def test_local_markdown_links_resolve():
         ROOT / "README.es.md",
         ROOT / "docs/USER_GUIDE.md",
         ROOT / "docs/USER_GUIDE.es.md",
+        ROOT / "reaboot/README.md",
     ]
     for document in documents:
         text = document.read_text()
