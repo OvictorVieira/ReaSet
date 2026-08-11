@@ -5258,7 +5258,8 @@
         // Auto-detect Reaset.lua + read the lyrics/chords bridge diagnostics.
         // One-shot probe so the empty-state message is accurate immediately,
         // then a light refresh (these are tiny replies).
-        var _diagProbe = "GET/EXTSTATE/ReaSet/nativeLoopReady" +
+        var _diagProbe = "GET/EXTSTATE/ReaSet/autoStopArmed" +
+                         ";GET/EXTSTATE/ReaSet/nativeLoopReady" +
                          ";GET/EXTSTATE/ReaSet/lyricsTrack;GET/EXTSTATE/ReaSet/chordsTrack" +
                          ";GET/EXTSTATE/ReaSet/lyricsTrackMatches;GET/EXTSTATE/ReaSet/chordsTrackMatches" +
                          ";GET/EXTSTATE/ReaSet/tick;GET/EXTSTATE/ReaSet/error" +
@@ -6950,6 +6951,16 @@
                         // used to show it as a "⬡ NL" lamp, which therefore stayed lit
                         // on a crashed script; the ReaSet/tick heartbeat below is what
                         // actually detects that, and reports it in the panel status.
+                        if (tok[1] === "ReaSet" && tok[2] === "autoStopArmed") {
+                            // Reaset.lua confirms it told REAPER where to stop.
+                            // While this is 1, we do NOT send our own stop: the
+                            // audio engine will stop at the exact sample. If
+                            // arming was not possible (no SWS, for instance) the
+                            // flag stays empty and the detection below is the
+                            // fallback again — losing precision is acceptable,
+                            // losing auto-stop is not.
+                            window._autoStopArmed = (tok[3] === "1");
+                        }
                         if (tok[1] === "ReaSet" && tok[2] === "nativeLoopReady") {
                             window.REASET_NATIVE_LOOP = (tok[3] === "1");
                         }
