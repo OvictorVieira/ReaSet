@@ -69,7 +69,9 @@ manejar un setlist sobre las regiones de REAPER desde una interfaz web—, y las
 ideas no son objeto de derecho de autor. No hay archivos, funciones ni bloques
 provenientes de ese proyecto.
 
-Además se pidió y se obtuvo el visto bueno del autor.
+Además se pidió y se obtuvo el visto bueno del autor. Esa autorización
+**consta por correo electrónico** y el titular conserva el mensaje; es la prueba
+documental de este punto.
 
 ---
 
@@ -99,7 +101,12 @@ a quienes está dirigido.
 
 ## 6. Recomendación
 
-La mecánica de arriba es sólida y está documentada, pero **antes de un
-lanzamiento comercial conviene que un abogado confirme el punto 3**, que es el
-único que descansa en el relato de los hechos y no en una medición
-reproducible.
+La mecánica de arriba es sólida y está documentada. Los puntos 1 y 2 descansan
+en una medición reproducible; el punto 3 descansa en un correo, que hay que
+**conservar archivado** —con cabeceras completas— junto al resto de la
+documentación legal del proyecto.
+
+Antes de un lanzamiento comercial conviene igualmente que un abogado revise el
+conjunto. El correo prueba el permiso, pero no sustituye a una revisión de sus
+términos exactos (si es revocable, si cubre uso comercial) ni al criterio
+profesional sobre el resto.
