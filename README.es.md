@@ -108,9 +108,8 @@ Las herramientas son opcionales y pueden seleccionarse en el instalador de ReaBo
 |---|---|
 | **[Guía de usuario](docs/USER_GUIDE.es.md)** | Configuración completa, manual, comandos de regiones, MIDI Learn y troubleshooting. |
 | **[User guide](docs/USER_GUIDE.md)** | Manual completo en inglés. |
-| **[Mantenimiento de ReaBoot](docs/REABOOT.md)** | Estructura de paquetes y procedimiento de releases. |
+| **[Mantenimiento de ReaBoot](reaboot/README.md)** | Estructura de paquetes y procedimiento de releases. |
 | **[Changelog](CHANGELOG.md)** | Historial de versiones y cambios técnicos. |
-| **[Roadmap](ROADMAP.md)** | Dirección planificada para ReaSet. |
 | **[Contribuir](CONTRIBUTING.md)** | Reglas y acuerdo de licencia para contribuciones. |
 
 ## Apoya el proyecto

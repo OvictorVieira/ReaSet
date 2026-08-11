@@ -1,12 +1,19 @@
 # ReaBoot and ReaPack release maintenance
 
 ReaBoot installs ReaSet through the ReaPack-compatible repository described by
-[`index.xml`](../index.xml). The branded installer configuration lives in
-[`reaboot.json`](../reaboot.json).
+[`index.xml`](index.xml). The branded installer configuration intentionally
+remains at [`../reaboot.json`](../reaboot.json): that root URL is the stable
+public endpoint already used by the website, README buttons and existing links.
+
+The root [`../index.xml`](../index.xml) is an identical compatibility copy.
+Existing ReaPack installations store that URL as their remote, and raw GitHub
+URLs cannot redirect. Contract tests require both index files to remain byte-for-byte
+identical; edit `reaboot/index.xml`, then synchronize the root copy in the same
+commit.
 
 ## Public links
 
-- ReaPack repository: `https://raw.githubusercontent.com/djenttleman/ReaSet/main/index.xml`
+- ReaPack repository: `https://raw.githubusercontent.com/djenttleman/ReaSet/main/reaboot/index.xml`
 - ReaBoot recipe: `https://raw.githubusercontent.com/djenttleman/ReaSet/main/reaboot.json`
 - ReaBoot installer page:
   `https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2Fdjenttleman%2FReaSet%2Fmain%2Freaboot.json`

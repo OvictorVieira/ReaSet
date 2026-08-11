@@ -32,7 +32,7 @@ If this project helps you, you can support development here:
   <img src="https://storage.ko-fi.com/cdn/kofi3.png?v=6" alt="Buy Me a Coffee at ko-fi.com" height="36" style="border:0px;height:36px;" />
 </a>
 
-📜 [Changelog](../CHANGELOG.md) · 🗺️ [Roadmap](../ROADMAP.md)
+📜 [Changelog](../CHANGELOG.md)
 
 ---
 
@@ -73,7 +73,6 @@ Main file:
 
 Included dependencies:
 - `Sortable.min.js`
-- Legacy Lua bridge scripts under `Legacy/` (optional/advanced — see [Requirements](#4-requirements))
 
 ---
 
@@ -99,8 +98,9 @@ This project was iterated, debugged, and tested with:
 Final functional validation was performed in REAPER with real setlist usage tests.
 
 > ⚖️ Legal note: ReaSet v3.0+ is proprietary and free to use — see [`LICENSE`](../LICENSE).
-> Versions up to v2.x were GPL v3 and remain so. Third-party scripts kept in
-> `Legacy/` have their own licences: see [`Legacy/LICENSE-NOTICE.md`](../Legacy/LICENSE-NOTICE.md).
+> Versions up to v2.x were GPL v3 and remain so. Historical third-party scripts
+> are no longer part of the current distribution; released versions remain
+> available through Git tags and repository history under their original terms.
 
 ---
 
@@ -115,12 +115,8 @@ Final functional validation was performed in REAPER with real setlist usage test
 - `Sortable.min.js`
 - `Reaset.lua` — **single unified companion script** (loop engine + lyrics + chords).
 
-> **Legacy / advanced:** the three original scripts are still bundled under
-> `Legacy/` (`ReaSet_NativeLoop.lua` and the two X-Raym Lyrics/Chords
-> converters). You only need them if you prefer running the subsystems
-> separately. For a normal setup, `Reaset.lua` replaces all three.
-> Note that the legacy scripts require the **exact** track names `lyrics` / `chords` —
-> prefix support (`*Lyrics`) exists only in `Reaset.lua`.
+> `Reaset.lua` is the only supported companion script. It replaces the former
+> separate loop, lyrics and chords helpers.
 
 ### Required tracks for lyrics/chords
 - A track whose name is `lyrics` — feeds the 🎤 Lyrics panel.
@@ -562,7 +558,7 @@ be cleared individually or all at once.
 
 > ⛔ **Currently disabled in the app.** The whole MIDI module is commented out
 > for now — see below for why — and will come back when ReaSet becomes an
-> installable app with real MIDI access ([Roadmap](../ROADMAP.md)).
+> installable app with real MIDI access.
 
 > ⚠️ **Not supported by Safari (macOS, iPadOS, iOS).** MIDI Learn
 > is built on the **Web MIDI API** (`navigator.requestMIDIAccess`), which
@@ -570,8 +566,7 @@ be cleared individually or all at once.
 > will show no available devices there — this isn't a bug to report, it's a
 > missing browser API. Use a Chromium-based browser (Chrome, Edge) instead,
 > or route the controller through REAPER itself rather than the browser
-> (REAPER's own MIDI mapping isn't affected by this at all). See the
-> [Roadmap](../ROADMAP.md) for the longer-term plan here.
+> (REAPER's own MIDI mapping isn't affected by this at all).
 
 ### Smooth Seek
 **Smooth Seek** is enabled by default under **Show Options** and is saved separately for each REAPER project. When playback is already running, selecting a song or section manually — including MIDI **Next/Previous Section** and **Restart Song** — sends only the new position to REAPER. This lets REAPER honour its own *Do not change playback position immediately when seeking (smooth seek)* preference.
@@ -782,7 +777,7 @@ changing anything. `Reaset.lua` reports its status live:
 
 | Message | Meaning | Fix |
 |---|---|---|
-| *"Reaset.lua is not running"* | The script isn't loaded, or you're on the legacy `Legacy/` scripts | Actions → ReaScript: Load… → `Reaset.lua` → Run |
+| *"Reaset.lua is not running"* | The supported companion script isn't loaded | Actions → ReaScript: Load… → `Reaset.lua` → Run |
 | *"No track named lyrics/chords found"* | Script alive, but no track matched | Check the name against [the naming rules](#lyrics--chords-track-naming) |
 | *"SWS extension missing"* | `ULT_GetMediaItemNote` unavailable | Install [SWS](https://www.sws-extension.org/) |
 | *"Track X detected — no item under the cursor"* | Everything works | Move the playhead over an item that has **Item Notes** |
@@ -813,7 +808,7 @@ this Safari setting stands in the way.
 device. This is not a bug: Safari has never implemented the Web MIDI API
 that the feature is built on, so there is no in-browser MIDI to detect.
 Use a Chromium-based browser (Chrome, Edge), or map the controller directly
-in REAPER instead of through ReaSet. See the [Roadmap](../ROADMAP.md).
+in REAPER instead of through ReaSet.
 
 ---
 

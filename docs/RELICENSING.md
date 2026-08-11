@@ -22,9 +22,9 @@ Licence: GPL v3 (inherits from the X-Raym components it reuses).
 Si esa derivación existiera, el copyleft sería real y no habría nada que
 discutir. **Se midió, y no existe.**
 
-Comparación línea a línea de `Reaset.lua` contra
-`Legacy/X-Raym_Convert Lyrics track items notes...lua`, ignorando comentarios y
-líneas en blanco:
+Comparación línea a línea de `Reaset.lua` contra el script de X-Raym archivado
+en el tag inmutable [`v3.0`](https://github.com/djenttleman/ReaSet/tree/v3.0/Legacy),
+ignorando comentarios y líneas en blanco:
 
 | | |
 |---|---|
@@ -50,11 +50,11 @@ forma independiente antes del cambio.
 
 ## 2. Los scripts de X-Raym siguen siendo de X-Raym
 
-Los archivos de `Legacy/` **sí** son obra de terceros bajo GPL v3, y **no se
-relicenciaron**. Se conservan con su autoría y su licencia declaradas en
-`Legacy/LICENSE-NOTICE.md`, fuera del alcance del `LICENSE` de ReaSet.
-
-Están superados por `Reaset.lua` y se mantienen por atribución y trazabilidad.
+Los scripts históricos de X-Raym **sí** son obra de terceros bajo GPL v3, y
+**no se relicenciaron**. Ya no se distribuyen en la rama actual. Permanecen,
+con su autoría y licencia originales, en el tag inmutable
+[`v3.0`](https://github.com/djenttleman/ReaSet/tree/v3.0/Legacy) y en el historial
+de Git para atribución y trazabilidad.
 
 ---
 

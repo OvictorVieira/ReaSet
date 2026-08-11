@@ -36,14 +36,7 @@ do.
    For anything section 2 does not allow, ask: permission is often given.
 
 
-3. THIRD-PARTY COMPONENTS
-
-   The `Legacy/` directory contains scripts by other authors under their own
-   licences. They are historical references, superseded by `Reaset.lua`, and
-   are NOT covered by this licence. See `Legacy/LICENSE-NOTICE.md`.
-
-
-4. VERSIONS RELEASED BEFORE THIS LICENCE
+3. VERSIONS RELEASED BEFORE THIS LICENCE
 
    ReaSet up to and including v2.x was released under the GNU General Public
    Licence v3. **That does not change.** Anyone who obtained a GPLv3 version
@@ -55,7 +48,7 @@ do.
    `docs/RELICENSING.md` for how that was established.
 
 
-5. NO WARRANTY
+4. NO WARRANTY
 
    ReaSet is provided "as is", without warranty of any kind, express or
    implied, including but not limited to the warranties of merchantability,

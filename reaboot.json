@@ -5,15 +5,15 @@
   "website": "https://github.com/djenttleman/ReaSet",
   "skip_additional_packages": true,
   "required_packages": [
-    "https://raw.githubusercontent.com/djenttleman/ReaSet/main/index.xml#p=ReaSet/ReaSet&v=latest"
+    "https://raw.githubusercontent.com/djenttleman/ReaSet/main/reaboot/index.xml#p=ReaSet/ReaSet&v=latest"
   ],
   "features": {
     "tools": {
       "name": "ReaSet authoring and diagnostic tools",
       "default": false,
-      "description": "Installs Lyrics Tapper and ReaSet Diagnose, plus the ReaImGui extension required by Lyrics Tapper.",
+      "description": "Installs Lyrics Tapper, ReaSet Diagnose, Library Doctor and Text to MIDI Bitmap, plus the ReaImGui extension required by Lyrics Tapper.",
       "packages": [
-        "https://raw.githubusercontent.com/djenttleman/ReaSet/main/index.xml#p=ReaSet/ReaSet%20Tools&v=latest",
+        "https://raw.githubusercontent.com/djenttleman/ReaSet/main/reaboot/index.xml#p=ReaSet/ReaSet%20Tools&v=latest",
         "https://raw.githubusercontent.com/ReaTeam/Extensions/master/index.xml#p=API/reaper_imgui.ext&v=latest"
       ]
     },

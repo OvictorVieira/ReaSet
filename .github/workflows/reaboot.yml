@@ -3,16 +3,20 @@ name: Validate ReaBoot package
 on:
   push:
     paths:
+      - reaboot/**
       - index.xml
       - reaboot.json
-      - README.md
+      - README*.md
+      - docs/USER_GUIDE*.md
       - tests/test_reaboot_package.py
       - .github/workflows/reaboot.yml
   pull_request:
     paths:
+      - reaboot/**
       - index.xml
       - reaboot.json
-      - README.md
+      - README*.md
+      - docs/USER_GUIDE*.md
       - tests/test_reaboot_package.py
       - .github/workflows/reaboot.yml
   workflow_dispatch:

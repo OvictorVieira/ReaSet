@@ -19,8 +19,7 @@
  *   - Lyrics/Chords note bridge: inspired by X-Raym's scripts of the same
  *     purpose (https://github.com/X-Raym/REAPER-ReaScripts). Independent
  *     implementation — see docs/RELICENSING.md for the line-by-line
- *     comparison behind that claim. The originals are kept, unmodified and
- *     under their own GPL v3, in Legacy/.
+ *     comparison behind that claim and the tagged historical sources.
  *   - Native loop engine + unification: ReaSet project.
  * Licence: see LICENSE. Proprietary, free to use. Versions up to v2.x were
  *          released under GPL v3 and remain so.

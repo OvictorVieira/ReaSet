@@ -108,9 +108,8 @@ Tools are optional and selectable in the ReaBoot installer. See [Tools in the us
 |---|---|
 | **[User guide](docs/USER_GUIDE.md)** | Full setup, usage manual, region commands, MIDI Learn and troubleshooting. |
 | **[Guía en español](docs/USER_GUIDE.es.md)** | Manual completo en español. |
-| **[ReaBoot maintenance](docs/REABOOT.md)** | Package layout and release procedure. |
+| **[ReaBoot maintenance](reaboot/README.md)** | Package layout and release procedure. |
 | **[Changelog](CHANGELOG.md)** | Release history and technical changes. |
-| **[Roadmap](ROADMAP.md)** | Planned direction for ReaSet. |
 | **[Contributing](CONTRIBUTING.md)** | Contribution rules and licence agreement. |
 
 ## Support the project
