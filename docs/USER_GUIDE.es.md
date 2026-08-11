@@ -204,13 +204,6 @@ recomendado.
 Copiar en la carpeta web de REAPER (donde existe `main.js`):
 - `ReaSet.html`
 - `Sortable.min.js`
-- `manifest.json` — opcional, solo iOS. Copiarlo si vas a agregar ReaSet a la
-  pantalla de inicio de un iPhone o iPad. Sin él ReaSet igual se instala y
-  funciona.
-
-> **Después de cambiar cualquiera de estos en iOS, borrá el ícono de la
-> pantalla de inicio y volvé a agregarlo.** iOS lee los ajustes de lanzamiento
-> cuando se *crea* el acceso directo, no en cada carga.
 
 #### Rutas por defecto (REAPER Resource Path)
 > En REAPER: **Options > Show REAPER resource path in explorer/finder**.

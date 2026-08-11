@@ -64,8 +64,7 @@ ReaBoot installs ReaPack when needed, registers the unified `Reaset.lua` compani
 <details>
 <summary><strong>Manual installation</strong></summary>
 
-1. Copy `ReaSet.html` and `Sortable.min.js` to your REAPER `reaper_www_root`
-   (plus `manifest.json` if you will add it to an iOS Home Screen).
+1. Copy `ReaSet.html` and `Sortable.min.js` to your REAPER `reaper_www_root`.
 2. Load `Reaset.lua` through **Actions → ReaScript: Load…**.
 3. Run **Reaset** once and optionally configure it as a Startup Action.
 4. Enable REAPER Web Remote and open `http://localhost:8080/ReaSet.html`.

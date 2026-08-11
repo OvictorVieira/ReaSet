@@ -199,13 +199,6 @@ REAPER Startup Action remains a manual, recommended step.
 Copy to REAPER web folder (where `main.js` is located):
 - `ReaSet.html`
 - `Sortable.min.js`
-- `manifest.json` — optional, iOS only. Copy it if you add ReaSet to an
-  iPhone/iPad Home Screen. Without it ReaSet still installs and runs.
-
-> **After changing any of these on iOS, delete the Home Screen icon and add it
-> again.** iOS reads the launch settings when the shortcut is *created*, not on
-> each load, so an existing icon keeps the old behaviour however many times you
-> reload.
 
 #### Default paths (REAPER Resource Path)
 > In REAPER: **Options > Show REAPER resource path in explorer/finder**.
