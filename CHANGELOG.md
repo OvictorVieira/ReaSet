@@ -60,6 +60,44 @@ transport is still rolling, so it seeks *playback* into the next song.
   instead of guessing with a timer that was shorter than the measured
   round-trip.
 
+### Setlists now live with the project, not in one browser
+
+Setlists used to exist only in the `localStorage` of whichever browser built
+them. Open ReaSet on the iPad and your show was not there. Clear the browser's
+data and it was gone. Copy the project to the backup machine and only the audio
+travelled.
+
+- **Setlists are now stored in `<project folder>/reaset/setlists/`**, one JSON
+  file per setlist, written by `Reaset.lua`. They travel with the `.rpp`, they
+  can be backed up and versioned, and they can be opened and read by a human.
+- **The disk is the only source of truth.** The browser is a client, not a
+  store. There are never two versions to reconcile, so there is no adopt /
+  migrate / don't-clobber logic — which is what every bug this feature ever had
+  came from. A setlist built on the iPad shows up on the laptop with no merge
+  at all, because both read the same file.
+- **One file per setlist, on purpose.** A corrupted or badly hand-edited file
+  takes down that setlist, not the whole library.
+- **Filenames are deterministic and cross-platform.** The same name always maps
+  to the same file, with no side map that could drift. Ordinary names stay
+  readable in Finder/Explorer; only names needing sanitising get a short
+  checksum suffix, which is what makes them collision-free. The forbidden-
+  character rule is the union of the Windows and macOS rules, not whichever
+  machine happened to create the file.
+- **If the project cannot be read, it says so** — a warning in the setlist
+  dropdown itself, and pushing is blocked. Letting you edit a phantom copy that
+  will never be saved would be worse. What is already on screen is kept, since
+  blanking it mid-show over one failed read would be worse still.
+- **Your existing setlists migrate themselves** the first time you open ReaSet
+  with a saved project: if the disk has none and this browser has some, they
+  are pushed before the empty disk becomes the truth.
+- Not `ProjExtState`: that only reaches the disk if you save, and it leaves no
+  mark in the undo history — so closing without saving takes your setlists away
+  with no warning that anything was pending.
+- **New `Tools/ReaSet_LibraryDoctor.lua`**, read-only: prints the project's
+  setlist folder, which `reaper_www_root` actually holds `ReaSet.html` and
+  whether it is writable, the state of the index, and what `Reaset.lua` last
+  published — so a setlist that is not saving points at the link that broke.
+
 ### Fixed
 
 - **Director→Player setlist sync silently dropped most edits.** It triggered on
@@ -173,6 +211,45 @@ siguiente.
   región ahora la usa en vez de una posición hasta un intervalo de poll vieja.
 - La reposición tras un stop espera a que el transporte **confirme** que paró,
   en vez de adivinar con un temporizador más corto que la ida y vuelta medida.
+
+### Los setlists ahora viven con el proyecto, no en un navegador
+
+Los setlists existían solo en el `localStorage` del navegador que los armó.
+Abrías ReaSet en el iPad y tu show no estaba. Borrabas los datos del navegador y
+se iba. Copiabas el proyecto a la máquina de respaldo y viajaba solo el audio.
+
+- **Los setlists se guardan en `<carpeta del proyecto>/reaset/setlists/`**, un
+  archivo JSON por setlist, escritos por `Reaset.lua`. Viajan con el `.rpp`, se
+  pueden respaldar y versionar, y los puede abrir y leer una persona.
+- **El disco es la única fuente de verdad.** El navegador es un cliente, no un
+  almacén. Nunca hay dos versiones que conciliar, así que no hay lógica de
+  adoptar / migrar / no pisar — que es de donde salieron todos los bugs que
+  tuvo esta función. Un setlist armado en el iPad aparece en la laptop sin
+  ningún merge, porque los dos leen el mismo archivo.
+- **Un archivo por setlist, a propósito.** Uno corrupto o mal editado a mano se
+  lleva ese setlist, no la biblioteca entera.
+- **Los nombres de archivo son deterministas y multiplataforma.** El mismo
+  nombre da siempre el mismo archivo, sin un mapa aparte que pudiera
+  desincronizarse. Los nombres normales quedan legibles en el Finder o el
+  Explorador; solo los que necesitan saneo llevan un sufijo de checksum corto,
+  que es lo que los vuelve libres de colisión. La regla de caracteres
+  prohibidos es la unión de la de Windows y la de macOS, no la de la máquina
+  donde se creó el archivo.
+- **Si no se puede leer el proyecto, lo dice** — un aviso en la propia lista de
+  setlists, y se bloquea el guardado. Dejarte editar una copia fantasma que
+  nunca se va a guardar sería peor. Lo que ya está en pantalla se conserva,
+  porque vaciarla a mitad de un show por una lectura fallida sería peor todavía.
+- **Tus setlists actuales se migran solos** la primera vez que abrís ReaSet con
+  un proyecto guardado: si el disco no tiene ninguno y este navegador tiene
+  algunos, se empujan antes de que el disco vacío se vuelva la verdad.
+- No se usó `ProjExtState`: solo llega al disco si guardás, y no deja marca en
+  el historial de deshacer — así que cerrar sin guardar se lleva tus setlists
+  sin ninguna señal de que había algo pendiente.
+- **Nuevo `Tools/ReaSet_LibraryDoctor.lua`**, de solo lectura: imprime la
+  carpeta de setlists del proyecto, cuál `reaper_www_root` tiene realmente
+  `ReaSet.html` y si es escribible, el estado del índice, y lo último que
+  publicó `Reaset.lua` — para que un setlist que no guarda señale el eslabón
+  que se cortó.
 
 ### Arreglado
 

@@ -8,6 +8,13 @@
  *          2) Lyrics notes → web bridge (was X-Raym Convert Lyrics ...)
  *          3) Chords notes → web bridge (was X-Raym Convert Chords ...)
  *
+ *        It also owns two things the browser cannot do on its own:
+ *
+ *          4) The shared setlist file, for Player devices.
+ *          5) The setlist library in <project folder>/reaset/setlists, so
+ *             setlists live with the project instead of in one browser's
+ *             localStorage.
+ *
  * Credits:
  *   - Lyrics/Chords note bridge: inspired by X-Raym's scripts of the same
  *     purpose (https://github.com/X-Raym/REAPER-ReaScripts). Independent
@@ -581,6 +588,212 @@ local function sync_tick()
 end
 
 ----------------------------------------------------------------------------
+-- BASE64URL DECODE  — the return path of the browser's _b64uEncode
+----------------------------------------------------------------------------
+-- sync_tick above never needed this: it copies the browser's base64 straight
+-- into the shared file and lets the browser decode it again. The library does
+-- need it, because it writes real JSON to disk that a human may open.
+
+local B64U_ALPHABET   = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+local B64U_DECODE_MAP = {}
+for i = 1, #B64U_ALPHABET do
+    B64U_DECODE_MAP[B64U_ALPHABET:sub(i, i)] = i - 1
+end
+
+-- Reverses ReaSet.html's _b64uEncode. Verified standalone against real output
+-- of that function (including accented UTF-8 text) before landing here —
+-- REAPER's ReaScript Lua has no base64 of its own.
+local function b64u_decode(input)
+    local bits, value, out = 0, 0, {}
+    for i = 1, #input do
+        local d = B64U_DECODE_MAP[input:sub(i, i)]
+        if d then
+            value = (value << 6) | d
+            bits = bits + 6
+            if bits >= 8 then
+                bits = bits - 8
+                out[#out + 1] = string.char((value >> bits) & 0xFF)
+            end
+        end
+    end
+    return table.concat(out)
+end
+
+----------------------------------------------------------------------------
+-- SETLIST LIBRARY  — a /reaset folder living next to the project
+----------------------------------------------------------------------------
+-- THE DISK IS THE ONLY SOURCE OF TRUTH. The browser is a client, not a store:
+-- there are never two versions to reconcile, there is one and it gets read.
+--
+--   <project folder>/
+--     reaset/
+--       setlists/
+--         Default.json
+--         Rehearsal set.json
+--
+-- ONE FILE PER SETLIST, deliberately: if one gets corrupted or hand-edited
+-- badly it takes down that setlist, not the whole library. And they can be
+-- backed up, versioned or sent around individually.
+--
+-- WHY NOT ProjExtState: it only reaches the disk if the user saves, and those
+-- changes don't appear in the undo history, so there is no signal that
+-- anything is pending. Closing without saving takes them away silently.
+--
+-- WHY ALSO AN INDEX IN reaper_www_root: the browser cannot list a directory
+-- or read arbitrary paths — only fetch inside the web interface's www root.
+-- The index is derived and disposable; the disk is what counts.
+
+local LIB_INDEX_NAME = "reaset_setlists.json"
+
+local function lib_index_path()
+    return www_root() .. "/" .. LIB_INDEX_NAME
+end
+
+-- <project folder>/reaset/setlists, or nil if the project was never saved.
+local function lib_dir()
+    local _, projfn = reaper.EnumProjects(-1, "")
+    if not projfn or projfn == "" then return nil end
+    local dir = projfn:match("^(.*)[/\\][^/\\]*$")
+    if not dir then return nil end
+    return dir .. "/reaset/setlists"
+end
+
+-- Short, stable checksum, only to tell apart names that sanitise the same.
+local function lib_hash4(s)
+    local h = 5381
+    for i = 1, #s do h = (h * 33 + s:byte(i)) % 65536 end
+    return string.format("%04x", h)
+end
+
+-- Characters forbidden on Windows and on macOS, plus control ones. Windows is
+-- a target platform, so the rule is the union of both, not the rule of
+-- whichever machine happened to create the file.
+local WIN_RESERVED = {
+    CON=true, PRN=true, AUX=true, NUL=true,
+    COM1=true, COM2=true, COM3=true, COM4=true, COM5=true,
+    COM6=true, COM7=true, COM8=true, COM9=true,
+    LPT1=true, LPT2=true, LPT3=true, LPT4=true, LPT5=true,
+    LPT6=true, LPT7=true, LPT8=true, LPT9=true,
+}
+
+local function lib_name_is_safe(name)
+    if name == "" or #name > 80 then return false end
+    if name:find('[/\\:%*%?"<>|%c]') then return false end
+    if name:find("^[%s%.]") or name:find("[%s%.]$") then return false end
+    if WIN_RESERVED[name:upper()] then return false end
+    return true
+end
+
+-- DETERMINISTIC: the same name always yields the same file, with no separate
+-- map that could drift out of sync. Ordinary names stay as they are and stay
+-- readable in Finder/Explorer; only the ones that need sanitising carry the
+-- suffix, and that suffix is what makes them collision-free.
+local function lib_filename(name)
+    if lib_name_is_safe(name) then return name .. ".json" end
+    local safe = name:gsub('[/\\:%*%?"<>|%c]', "_"):gsub("^[%s%.]+", ""):gsub("[%s%.]+$", "")
+    if safe == "" then safe = "setlist" end
+    if #safe > 60 then safe = safe:sub(1, 60) end
+    return safe .. "-" .. lib_hash4(name) .. ".json"
+end
+
+local function json_escape(s)
+    return (s:gsub('[\\"]', "\\%0"):gsub("\n", "\\n"):gsub("\r", "\\r"):gsub("\t", "\\t"))
+end
+
+local function read_all(path)
+    local f = io.open(path, "rb"); if not f then return nil end
+    local s = f:read("*a"); f:close(); return s
+end
+
+-- Rebuilds the index by reading the DIRECTORY, not an in-memory copy: what the
+-- browser sees is literally what is on disk, including a file the user added,
+-- edited or deleted by hand.
+local function lib_rebuild_index()
+    local dir = lib_dir()
+    local bodies = {}
+    if dir then
+        local i = 0
+        while true do
+            local fn = reaper.EnumerateFiles(dir, i)
+            if not fn then break end
+            if fn:match("%.json$") then
+                local body = read_all(dir .. "/" .. fn)
+                -- Copied VERBATIM: no JSON parser is needed in Lua, and what
+                -- the browser receives is byte for byte what is on disk.
+                if body and body:find('"songs"') then bodies[#bodies + 1] = body end
+            end
+            i = i + 1
+        end
+    end
+    local stamp = dir and json_escape(dir) or ""
+    local out = '{"v":2,"proj":"' .. stamp .. '","sets":[' .. table.concat(bodies, ",") .. ']}'
+    local f = io.open(lib_index_path(), "wb")
+    if f then f:write(out); f:close() end
+    reaper.SetExtState(SEC, "libraryPath", dir or "!UNSAVED", false)
+    reaper.SetExtState(SEC, "libraryCount", tostring(#bodies), false)
+    reaper.SetExtState(SEC, "wwwRoot", www_root(), false)
+end
+
+-- Writes or deletes ONE setlist. An empty `songs_json` means delete.
+local function lib_apply(name, songs_json)
+    local dir = lib_dir()
+    if not dir then return false end
+    reaper.RecursiveCreateDirectory(dir, 0)
+    local path = dir .. "/" .. lib_filename(name)
+    if songs_json == "" then
+        os.remove(path)
+    else
+        local f = io.open(path, "wb")
+        if not f then return false end
+        f:write('{"v":1,"name":"' .. json_escape(name) .. '","songs":' .. songs_json .. '}')
+        f:close()
+    end
+    return true
+end
+
+local s_libRev    = nil
+local s_libLoaded = false
+local s_libProj   = nil
+
+local function library_tick()
+    -- The project changed (or this is the first tick): the folder is a
+    -- different one, so the index is regenerated from the new disk before
+    -- anything gets served.
+    local cur = reaper.EnumProjects(-1)
+    if cur ~= s_libProj then
+        s_libProj = cur; s_libLoaded = false; s_libRev = nil
+    end
+    if not s_libLoaded then
+        lib_rebuild_index()
+        s_libLoaded = true
+        return
+    end
+
+    local rev = reaper.GetExtState(SEC, "libRev")
+    if rev == "" or rev == s_libRev then return end
+
+    local name_b64 = reaper.GetExtState(SEC, "libName")
+    if name_b64 == "" then return end
+    local n = tonumber(reaper.GetExtState(SEC, "libChunks"))
+    if not n then return end
+
+    local parts = {}
+    for i = 0, n - 1 do
+        local c = reaper.GetExtState(SEC, "libChunk" .. i)
+        -- A chunk that hasn't landed yet: don't write half a setlist. Leaving
+        -- s_libRev untouched makes the next tick retry.
+        if c == "" then return end
+        parts[#parts + 1] = c
+    end
+
+    local name = b64u_decode(name_b64)
+    if name == "" then return end
+    lib_apply(name, n == 0 and "" or b64u_decode(table.concat(parts)))
+    lib_rebuild_index()
+    s_libRev = rev
+end
+
+----------------------------------------------------------------------------
 -- MAIN DEFER LOOP  — drives all three subsystems from one tick
 ----------------------------------------------------------------------------
 
@@ -612,6 +825,10 @@ local function tick_body()
 
     -- 4) Shared setlist file, written whenever a Director pushes
     sync_tick()
+
+    -- 5) Setlist library: serves the project's /reaset/setlists folder and
+    --    writes back whatever the browser saves.
+    library_tick()
 end
 
 local function main()

@@ -4338,7 +4338,7 @@
 
         <!-- SETLIST ROW -->
         <div class="app-setlist-row">
-            <select id="setlistSelect" class="n-select" onchange="changeSetlist()"></select>
+            <select id="setlistSelect" class="n-select" onchange="changeSetlist()" onmousedown="_libraryRefreshOnOpen()" onfocus="_libraryRefreshOnOpen()"></select>
             <button class="n-btn-new" onclick="createSetlist()" title="New">+</button>
             <button class="n-btn-new" id="editModeBtn" onclick="toggleEditMode()" title="Edit mode"><span class="emb-icon">&#9998;</span><span class="emb-label" id="editModeLabel">SHOW</span></button>
             <div class="dotmenu-wrap" id="dotMenuWrap" style="position:relative">
@@ -5331,6 +5331,7 @@
             ["Briefly fires play/stop at the start of each region to initialize MIDI.\nOnly works with Auto-Stop enabled.", "Dispara brevemente play/stop al inicio de cada región para inicializar MIDI.\nSolo funciona con Auto-stop activado."],
             ["Requires holding STOP for 3 seconds before it takes effect.\nGuards against an accidental tap stopping the show.", "Requiere mantener STOP presionado 3 segundos para que tenga efecto.\nProtege de que un toque accidental detenga el show."],
             ["The Default setlist cannot be deleted.", "El setlist Default no se puede eliminar."],
+            ["Not connected to the project — changes will not be saved", "Sin conexión al proyecto — no se guardarán cambios"],
             ["Import successful.", "Importación exitosa."],
             ["Invalid file format.", "Formato de archivo inválido."],
             ["Error reading file.", "Error al leer el archivo."],
@@ -5809,6 +5810,127 @@
             _syncPushTimer = setTimeout(_syncPushNow, 1000);
         }
 
+        // ── Setlist library: the disk is the source of truth ────────────────
+        //
+        // Setlists live in <project folder>/reaset/setlists/, one file each,
+        // written by Reaset.lua. See its "SETLIST LIBRARY" section for why the
+        // layout is what it is.
+        //
+        // THIS BROWSER IS A CLIENT, NOT A STORE. localStorage stopped being
+        // authoritative: there are never two versions to reconcile, there is
+        // one on disk and it gets read. That deletes in one stroke the
+        // adopt / migrate / don't-clobber logic that caused every bug this
+        // feature ever had — and it makes a setlist built on the iPad show up
+        // on the laptop with no merge at all, simply because both read the
+        // same file.
+        //
+        // If the index cannot be read, NOTHING is invented: the user is told.
+        // Editing a phantom copy that will never be saved is worse than not
+        // editing at all.
+        var LIBRARY_FILE  = 'reaset_setlists.json';
+        var LIB_SEND_GAP  = 250;   // ms between queued sends
+        var _libRev       = 0;
+        var _libQueue     = [];
+        var _libDraining  = false;
+        var _libConnected = false;  // has the index been read at all this session?
+        var _libReconciled = false; // nothing is pushed before that happens
+
+        function _libraryEnqueue(name) {
+            if (!_libReconciled) return;
+            if (REASET_MODE !== 'director') return;
+            var i = _libQueue.indexOf(name);
+            if (i !== -1) _libQueue.splice(i, 1);
+            _libQueue.push(name);
+            if (!_libDraining) _libraryDrain();
+        }
+
+        function _libraryDrain() {
+            if (!_libQueue.length) { _libDraining = false; return; }
+            _libDraining = true;
+            var name = _libQueue.shift();
+            var entries = setlists[name];          // undefined ⇒ delete
+            var nameB64 = _b64uEncode(name);
+
+            var chunks = [];
+            if (entries) {
+                var b64 = _b64uEncode(JSON.stringify(entries));
+                for (var i = 0; i < b64.length; i += SYNC_CHUNK_LEN) chunks.push(b64.slice(i, i + SYNC_CHUNK_LEN));
+            }
+            wwr_req('SET/EXTSTATE/ReaSet/libName/' + nameB64);
+            for (var c = 0; c < chunks.length; c++) {
+                wwr_req('SET/EXTSTATE/ReaSet/libChunk' + c + '/' + chunks[c]);
+            }
+            wwr_req('SET/EXTSTATE/ReaSet/libChunks/' + chunks.length);
+            // The revision goes last: it is the "this one is complete" signal.
+            wwr_req('SET/EXTSTATE/ReaSet/libRev/' + (++_libRev));
+
+            // Spaced out on purpose: the whole library at once would be dozens
+            // of requests, and REAPER's web interface collapses bursts.
+            setTimeout(_libraryDrain, LIB_SEND_GAP);
+        }
+
+        // Reads the index and adopts whatever the disk says. No branches, no
+        // merge.
+        function _librarySyncWithProject() {
+            fetch(LIBRARY_FILE + '?t=' + Date.now(), { cache: 'no-store' })
+                .then(function (res) { return res.ok ? res.json() : null; })
+                .catch(function () { return null; })
+                .then(function (doc) {
+                    if (!doc || doc.v !== 2 || !Object.prototype.toString.call(doc.sets).match(/Array/)) {
+                        // With no readable index there is no project to talk
+                        // to. Whatever is on screen is kept — blanking it
+                        // mid-show over a failed fetch would be worse — but the
+                        // user is warned and pushing is blocked, so nobody
+                        // edits something that will never be saved.
+                        _libConnected = false;
+                        updateSetlistDropdown();
+                        return;
+                    }
+                    _libConnected = true;
+
+                    var next = {}, n = 0;
+                    for (var i = 0; i < doc.sets.length; i++) {
+                        var s = doc.sets[i];
+                        if (s && typeof s.name === 'string' && s.songs) { next[s.name] = s.songs; n++; }
+                    }
+
+                    // One-time migration: this browser comes from the era when
+                    // localStorage was the store, and the disk has nothing yet.
+                    // Push what is here before the empty disk becomes the truth
+                    // and takes it away.
+                    var localNames = Object.keys(setlists || {});
+                    var localHasContent = localNames.some(function (k) { return (setlists[k] || []).length > 0; });
+                    if (n === 0 && localHasContent) {
+                        _libReconciled = true;
+                        for (var m = 0; m < localNames.length; m++) _libraryEnqueue(localNames[m]);
+                        updateSetlistDropdown();
+                        return;
+                    }
+
+                    if (n > 0) {
+                        setlists = next;
+                        if (!setlists[currentSetlistName]) currentSetlistName = Object.keys(setlists)[0];
+                        localStorage.setItem(STORAGE_KEY, JSON.stringify(setlists));
+                        localStorage.setItem(CURRENT_KEY, currentSetlistName);
+                        displayList = []; initialized = false;
+                    }
+                    _libReconciled = true;
+                    updateSetlistDropdown();
+                    if (n > 0 && typeof syncRegions === 'function') syncRegions();
+                });
+        }
+
+        // Re-read on demand when the list is opened: it is the natural moment,
+        // the user is about to choose. Rate-limited so opening and closing does
+        // not fire a burst.
+        var _libRefreshedAt = 0;
+        function _libraryRefreshOnOpen() {
+            var now = Date.now();
+            if (now - _libRefreshedAt < 3000) return;
+            _libRefreshedAt = now;
+            _librarySyncWithProject();
+        }
+
         // Fetches the shared file and applies it if it's newer and from the same
         // REAPER project. `manual` marks an explicit Pull click (Director-only —
         // confirms before overwriting local edits) as opposed to a Player's
@@ -6047,6 +6169,17 @@
             _loadSmoothSeekPreference();
             displayList = []; initialized = false;
             updateSetlistDropdown();
+            // Reconcile with the project: adopt when the disk has setlists,
+            // migrate when it has none and this browser does. Never a merge.
+            //
+            // On demand, with no timer. Any "wait a moment for Reaset.lua to
+            // catch up" delay would be a guess, and a losing one:
+            // REGION_LIST_END calls syncRegions() synchronously on the next
+            // line, so no delay could beat it. The index carries the project
+            // folder it belongs to instead, and a stale one is simply re-read
+            // when the list is opened.
+            _libReconciled = false;
+            _librarySyncWithProject();
         }
 
         // --- Per-song overrides (stop, delay, description, color) ---
@@ -6781,6 +6914,15 @@
             }
             REASET_MODE = mode;
             try { localStorage.setItem('reaset_mode', mode); } catch (e) { /* private mode etc — mode still applies for this session */ }
+            // The mode starts as 'player' and only resolves here or when it is
+            // recovered from localStorage. _librarySyncWithProject() already
+            // ran before that, and its migration branch is gated on Director,
+            // so the queue dropped the push silently. Becoming Director has to
+            // retry: that is exactly the private-window case, where there is no
+            // saved mode to recover.
+            if (mode === 'director' && typeof _librarySyncWithProject === 'function') {
+                _librarySyncWithProject();
+            }
             document.getElementById('mode-select-overlay').classList.remove('open', 'forced');
             applyModeUI();
         }
@@ -7628,6 +7770,11 @@
             // push instead of one per keystroke. No-ops entirely outside Director
             // mode (checked inside _syncPushSoon).
             _syncPushSoon();
+            // Durable copy of THIS setlist into the project. Same choke point,
+            // different purpose: _syncPushSoon shares the active order with
+            // Players; this persists the named setlist so it survives the
+            // browser and travels with the project.
+            _libraryEnqueue(currentSetlistName);
         }
 
         // --- 5. MARKER PARSER ---
@@ -10126,6 +10273,14 @@
         // --- 15. FILE I/O ---
         function updateSetlistDropdown() {
             var sel = document.getElementById("setlistSelect"); sel.innerHTML = "";
+            if (!_libConnected) {
+                // Honest over convenient: if the project's index could not be
+                // read, say so where the user is already looking.
+                var warn = document.createElement("option");
+                warn.text = "⚠ " + t("Not connected to the project — changes will not be saved");
+                warn.disabled = true;
+                sel.appendChild(warn);
+            }
             for (var name in setlists) {
                 if (setlists.hasOwnProperty(name)) {
                     var opt = document.createElement("option"); opt.value = name; opt.text = name;
@@ -10185,7 +10340,12 @@
                 "Delete Setlist",
                 "Delete '" + currentSetlistName + "'? This action cannot be undone.",
                 function () {
+                    var _gone = currentSetlistName;
                     delete setlists[currentSetlistName]; currentSetlistName = "Default";
+                    // Propagate the deletion: saveCurrentState() only pushes
+                    // the setlist that is now current, so without this the
+                    // deleted one would live on in the project forever.
+                    _libraryEnqueue(_gone);
                     saveCurrentState(); updateSetlistDropdown(); displayList = []; initialized = false; syncRegions();
                 },
                 "Delete"
