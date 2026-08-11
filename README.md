@@ -1,3 +1,19 @@
+<p align="center">
+  <img src="assets/reaset-logo.png" alt="ReaSet" width="560">
+</p>
+
+<p align="center">
+  <a href="https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2Fdjenttleman%2FReaSet%2Fmain%2Freaboot.json">
+    <img src="assets/install-via-reaboot.svg" alt="Install via ReaBoot" height="52">
+  </a>
+</p>
+
+<p align="center">
+  Live setlist, transport, lyrics and chords for REAPER.
+</p>
+
+---
+
 ##### 🇬🇧 ENGLISH
 
 ## 📌 Table of Contents

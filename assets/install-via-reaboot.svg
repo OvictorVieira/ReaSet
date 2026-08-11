@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="56" viewBox="0 0 260 56" role="img" aria-labelledby="title desc">
+  <title id="title">Install via ReaBoot</title>
+  <desc id="desc">Green microchip-shaped installation button</desc>
+  <defs>
+    <linearGradient id="chip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#24E874"/>
+      <stop offset="1" stop-color="#13C95F"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-20%" width="120%" height="150%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#061B10" flood-opacity=".35"/>
+    </filter>
+  </defs>
+
+  <!-- chip pins -->
+  <g stroke="#0A7137" stroke-width="3" stroke-linecap="round">
+    <path d="M38 3v6M64 3v6M90 3v6M116 3v6M142 3v6M168 3v6M194 3v6M220 3v6"/>
+    <path d="M38 47v6M64 47v6M90 47v6M116 47v6M142 47v6M168 47v6M194 47v6M220 47v6"/>
+    <path d="M3 20h7M3 36h7M250 20h7M250 36h7"/>
+  </g>
+
+  <rect x="9" y="7" width="242" height="42" rx="12" fill="url(#chip)" stroke="#084D29" stroke-width="2" filter="url(#shadow)"/>
+  <rect x="16" y="14" width="28" height="28" rx="8" fill="#083E23" opacity=".96"/>
+
+  <!-- download arrow -->
+  <g fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M30 19v13"/>
+    <path d="m24.5 27 5.5 5.5 5.5-5.5"/>
+    <path d="M23 37h14"/>
+  </g>
+
+  <text x="55" y="34" fill="#062A18" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif" font-size="18" font-weight="750" letter-spacing=".1">Install via ReaBoot</text>
+</svg>

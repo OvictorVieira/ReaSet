@@ -129,6 +129,31 @@ def test_reaboot_recipe_requires_core_and_exposes_expected_features():
     assert "ReaTeam/Extensions" in features["sws"]["packages"][0]
 
 
+def test_readme_header_contains_logo_and_graphical_reaboot_button():
+    readme = (ROOT / "README.md").read_text()
+    install_url = (
+        "https://www.reaboot.com/install/"
+        "https%3A%2F%2Fraw.githubusercontent.com%2Fdjenttleman%2FReaSet%2F"
+        "main%2Freaboot.json"
+    )
+    header = readme.split("##### 🇬🇧 ENGLISH", 1)[0]
+
+    assert '<img src="assets/reaset-logo.png" alt="ReaSet" width="560">' in header
+    assert f'<a href="{install_url}">' in header
+    assert (
+        '<img src="assets/install-via-reaboot.svg" '
+        'alt="Install via ReaBoot" height="52">'
+    ) in header
+
+    logo = ROOT / "assets/reaset-logo.png"
+    button = ROOT / "assets/install-via-reaboot.svg"
+    assert logo.is_file() and logo.stat().st_size > 0
+    assert button.is_file() and button.stat().st_size > 0
+    button_xml = ET.parse(button).getroot()
+    assert button_xml.tag.endswith("svg")
+    assert "Install via ReaBoot" in "".join(button_xml.itertext())
+
+
 def test_readme_contains_reaboot_recipe_install_link():
     readme = (ROOT / "README.md").read_text()
     encoded_recipe_url = urllib.parse.quote(
