@@ -30,14 +30,12 @@ need to run `Reaset` once and optionally configure it as a Startup Action.
 1. Release and tag ReaSet first. Never point a published `<source>` at `main`.
 2. Add a new `<version>` to both packages in `index.xml`. Source URLs must use
    `https://raw.githubusercontent.com/djenttleman/ReaSet/refs/tags/<tag>/...`.
-3. Add a SHA-256 multihash to every source. ReaPack's format is `1220` followed
-   by the regular SHA-256 hex digest:
-
-   ```sh
-   curl -fsSL "<source-url>" -o /tmp/reaset-source
-   printf '1220%s\n' "$(shasum -a 256 /tmp/reaset-source | cut -d' ' -f1)"
-   ```
-
+3. Do **not** add the optional ReaPack `hash` attribute while ReaBoot 1.2.0 is
+   the public installer. Its downloader consumes each chunk before feeding it
+   to the verifier, so every legitimate checksum is compared against the hash
+   of empty content and the installation is rejected. Immutable tag URLs are
+   mandatory until a fixed ReaBoot release is available. This limitation is
+   enforced by the contract tests.
 4. If file locations changed in the tag, use those tagged locations in the
    source URLs. The v2.2 tools are at the repository root; later versions may
    keep them under `Tools/`.

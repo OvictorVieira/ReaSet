@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import urllib.parse
 import urllib.request
@@ -37,7 +36,6 @@ def test_core_package_installs_script_and_web_interface_from_immutable_tag():
         "file": "Reaset.lua",
         "type": "script",
         "main": "main",
-        "hash": sources["Reaset.lua"].attrib["hash"],
     }
     assert "refs/tags/v2.2/" in (sources["Reaset.lua"].text or "")
     assert sources["ReaSet.html"].attrib.get("type", "webinterface") == "webinterface"
@@ -59,14 +57,19 @@ def test_tools_are_optional_separate_package_and_scripts_are_registered():
     assert all("refs/tags/v2.2/" in (source.text or "") for source in sources)
 
 
-def test_every_source_has_a_valid_sha256_multihash():
+def test_every_source_is_reachable_and_avoids_reaboot_1_2_hash_bug():
     root = ET.parse(INDEX).getroot()
     for source in root.findall("./category/reapack/version/source"):
+        # ReaBoot 1.2.0 consumes each download chunk before hashing it, so any
+        # legitimate ReaPack multihash is compared with SHA-256(empty) and the
+        # install is rejected. Keep immutable tag URLs and omit hash until a
+        # fixed ReaBoot release is the public installer.
+        assert "hash" not in source.attrib
         url = (source.text or "").strip()
         assert url.startswith("https://raw.githubusercontent.com/")
         with urllib.request.urlopen(url, timeout=30) as response:
-            content = response.read()
-        assert source.attrib["hash"] == "1220" + hashlib.sha256(content).hexdigest()
+            assert response.status == 200
+            assert response.read()
 
 
 def test_reaboot_recipe_requires_core_and_exposes_expected_features():
