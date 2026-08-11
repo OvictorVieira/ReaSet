@@ -3,12 +3,21 @@
   <category name="ReaSet">
     <reapack name="ReaSet" type="webinterface" desc="ReaSet — live setlist and lyrics/chords web interface">
       <version name="2.2" author="David Jorquera (djenttleman)" time="2026-07-28T23:56:35Z">
-        <source file="Reaset.lua" type="script" main="main">https://raw.githubusercontent.com/djenttleman/ReaSet/refs/tags/v2.2/Reaset.lua</source>
-        <source file="ReaSet.html">https://raw.githubusercontent.com/djenttleman/ReaSet/refs/tags/v2.2/ReaSet.html</source>
-        <source file="Sortable.min.js">https://raw.githubusercontent.com/djenttleman/ReaSet/refs/tags/v2.2/Sortable.min.js</source>
+        <source file="Reaset.lua" type="script" main="main">https://raw.githubusercontent.com/djenttleman/ReaSet/fcf3414c6f4261e24d79e2073f7332313584ebc0/Reaset.lua</source>
+        <source file="ReaSet.html">https://raw.githubusercontent.com/djenttleman/ReaSet/fcf3414c6f4261e24d79e2073f7332313584ebc0/ReaSet.html</source>
+        <source file="Sortable.min.js">https://raw.githubusercontent.com/djenttleman/ReaSet/fcf3414c6f4261e24d79e2073f7332313584ebc0/Sortable.min.js</source>
         <changelog><![CDATA[
 ReaSet v2.2: unified background bridge, live lyrics/chords carousel,
 Director/Player mode and reliability improvements.
+        ]]></changelog>
+      </version>
+      <version name="3.0" author="David Jorquera (djenttleman)" time="2026-08-11T05:14:09Z">
+        <source file="Reaset.lua" type="script" main="main">https://raw.githubusercontent.com/djenttleman/ReaSet/dea2bbda162a16750ca65bcb82ad684f84079629/Reaset.lua</source>
+        <source file="ReaSet.html">https://raw.githubusercontent.com/djenttleman/ReaSet/dea2bbda162a16750ca65bcb82ad684f84079629/ReaSet.html</source>
+        <source file="Sortable.min.js">https://raw.githubusercontent.com/djenttleman/ReaSet/dea2bbda162a16750ca65bcb82ad684f84079629/Sortable.min.js</source>
+        <changelog><![CDATA[
+ReaSet v3.0: armed transport, project-local setlist library, reliability
+improvements and proprietary free-to-use licensing for v3 and later.
         ]]></changelog>
       </version>
       <metadata>
@@ -23,14 +32,20 @@ setlists, controls transport and displays real-time lyrics and chords.
 
     <reapack name="ReaSet Tools" type="script" desc="Optional authoring and diagnostic tools for ReaSet">
       <version name="2.2" author="David Jorquera (djenttleman)" time="2026-07-28T23:56:35Z">
-        <source file="Lyrics_Tapper.lua" main="main">https://raw.githubusercontent.com/djenttleman/ReaSet/refs/tags/v2.2/Lyrics_Tapper.lua</source>
-        <source file="ReaSet_Diagnose.lua" main="main">https://raw.githubusercontent.com/djenttleman/ReaSet/refs/tags/v2.2/ReaSet_Diagnose.lua</source>
+        <source file="Lyrics_Tapper.lua" main="main">https://raw.githubusercontent.com/djenttleman/ReaSet/fcf3414c6f4261e24d79e2073f7332313584ebc0/Lyrics_Tapper.lua</source>
+        <source file="ReaSet_Diagnose.lua" main="main">https://raw.githubusercontent.com/djenttleman/ReaSet/fcf3414c6f4261e24d79e2073f7332313584ebc0/ReaSet_Diagnose.lua</source>
+      </version>
+      <version name="3.0" author="David Jorquera (djenttleman)" time="2026-08-11T05:14:09Z">
+        <source file="Lyrics_Tapper.lua" main="main">https://raw.githubusercontent.com/djenttleman/ReaSet/dea2bbda162a16750ca65bcb82ad684f84079629/Tools/Lyrics_Tapper.lua</source>
+        <source file="ReaSet_Diagnose.lua" main="main">https://raw.githubusercontent.com/djenttleman/ReaSet/dea2bbda162a16750ca65bcb82ad684f84079629/Tools/ReaSet_Diagnose.lua</source>
+        <source file="ReaSet_LibraryDoctor.lua" main="main">https://raw.githubusercontent.com/djenttleman/ReaSet/dea2bbda162a16750ca65bcb82ad684f84079629/Tools/ReaSet_LibraryDoctor.lua</source>
+        <source file="Text to MIDI Bitmap.lua" main="main">https://raw.githubusercontent.com/djenttleman/ReaSet/dea2bbda162a16750ca65bcb82ad684f84079629/Tools/Text%20to%20MIDI%20Bitmap.lua</source>
       </version>
       <metadata>
         <link rel="website">https://github.com/djenttleman/ReaSet#5-tools</link>
         <description><![CDATA[
-Optional tools for authoring lyrics/chords items and diagnosing the ReaSet bridge.
-Lyrics Tapper requires ReaImGui, which the ReaBoot recipe installs with this package.
+Optional tools for authoring content and diagnosing ReaSet. Lyrics Tapper
+requires ReaImGui, which the ReaBoot recipe installs with this package.
         ]]></description>
       </metadata>
     </reapack>

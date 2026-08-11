@@ -14,8 +14,9 @@ ReaBoot installs ReaSet through the ReaPack-compatible repository described by
 ## Package layout
 
 - `ReaSet/ReaSet` is required. It installs:
-  - `Reaset.lua` as `Scripts/ReaSet/Reaset.lua` and registers it in REAPER's
-    Main Action List.
+  - `Reaset.lua` as `Scripts/ReaSet/ReaSet/Reaset.lua` and records it as a
+    Main Action List script in ReaPack's registry. REAPER/ReaPack completes
+    Action List registration when REAPER starts.
   - `ReaSet.html` and `Sortable.min.js` in `reaper_www_root`.
 - `ReaSet/ReaSet Tools` is optional. The ReaBoot recipe selects ReaImGui with
   it because Lyrics Tapper requires that extension.
@@ -28,17 +29,18 @@ need to run `Reaset` once and optionally configure it as a Startup Action.
 ## Adding a release
 
 1. Release and tag ReaSet first. Never point a published `<source>` at `main`.
-2. Add a new `<version>` to both packages in `index.xml`. Source URLs must use
-   `https://raw.githubusercontent.com/djenttleman/ReaSet/refs/tags/<tag>/...`.
+2. Resolve the tag to its full 40-character commit SHA, then add a new
+   `<version>` to both packages in `index.xml`. Source URLs must use
+   `https://raw.githubusercontent.com/djenttleman/ReaSet/<commit-sha>/...`.
 3. Do **not** add the optional ReaPack `hash` attribute while ReaBoot 1.2.0 is
    the public installer. Its downloader consumes each chunk before feeding it
    to the verifier, so every legitimate checksum is compared against the hash
-   of empty content and the installation is rejected. Immutable tag URLs are
-   mandatory until a fixed ReaBoot release is available. This limitation is
-   enforced by the contract tests.
-4. If file locations changed in the tag, use those tagged locations in the
-   source URLs. The v2.2 tools are at the repository root; later versions may
-   keep them under `Tools/`.
+   of empty content and the installation is rejected. Because Git tags can be
+   moved, immutable full-commit URLs are mandatory during this exception. This
+   limitation is enforced by the contract tests.
+4. If file locations changed in the release, use those paths in the source
+   URLs. The v2.2 tools are at the repository root; v3.0 and later keep
+   them under `Tools/`.
 5. Run the contract tests:
 
    ```sh
