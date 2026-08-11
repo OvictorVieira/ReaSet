@@ -138,7 +138,7 @@ def test_readme_header_contains_brand_assets_and_graphical_reaboot_button():
         "main%2Freaboot.json"
     )
 
-    logo = '<img src="assets/reaset-logo.svg" alt="ReaSet" width="520">'
+    logo = '<img src="assets/reaset-logo-transparent.svg" alt="ReaSet" width="520">'
     assert logo in readme
     assert logo in spanish_readme
     assert '<img src="assets/readme-hero.svg"' in readme
@@ -151,7 +151,8 @@ def test_readme_header_contains_brand_assets_and_graphical_reaboot_button():
 
     assets = [
         ROOT / "assets/reaset-logo.png",  # compatibility endpoint
-        ROOT / "assets/reaset-logo.svg",
+        ROOT / "assets/reaset-logo.svg",  # previous SVG compatibility endpoint
+        ROOT / "assets/reaset-logo-transparent.svg",
         ROOT / "assets/install-via-reaboot.svg",
         ROOT / "assets/readme-hero.svg",
     ]
@@ -163,7 +164,7 @@ def test_readme_header_contains_brand_assets_and_graphical_reaboot_button():
 
 
 def test_readme_logo_uses_a_transparent_note_cutout():
-    svg = ET.parse(ROOT / "assets/reaset-logo.svg").getroot()
+    svg = ET.parse(ROOT / "assets/reaset-logo-transparent.svg").getroot()
     namespace = "{http://www.w3.org/2000/svg}"
     mask = svg.find(f".//{namespace}mask[@id='note-cutout']")
 
