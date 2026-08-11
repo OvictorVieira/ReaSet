@@ -4,7 +4,17 @@
 <head>
     <meta charset="utf-8">
     <title>ReaSet</title>
-    <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover">
+    <!-- NO maximum-scale / user-scalable here, on purpose.
+         Both were dropped while chasing the short standalone viewport on
+         iOS 26, after comparing against a Home Screen app of the same
+         author's that lays out correctly (Suma+): its viewport line is
+         exactly this one, and the pair above was the only difference in the
+         viewport declaration itself — which is precisely what decides how
+         big the layout viewport is.
+         Nothing is lost by dropping them: Safari on iOS has ignored
+         user-scalable=no for pinch-zoom since iOS 10, for accessibility. The
+         one real change is that Android Chrome now allows pinch-zoom. -->
+    <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
     <!-- Home-screen launch. Deliberately NO manifest and NO service worker:
          both need a secure context, and REAPER serves plain HTTP on the LAN,
          where navigator.serviceWorker does not even exist. These meta tags are
@@ -15,6 +25,8 @@
          HTTP" blocks rather than warns, and the home-screen icon then fails to
          open. Turning it off in Settings > Apps > Safari is the fix; the
          appearance modal says so on-screen too. -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0e0e0e">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -61,11 +73,20 @@
                would be wrong on exactly the devices this matters for. 0 when
                no banner is showing, which is almost always. */
             --reaset-banner-h: 0px;
-            /* Where content that is NOT inside .app-frame has to start:
-               below the banner stack AND below the top bar. Overlay views read
-               this instead of --topbar-h so a banner pushes them down too
-               rather than covering their first line. */
-            --reaset-content-top: calc(var(--reaset-banner-h) + var(--topbar-h));
+            /* How much SHORTER the layout viewport is than the window that
+               contains it. 0 everywhere sane; non-zero only in an iOS Home
+               Screen launch, where the shell releases its bottom limit by
+               this much to reach the real edge of the screen. Written by
+               _vpShortMeasure() from measured values — never a constant,
+               because it depends on the device and on how the shortcut was
+               created. */
+            --reaset-vp-short: 0px;
+            /* Where content that is NOT inside .app-frame starts: below the
+               top bar. It does NOT add the banner height — the banner overlays
+               these views rather than displacing them, same as it does the
+               setlist. Kept as its own name because several overlays read it
+               and one place to change beats six. */
+            --reaset-content-top: var(--topbar-h);
             --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
             --font-mono: 'SF Mono', 'Roboto Mono', 'Consolas', 'Courier New', monospace;
         }
@@ -302,19 +323,42 @@
                the transport bar measures 0.0. */
             position: fixed;
             inset: 0;
-            /* Room for the warning banners, which are pinned above this. */
-            padding-top: var(--reaset-banner-h);
+            /* NO `bottom: -<what the viewport is missing>` here. It was tried
+               and it does not work, in a way worth recording so it is not
+               tried again: releasing the bottom limit DOES move the element's
+               geometry — getBoundingClientRect().bottom duly reported 874 on
+               an 874-tall screen — but the engine still PAINTS only as far as
+               the layout viewport. So the transport bar measured as reaching
+               the bottom edge while its buttons were sliced in half on screen.
+               Geometry moved, pixels did not.
+               Which means a short layout viewport cannot be compensated for
+               from inside CSS at all: it has to be made the right size in the
+               first place, or the app has to live within it. --reaset-vp-short
+               is still measured and reported by the ?diag=layout probe, but
+               nothing lays out from it. */
         }
 
-        /* ── Warning banner stack ──────────────────────────────
+        /* ── Warning banner stack ────────────────────────────────────────
            One container for every top warning (reconnecting, second Director)
-           so there is a single thing to measure and a single thing for the
-           layout to make room for. Stacked in DOM order if more than one is
-           up at a time, instead of silently overlapping as they used to when
-           each was its own `position: fixed; top: 0` element. */
+           so that two at once stack instead of drawing on top of each other,
+           which is what happened when each was its own `position: fixed;
+           top: 0` element and made one of the two warnings invisible.
+
+           IT OVERLAYS, IT DOES NOT PUSH. A warning is not a change of layout:
+           reflowing the whole app to make room costs vertical space that iOS
+           standalone does not have to spare, and moves every row under the
+           user's finger at the moment something is going wrong.
+
+           BELOW THE TOP BAR, not over it. Drawing at top: 0 would cover the
+           menu button, the clock and the mode pill — for as long as the
+           conflict lasts, which can be the entire show. So it takes the space
+           the setlist occupies, and only while it is up.
+
+           `pointer-events: none` (set per banner) means the row underneath is
+           still tappable through it: obscured, never disabled. */
         #reaset-banner-stack {
             position: fixed;
-            top: 0;
+            top: var(--topbar-h);
             left: 0;
             right: 0;
             z-index: 99999;
@@ -1413,7 +1457,13 @@
             -webkit-backdrop-filter: blur(40px) saturate(140%);
             border-top: 1px solid rgba(255, 255, 255, 0.07);
             box-shadow: 0 -2px 30px rgba(0, 0, 0, 0.6);
-            padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+            /* max(), NOT 12px + inset. The home-indicator inset already IS
+               breathing room — adding the bar's own 12px on top of it stacks
+               two paddings and produces 46px of near-black under the buttons,
+               which reads as dead space rather than as part of the bar. The
+               reference app (Suma+) uses the bare inset for the same reason.
+               max() keeps the 12px on devices that have no inset at all. */
+            padding: 12px 14px max(12px, env(safe-area-inset-bottom));
             display: flex;
             align-items: stretch;
             gap: 6px;
@@ -1892,22 +1942,12 @@
             body.reaset-fullscreen { --topbar-h: calc(46px + env(safe-area-inset-top)); }
         }
 
-        /* THE TOP INSET BELONGS TO WHATEVER IS PHYSICALLY FIRST — exactly one
-           element, never two.
-           The rule is: that element's BACKGROUND fills the strip behind the
-           clock and the Dynamic Island, and its TEXT starts below them. With
-           no banner that element is the top bar (above). With a banner up, it
-           is the banner — so the top bar hands the inset back, or the two
-           would each reserve it and the layout would be pushed down twice.
-           `body.reaset-banner-open` is set by the same code that shows a
-           banner, so the two can never disagree; inferring it from the DOM
-           would be a second source of truth for the same fact. */
-        body.reaset-fullscreen #reaset-banner-stack { padding-top: env(safe-area-inset-top); }
-        body.reaset-fullscreen.reaset-banner-open .app-topbar { padding-top: 0; }
-        body.reaset-fullscreen.reaset-banner-open { --topbar-h: 56px; }
-        @media (max-width: 600px), (max-height: 520px) {
-            body.reaset-fullscreen.reaset-banner-open { --topbar-h: 46px; }
-        }
+        /* The top inset has exactly one owner: the top bar (above). There
+           used to be a second set of rules handing it back and forth with the
+           banner, needed only while the banner sat at top: 0 and pushed the
+           layout. It now sits BELOW the top bar and overlays, so it never
+           touches the status-bar strip and the handover has nothing to
+           arbitrate. */
 
         /* ── View chrome ─────────────────────────────────────────────────
            Lyrics, Chords and Canvas were inset:0 — edge to edge, swallowing
@@ -5676,6 +5716,69 @@
             _setConnBanner(false);
         }
 
+        // ── Releasing the bottom limit in a Home Screen launch ──────────
+        //
+        // Yes, the page can tell: navigator.standalone is true only when iOS
+        // launched it from a Home Screen shortcut (_isStandalone() below).
+        // A browser tab reports undefined, so none of this runs there.
+        //
+        // What it is for: in that launch the layout viewport is SHORTER than
+        // the window that contains it — measured on iOS 26, window 874,
+        // viewport 812 — while still starting at the physical top of the
+        // screen. `bottom: 0` therefore lands 62pt above the real bottom edge,
+        // and nothing expressed in CSS can reach past it. The shell fills its
+        // viewport perfectly and still looks short. So the bottom limit is
+        // released by exactly the amount that is missing.
+        //
+        // MEASURED, NOT ASSUMED, and deliberately not read off the meta tag:
+        // iOS caches apple-mobile-web-app-status-bar-style from the moment the
+        // shortcut was CREATED, not from this page load, so the document
+        // cannot trust what its own <head> says about it.
+        function _readEnvPx(name) {
+            // env() is not reachable from JS; bounce it through a real element.
+            var d = document.createElement('div');
+            d.style.cssText = 'position:fixed;top:0;left:0;width:1px;' +
+                'visibility:hidden;pointer-events:none;height:env(' + name + ',0px);';
+            document.body.appendChild(d);
+            var v = d.getBoundingClientRect().height;
+            d.parentNode.removeChild(d);
+            return v;
+        }
+
+        function _vpShortMeasure() {
+            var ext = 0;
+            try {
+                if (_isStandalone() && window.screen && screen.height) {
+                    var deficit = screen.height - window.innerHeight;
+                    var safeTop = _readEnvPx('safe-area-inset-top');
+                    // The same deficit arises from two opposite situations:
+                    //
+                    //   translucent status bar — the viewport starts at the
+                    //     physical top and is short at the BOTTOM. safe-top is
+                    //     the inset, and the shell must be extended.
+                    //   opaque status bar — the viewport starts BELOW the
+                    //     status bar and already reaches the bottom edge.
+                    //     safe-top is 0, and extending would push the
+                    //     transport off the screen.
+                    //
+                    // min() resolves it without the page having to know which
+                    // one is in force — which it cannot know, per the note
+                    // above about when iOS reads that setting.
+                    //
+                    // The upper bound rejects nonsense: some iOS versions keep
+                    // reporting portrait dimensions in screen.* after a
+                    // rotation, which would yield a deficit of hundreds of
+                    // pixels. Falling back to 0 there is the current
+                    // behaviour, not a new failure.
+                    if (deficit > 0 && deficit <= 200) ext = Math.min(deficit, safeTop);
+                }
+            } catch (e) { ext = 0; }
+            document.documentElement.style.setProperty('--reaset-vp-short', ext + 'px');
+        }
+        window.addEventListener('resize', _vpShortMeasure);
+        window.addEventListener('orientationchange', _vpShortMeasure);
+        _vpShortMeasure();
+
         // ── Warning banner stack ───────────────────────
         // Every top warning goes in here rather than being its own
         // `position: fixed; top: 0` element. Two reasons, and the second is
@@ -5710,16 +5813,24 @@
         function _bannerMeasure() {
             var host = document.getElementById('reaset-banner-stack');
             var h = host ? host.offsetHeight : 0;
+            // Nothing lays out from this any more — the banner overlays
+            // instead of pushing. It is published because the ?diag=layout
+            // probe reports it, and because "how tall is the warning" is the
+            // first thing anyone asks when a warning looks wrong on a device
+            // with no console.
             document.documentElement.style.setProperty('--reaset-banner-h', h + 'px');
-            // Drives the CSS that decides whether the top inset belongs to the
-            // banner or to the top bar. Set from here so it is derived from
-            // the same measurement, and cannot disagree with it.
-            document.body.classList.toggle('reaset-banner-open', h > 0);
         }
         // Rotation and split-view resize change the wrap; ResizeObserver
         // catches those, this is the belt for engines without it.
         window.addEventListener('resize', _bannerMeasure);
         window.addEventListener('orientationchange', _bannerMeasure);
+
+        // Bumped by hand on every change that alters the layout. It exists
+        // because ReaSet is installed by COPYING this file into REAPER's web
+        // root: the copy under test and the copy just edited are different
+        // files, and nothing on screen said which one was running. A round of
+        // debugging was spent on a stale copy before this line existed.
+        var REASET_BUILD = '2026-08-11 · banner-overlay';
 
         // ── Layout probe: ?diag=layout ──────────────────────────────────
         // An iOS Home Screen launch has no address bar, no dev tools and no
@@ -5733,13 +5844,36 @@
         (function () {
             if (!/(?:^|[?&])diag=layout(?:&|$)/.test(window.location.search || '')) return;
             var box = document.createElement('pre');
-            box.style.cssText = 'position:fixed;left:6px;bottom:6px;z-index:2147483647;margin:0;' +
+            // Sits ABOVE the transport bar, not over it: parked at the bottom
+            // it covered the very controls whose position was in question,
+            // which reads as "the buttons are cut off" when they are not.
+            box.style.cssText = 'position:fixed;left:6px;bottom:150px;z-index:2147483647;margin:0;' +
                 'background:rgba(0,0,0,.86);color:#0f0;font:11px/1.35 monospace;padding:8px 10px;' +
                 'border:1px solid #0f0;border-radius:6px;pointer-events:none;white-space:pre;';
             document.body.appendChild(box);
             var probe = document.createElement('div');
             probe.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:100dvh;visibility:hidden;pointer-events:none;';
             document.body.appendChild(probe);
+
+            // PAINT TEST for the strip below the layout viewport. Two rival
+            // explanations for the black band at the bottom of the screen,
+            // and they need opposite fixes:
+            //
+            //   a) the engine simply does not paint outside the layout
+            //      viewport, so the strip is unreachable and the app has to
+            //      live within it;
+            //   b) it does paint there, and something is drawn on top —
+            //      in which case the strip is reachable and worth reaching.
+            //
+            // Magenta is nobody's background colour in this app, so if any
+            // magenta appears down there the answer is (b). If the band stays
+            // black, it is (a) and no CSS can help.
+            var paint = document.createElement('div');
+            paint.style.cssText = 'position:fixed;left:0;right:0;z-index:2147483646;' +
+                'pointer-events:none;background:#ff00ff;' +
+                'bottom:calc(-1 * var(--reaset-vp-short, 0px));' +
+                'height:var(--reaset-vp-short, 0px);';
+            document.body.appendChild(paint);
             function sa(side) {
                 // env() cannot be read from JS, so it is bounced through a
                 // custom property on a real element and read back computed.
@@ -5756,13 +5890,25 @@
                 var fr = frame ? frame.getBoundingClientRect() : null;
                 var tb = tr ? tr.getBoundingClientRect() : null;
                 box.textContent =
+                    'BUILD           ' + REASET_BUILD + '\n' +
                     'screen.height   ' + screen.height + '\n' +
                     'innerHeight     ' + window.innerHeight + '\n' +
+                    // The one that matters: anything other than 0 means the
+                    // layout viewport is SHORTER than the window it lives in,
+                    // so nothing inside CSS can reach the bottom edge — the
+                    // shell can fill its viewport perfectly and still look
+                    // short. That is what black-translucent was producing.
+                    'VIEWPORT SHORT  ' + (screen.height - window.innerHeight) + '\n' +
+                    'visualVP h      ' + (window.visualViewport ? window.visualViewport.height.toFixed(1) : '-') + '\n' +
                     '100dvh          ' + probe.getBoundingClientRect().height.toFixed(1) + '\n' +
                     'safe top/bot    ' + sa('top').toFixed(1) + ' / ' + sa('bottom').toFixed(1) + '\n' +
                     'frame top/bot   ' + (fr ? fr.top.toFixed(1) + ' / ' + fr.bottom.toFixed(1) : '-') + '\n' +
                     'transport bot   ' + (tb ? tb.bottom.toFixed(1) : '-') + '\n' +
                     'GAP under bar   ' + (tb ? (window.innerHeight - tb.bottom).toFixed(1) : '-') + '\n' +
+                    // The two that say whether the bottom limit was released
+                    // and whether it landed on the real edge of the screen.
+                    'vp-short var    ' + getComputedStyle(document.documentElement).getPropertyValue('--reaset-vp-short').trim() + '\n' +
+                    'BOTTOM MISS     ' + (tb ? (screen.height - tb.bottom).toFixed(1) : '-') + '\n' +
                     'banner-h        ' + getComputedStyle(document.documentElement).getPropertyValue('--reaset-banner-h').trim() + '\n' +
                     'standalone      ' + (navigator.standalone === true) + '\n' +
                     'body classes    ' + (document.body.className || '(none)');
