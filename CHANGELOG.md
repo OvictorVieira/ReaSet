@@ -6,6 +6,75 @@
 
 ---
 
+## v3.0 — Armed transport, and a new licence
+*August 11, 2026*
+
+### Licence
+
+- **ReaSet is now proprietary and free to use** — see [`LICENSE`](./LICENSE).
+  You may use it for anything, including commercially, on as many machines as
+  you like, and share unmodified copies. Selling it or distributing modified
+  versions needs written permission.
+- **This is not retroactive.** Versions up to v2.x were GPL v3 and stay GPL v3
+  for anyone who has them, permanently.
+- The change was possible because `Reaset.lua` never actually derived from the
+  X-Raym scripts its header claimed to inherit from: a line-by-line comparison
+  finds 18 identical lines out of 119, and every one of them is `end` or
+  `break`. Zero shared functions. The header over-declared an obligation the
+  code never contracted, and has been corrected. Full evidence in
+  [`docs/RELICENSING.md`](./docs/RELICENSING.md).
+- X-Raym's own scripts in `Legacy/` keep their GPL v3 and their authorship, now
+  declared explicitly in [`Legacy/LICENSE-NOTICE.md`](./Legacy/LICENSE-NOTICE.md).
+- New [`CONTRIBUTING.md`](./CONTRIBUTING.md) with a contributor licence
+  agreement, so contributions can be used in ReaSet Pro.
+
+### Transport — arm, don't detect
+
+The end of a song used to be *detected* by the browser, which then *sent* a
+stop. That path can never be punctual, and the reason is worth writing down:
+~60 ms poll, plus a 72-107 ms round-trip, plus — the part that took longest to
+find — **`Main_OnCommand` does not stop the transport on the spot. It stops it
+on the next audio block.** A reposition landing in that gap runs while the
+transport is still rolling, so it seeks *playback* into the next song.
+
+- **Auto-stop is now armed in advance.** ReaSet tells REAPER where to stop
+  before it matters, so REAPER stops in its own audio engine at the exact
+  sample and no command travels at the critical moment. Measured on a real
+  region transition: stops 10.7 ms before the boundary, never crossing it.
+  **Fixes the next song being briefly audible at the end of the current one.**
+- It lives next to the loop engine on purpose: the loop time range is one
+  range and both features want it, so there is a single arbiter instead of two
+  that fight. A song marked to loop does not auto-stop.
+- If arming is not possible (no SWS, for instance) the browser's old detection
+  stays as the fallback. Losing precision is acceptable; losing auto-stop is
+  not.
+- **MIDI Init redesigned.** It used to jump to the *start of the next song* and
+  play ~100 ms there so plugins would receive transport — which made that
+  song's opening audible every single time, whether or not the regions were
+  contiguous. Now the transport simply starts 5 ms before the song you asked
+  for. Five is enough because the MIDI is quantised to the grid; the old 100 ms
+  was margin for a case that no longer exists.
+- **Position extrapolation** (`getExtrapolatedPos`), and the end-of-region
+  trigger now uses it instead of a position up to a poll interval stale.
+- Repositioning after a stop waits for the transport to **confirm** it stopped,
+  instead of guessing with a timer that was shorter than the measured
+  round-trip.
+
+### Fixed
+
+- **Director→Player setlist sync silently dropped most edits.** It triggered on
+  the chunk *count* changing, and toggling a skip flag moves the payload by
+  three characters — so the count stayed identical, the shared file was never
+  rewritten, and Players kept showing the old setlist with no sign anything had
+  failed. Only edits that happened to cross a chunk boundary got through, which
+  is why it looked like it worked. Now gated on a monotonic revision.
+- **The web-interface directory was hardcoded** to `<resource>/Plugins/reaper_www_root`.
+  On installs where that is not the right path, `io.open` fails silently: the
+  file is never written, the browser gets a 404, and nobody returns an error.
+  It is now resolved by looking for where `ReaSet.html` itself lives.
+
+---
+
 ## v2.2 — Live Lyrics Carousel, Reaset.lua Unification & Director/Player Mode
 *July 28, 2026*
 
@@ -49,6 +118,79 @@
 # Español
 
 ---
+
+## v3.0 — Transporte armado, y licencia nueva
+*11 de agosto de 2026*
+
+### Licencia
+
+- **ReaSet pasa a ser propietario y de uso gratuito** — ver [`LICENSE`](./LICENSE).
+  Podés usarlo para lo que quieras, incluso comercialmente, en las máquinas que
+  quieras, y compartir copias sin modificar. Venderlo o distribuir versiones
+  modificadas requiere permiso escrito.
+- **No es retroactivo.** Las versiones hasta la v2.x fueron GPL v3 y lo siguen
+  siendo para quien las tenga, para siempre.
+- El cambio fue posible porque `Reaset.lua` nunca derivó realmente de los
+  scripts de X-Raym que su cabecera decía heredar: la comparación línea a línea
+  da 18 líneas idénticas sobre 119, y todas son `end` o `break`. Cero funciones
+  compartidas. La cabecera declaraba una obligación que el código no contrajo, y
+  se corrigió. La evidencia completa está en
+  [`docs/RELICENSING.md`](./docs/RELICENSING.md).
+- Los scripts de X-Raym en `Legacy/` conservan su GPL v3 y su autoría, ahora
+  declaradas explícitamente en [`Legacy/LICENSE-NOTICE.md`](./Legacy/LICENSE-NOTICE.md).
+- Nuevo [`CONTRIBUTING.md`](./CONTRIBUTING.md) con acuerdo de contribución, para
+  que las contribuciones puedan usarse en ReaSet Pro.
+
+### Transporte — armar, no detectar
+
+El fin de una canción lo *detectaba* el navegador, que entonces *mandaba* un
+stop. Ese camino no puede ser puntual, y la razón vale escribirla: poll de
+~60 ms, más 72-107 ms de ida y vuelta, más —lo que más costó encontrar—
+**`Main_OnCommand` no detiene el transporte en el acto: lo detiene en el próximo
+bloque de audio.** Una reposición que caiga en ese hueco se ejecuta con el
+transporte todavía rodando, así que hace un seek *de reproducción* a la canción
+siguiente.
+
+- **El auto-stop ahora se arma por adelantado.** ReaSet le dice a REAPER dónde
+  parar antes de que importe, así que para en su propio motor de audio, en el
+  sample exacto, y en el instante crítico no viaja ningún comando. Medido sobre
+  una transición de región real: para 10,7 ms antes del borde, sin cruzarlo
+  nunca. **Arregla que se escuchara un instante de la canción siguiente al
+  terminar la actual.**
+- Vive junto al motor de loop a propósito: el rango de loop es uno solo y las
+  dos features lo quieren, así que hay un único árbitro en vez de dos que se
+  pisen. Una canción marcada para loopear no auto-para.
+- Si armar no es posible (sin SWS, por ejemplo), la detección vieja del
+  navegador queda como respaldo. Perder precisión es aceptable; perder el
+  auto-stop no.
+- **MIDI Init rediseñado.** Antes saltaba al *inicio de la canción siguiente* y
+  reproducía ~100 ms ahí para que los plugins recibieran transporte — lo que
+  hacía sonar el arranque de ese tema todas las veces, fueran o no contiguas las
+  regiones. Ahora el transporte simplemente arranca 5 ms antes de la canción que
+  pediste. Cinco alcanzan porque el MIDI está cuantizado a la grilla; los 100 ms
+  viejos eran margen para un caso que ya no existe.
+- **Extrapolación de posición** (`getExtrapolatedPos`), y el disparo de fin de
+  región ahora la usa en vez de una posición hasta un intervalo de poll vieja.
+- La reposición tras un stop espera a que el transporte **confirme** que paró,
+  en vez de adivinar con un temporizador más corto que la ida y vuelta medida.
+
+### Arreglado
+
+- **El sync de setlist Director→Player descartaba en silencio casi toda
+  edición.** Se disparaba con el cambio del *conteo* de chunks, y togglear un
+  skip mueve el payload tres caracteres — así que el conteo quedaba igual, el
+  archivo compartido nunca se reescribía, y los Players seguían mostrando el
+  setlist viejo sin ninguna señal de falla. Solo pasaban las ediciones que
+  casualmente cruzaban un límite de chunk, que es por qué parecía funcionar.
+  Ahora se dispara con una revisión monotónica.
+- **El directorio del web interface estaba hardcodeado** a
+  `<resource>/Plugins/reaper_www_root`. En instalaciones donde esa no es la ruta
+  correcta, `io.open` falla en silencio: el archivo nunca se escribe, el
+  navegador recibe 404, y nadie devuelve un error. Ahora se resuelve buscando
+  dónde vive el propio `ReaSet.html`.
+
+---
+
 
 ## v2.2 — Carrusel de letras en vivo, unificación de Reaset.lua y modo Director/Player
 *28 de julio de 2026*

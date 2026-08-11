@@ -5590,6 +5590,13 @@
         // taps are never suppressed — so "I didn't press anything" jumps stop,
         // while real button presses keep working.
         var _lastReplyTs      = 0;
+        // _lastReplyTs updates on EVERY reply, but currentPos only refreshes on
+        // the TRANSPORT branch, and the polls run at different cadences. Using
+        // _lastReplyTs to extrapolate therefore measures the wrong interval and
+        // biases the result short. Measured on ReaSet Pro: +28.3ms systematic
+        // bias with _lastReplyTs, none with a TRANSPORT-only timestamp, and p95
+        // absolute error 32ms → 8.7ms.
+        var _lastTransportTs  = 0;
         var RESYNC_GAP_MS     = 700;   // reply-stream gap that counts as an interruption
         var RESYNC_GUARD_MS   = 600;   // suppress automatic transport commands this long after a gap
         var _resyncGuardUntil = 0;
@@ -5783,6 +5790,12 @@
                 wwr_req('SET/EXTSTATE/ReaSet/setlistChunk' + c + '/' + chunks[c]);
             }
             wwr_req('SET/EXTSTATE/ReaSet/setlistChunkCount/' + chunks.length);
+            // Monotonic revision, sent LAST, is what Reaset.lua triggers on. It
+            // used to trigger on the chunk COUNT changing, which silently dropped
+            // most pushes: toggling a skip flag moves the payload by three
+            // characters, the count stays identical, and the shared file was never
+            // rewritten — Players kept showing the old setlist.
+            wwr_req('SET/EXTSTATE/ReaSet/setlistRev/' + _syncLocalRev);
         }
 
         // Debounced entry point — every setlist edit (skip/loop/chain, reorder,
@@ -6848,6 +6861,31 @@
                     case "TRANSPORT":
                         var nowPlaying = (parseInt(tok[1]) & 1) === 1;
                         currentPos = parseFloat(tok[2]);
+                        // Cancel the MIDI-init pre-roll artefact in ONE place. The
+                        // pre-roll leaves the cursor a few ms before the song start,
+                        // i.e. inside the PREVIOUS region when they are contiguous,
+                        // and the many places that resolve "active region" all
+                        // compare against currentPos. Clamping here fixes them all
+                        // at once instead of repeating the guard everywhere and
+                        // forgetting one. The offset is milliseconds: invisible to
+                        // the display, exact for the purpose.
+                        if (window._playIntent) {
+                            var _pi = window._playIntent;
+                            if (currentPos >= _pi.start || currentPos < _pi.start - 0.5) {
+                                window._playIntent = null;
+                            } else {
+                                currentPos = _pi.start;
+                            }
+                        }
+                        _lastTransportTs = _now;
+                        // A pending cue from an auto-stop: only now do we know REAPER
+                        // really stopped, so this SET/POS moves the cursor without
+                        // dragging playback along with it.
+                        if (!nowPlaying && window._pendingCuePos != null) {
+                            var _cue = window._pendingCuePos;
+                            window._pendingCuePos = null;
+                            wwr_req("SET/POS/" + _cue);
+                        }
                         // First playback of the session starts the session clock,
                         // which then runs through every later stop and pause.
                         if (nowPlaying && !wasPlayingLast) _sessionBegin();
@@ -8280,6 +8318,25 @@
                     // let it fire on the next proven-fresh tick.
                     if (nxt) { if (!_suppressAutoTransport()) wwr_req("SET/POS/" + nxt.start); return; }
                 }
+                // Tell Reaset.lua where to stop BEFORE it matters, instead of
+                // detecting the end and sending a stop late. Published only when
+                // something changes, not every tick.
+                (function () {
+                    var wantStop = document.getElementById('autoStopToggle').checked
+                                   && !activeRegion.chain && !activeRegion.loop
+                                   && !getOverride(activeRegion.id).stopAfter;
+                    var key = wantStop ? (activeRegion.start + ":" + activeRegion.end) : "off";
+                    if (key === window._autoStopPublished) return;
+                    window._autoStopPublished = key;
+                    if (wantStop) {
+                        wwr_req("SET/EXTSTATE/ReaSet/autoStopStart/" + activeRegion.start +
+                                ";SET/EXTSTATE/ReaSet/autoStopEnd/" + activeRegion.end +
+                                ";SET/EXTSTATE/ReaSet/autoStop/on");
+                    } else {
+                        wwr_req("SET/EXTSTATE/ReaSet/autoStop/off");
+                    }
+                })();
+
                 var row = document.getElementById("row-" + activeRegion.id);
                 if (row) {
                     row.classList.add('active');
@@ -8600,7 +8657,11 @@
                 }
 
                 // End-of-region logic
-                var timeRem = activeRegion.end - currentPos;
+                // Extrapolated, not raw currentPos: the TRANSPORT reply arrives
+                // every ~60ms, so currentPos is up to a poll interval stale and the
+                // trigger below fires that much LATE, eating into the budget it
+                // then has to spend on the wwr_req round-trip.
+                var timeRem = activeRegion.end - getExtrapolatedPos();
                 // Reset end-of-region dedup when safely inside the region.
                 // This allows the trigger to re-arm after a song loop (region.loop)
                 // jumps the playhead back to the start.
@@ -8620,7 +8681,7 @@
                     // repeatedly and producing the "stuck / last-second repeating" bug.
                     if (window._lastRegionEndTrigger === activeRegion.id) { return; }
                     // Time-based lock: autoStop / stopAfter set this for ~400 ms after firing.
-                    // Guards against the stop → reposition → triggerMidi-PLAY sequence
+                    // Guards against the stop → reposition sequence
                     // resetting _lastRegionEndTrigger (via timeRem > 0.5 in the next region)
                     // while REAPER still briefly reports isPlaying = true.
                     if (window._endOfRegionLocked && Date.now() < window._endOfRegionLocked) { return; }
@@ -8648,10 +8709,12 @@
                     // Per-song overrides: stopAfter / delayAfter
                     var _rov = getOverride(activeRegion.id);
                     if (_rov.stopAfter) {
-                        window._endOfRegionLocked = Date.now() + 400; // lock before any async
-                        wwr_req(1016);
+                        window._endOfRegionLocked = Date.now() + 400;
                         var _nrs = findNextValidSong(activeIdx);
-                        if (_nrs) { setTimeout(function() { wwr_req("SET/POS/" + _nrs.start); }, 150); }
+                        wwr_req(1016);
+                        // Same reason as the auto-stop branch: the reposition waits
+                        // for the transport to confirm it stopped.
+                        if (_nrs) window._pendingCuePos = _nrs.start;
                         return;
                     }
                     if (_rov.delayAfter > 0) {
@@ -8686,14 +8749,30 @@
                         // sending STOP now would race with the user's already-dispatched PLAY
                         // and kill the new song's playback.
                         if (window._playRegionLocked && Date.now() < window._playRegionLocked) { return; }
-                        window._endOfRegionLocked = Date.now() + 400; // lock before any async
-                        wwr_req(1016);
+                        window._endOfRegionLocked = Date.now() + 400;
                         var nextR2 = findNextValidSong(activeIdx);
-                        if (nextR2) { setTimeout(function () {
-                            // Skip repositioning if user started a new song during the 100ms delay.
-                            if (window._playRegionLocked && Date.now() < window._playRegionLocked) { return; }
-                            wwr_req("SET/POS/" + nextR2.start); triggerMidi();
-                        }, 100); }
+                        // ARM, DON'T DETECT.
+                        //
+                        // Detecting the end here and sending a STOP can never be
+                        // punctual: ~60ms poll + 72-107ms round-trip, and on top of
+                        // that Main_OnCommand does not stop the transport on the
+                        // spot — it stops it on the next audio block. A SET/POS
+                        // landing in that gap runs while the transport is STILL
+                        // ROLLING, so it seeks PLAYBACK into the next song, which is
+                        // audible until the stop settles. Ordering the commands
+                        // inside one request does not help: the problem is not
+                        // arrival order, it is that the first one's effect is late.
+                        //
+                        // Reaset.lua now tells REAPER where to stop in advance, so
+                        // it stops in its own audio engine at the exact sample. While
+                        // that is armed we send nothing here; the reposition waits
+                        // for TRANSPORT to confirm playState 0.
+                        if (window._autoStopArmed) {
+                            if (nextR2) window._pendingCuePos = nextR2.start;
+                            return;
+                        }
+                        wwr_req(1016);
+                        if (nextR2) window._pendingCuePos = nextR2.start;
                         return;
                     }
                 }
@@ -8851,6 +8930,39 @@
         // restarts transport at the target and deliberately creates a hard jump.
         // `startWhenStopped` keeps Play Song behaviour intact without making
         // MIDI navigation start playback when REAPER was already stopped.
+        // Extrapolates currentPos forward from the last TRANSPORT reply's OWN
+        // timestamp. Does not extrapolate while stopped, before the first
+        // TRANSPORT reply, or across a long gap in the reply stream — in that
+        // case the timestamp is stale and extrapolating from it would put back
+        // the exact error this exists to remove.
+        //
+        // Assumes playrate 1.0: REAPER's TRANSPORT reply does not carry playrate.
+        function getExtrapolatedPos() {
+            if (!isPlaying || !_lastTransportTs) return currentPos;
+            var elapsedMs = Date.now() - _lastTransportTs;
+            if (elapsedMs > 1500) return currentPos;
+            return currentPos + (elapsedMs / 1000);
+        }
+
+        // MIDI Init: the transport starts a few ms BEFORE the song so plugins
+        // receive MIDI state with room to spare.
+        //
+        // The old design, when a song ended, jumped to the START OF THE NEXT ONE
+        // and played ~100ms there. That made the next song's opening audible every
+        // time — and it did not depend on the regions being contiguous, because it
+        // jumped explicitly to that point. It also spread STOP → wait → SEEK →
+        // PLAY → STOP across five requests with no guaranteed order between them.
+        //
+        // 5ms is enough because the MIDI is quantised to the grid; the old 100ms
+        // was margin for a case that no longer exists.
+        var MIDI_INIT_PREROLL = 0.005;
+
+        function midiInitPreroll(start) {
+            var el = document.getElementById('initSongMidiToggle');
+            if (!el || !el.checked) return start;
+            return Math.max(0, start - MIDI_INIT_PREROLL);
+        }
+
         function seekManualTransport(start, startWhenStopped) {
             var wasPlaying = isPlaying;
             if (!wasPlaying && startWhenStopped) {
@@ -8878,16 +8990,15 @@
                 // Setting this flag for 500ms tells the autoStop block to skip its STOP if
                 // the user just explicitly selected a song.
                 window._playRegionLocked   = Date.now() + 500;
-                // Separate flag consumed ONLY by triggerMidi()'s internal STOP guard.
-                // We cannot reuse _playRegionLocked here because cueRegion() also sets
-                // it — cue must let its own triggerMidi() STOP fire (it stops REAPER
-                // intentionally after the brief MIDI-arm play). This flag is set only
-                // when this path will actually issue PLAY, so triggerMidi()'s cleanup
-                // STOP cannot race with a user-initiated hard jump or fresh playback.
-                if (!isPlaying || !smoothSeekEnabled) {
-                    window._playbackInitiated = Date.now() + 500;
-                }
-                seekManualTransport(start, true); queuedRegion = null;
+                // The user decided: a cue left pending by an earlier auto-stop no
+                // longer applies and would move the cursor off their choice.
+                window._pendingCuePos = null;
+                // The pre-roll lands a few ms BEFORE the song start, which with
+                // contiguous regions is inside the previous one. Record the intent
+                // so the display does not briefly resolve the wrong song; the
+                // TRANSPORT handler clears it once the real start is crossed.
+                window._playIntent = { id: id, start: start };
+                seekManualTransport(midiInitPreroll(start), true); queuedRegion = null;
                 var all = document.querySelectorAll('.queued');
                 for (var i = 0; i < all.length; i++) all[i].classList.remove('queued');
             } else {
@@ -8914,25 +9025,14 @@
                 if (row) row.classList.add('queued');
             }
         }
-        function triggerMidi() {
-            if (!document.getElementById('initSongMidiToggle').checked) return;
-            wwr_req(1007);
-            setTimeout(function () {
-                // If the user explicitly started playback (playRegion) after this
-                // MIDI-arm PLAY was sent, skip the cleanup STOP — it would arrive at
-                // REAPER after the user's PLAY and kill their song.
-                // Note: cueRegion() sets _playRegionLocked but NOT _playbackInitiated,
-                // so cue's triggerMidi() STOP still fires correctly.
-                if (window._playbackInitiated && Date.now() < window._playbackInitiated) { return; }
-                wwr_req(1016);
-            }, 100);
-        }
         function cueRegion(start, id) {
             // Set the same lock as playRegion so autoStop's pending 100ms setTimeout
             // (from a stale transport response) cannot override our cued position
-            // or fire a conflicting triggerMidi PLAY+STOP on top of ours.
+            // on top of our cued position.
             window._playRegionLocked = Date.now() + 500;
-            wwr_req(1016); wwr_req("SET/POS/" + start); flashRow(id); triggerMidi();
+            // One compound request: REAPER executes in order within it, so stop
+            // and reposition can no longer arrive the wrong way round.
+            wwr_req("1016;SET/POS/" + start); flashRow(id);
         }
         function smartStop() {
             var activeIdx = -1;
@@ -10225,9 +10325,9 @@
            Everything is preserved verbatim below so it can be switched back
            on when ReaSet becomes an installable app with real MIDI access
            (see ROADMAP.md). Nothing else depends on it: every midi* action
-           here is only called from onMidiMessage, and triggerMidi() — which
-           fires REAPER's own transport to initialise MIDI hardware, and is
-           NOT Web MIDI — lives elsewhere and is untouched.
+           here is only called from onMidiMessage. The unrelated "MIDI Init"
+           feature — REAPER's own transport arriving a few ms before a song so
+           plugins get MIDI state, NOT Web MIDI — lives elsewhere.
 
         // ══════════════════════════════════════════════════════════
         // MIDI MODULE — Web MIDI API (Phase 1)

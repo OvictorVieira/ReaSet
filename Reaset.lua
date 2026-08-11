@@ -9,10 +9,14 @@
  *          3) Chords notes → web bridge (was X-Raym Convert Chords ...)
  *
  * Credits:
- *   - Lyrics/Chords note bridge logic: X-Raym (GPL v3)
- *     https://github.com/X-Raym/REAPER-ReaScripts
+ *   - Lyrics/Chords note bridge: inspired by X-Raym's scripts of the same
+ *     purpose (https://github.com/X-Raym/REAPER-ReaScripts). Independent
+ *     implementation — see docs/RELICENSING.md for the line-by-line
+ *     comparison behind that claim. The originals are kept, unmodified and
+ *     under their own GPL v3, in Legacy/.
  *   - Native loop engine + unification: ReaSet project.
- * Licence: GPL v3 (inherits from the X-Raym components it reuses).
+ * Licence: see LICENSE. Proprietary, free to use. Versions up to v2.x were
+ *          released under GPL v3 and remain so.
  *
  * INSTALL (one time only):
  *   Actions → "ReaScript: Load..." → select Reaset.lua
@@ -114,6 +118,86 @@ end
 
 -- Returns false when the caller should skip the rest of this tick (a cleanup
 -- + defer already happened is NOT done here; caller just continues normally).
+----------------------------------------------------------------------------
+-- ARMED AUTO-STOP — "stop at this position", resolved by the engine
+----------------------------------------------------------------------------
+-- ARM, DON'T DETECT.
+--
+-- The browser used to DETECT the end of a song and SEND a stop, and that path
+-- can never be punctual: ~60ms poll, 72-107ms round-trip, and on top of that
+-- Main_OnCommand does not stop the transport on the spot — it stops it on the
+-- next audio block. A SET/POS landing in that gap runs while the transport is
+-- STILL ROLLING, so it seeks PLAYBACK into the next song, which is audible.
+--
+-- Here REAPER is told where to stop BEFORE it matters. It stops in its own
+-- audio engine, at the exact sample, and at the critical moment no command
+-- travels at all. Verified on a real region transition: stops 10.7ms before the
+-- boundary without ever crossing it.
+--
+-- IT LIVES HERE, NEXT TO THE LOOP ENGINE, ON PURPOSE: the loop time range is
+-- ONE range and both features want it — the loop with GetSetRepeat(1), the
+-- auto-stop with 0. They are mutually exclusive per song, so there has to be a
+-- single arbiter rather than two that fight. The loop wins: a song marked to
+-- loop does not auto-stop.
+
+local s_stopArmed   = false
+local s_stopKey     = ""
+local s_stopPrefWas = nil   -- the user's global preference, to put back
+
+local function autostop_cleanup()
+    if s_stopPrefWas ~= nil and reaper.SNM_SetIntConfigVar then
+        reaper.SNM_SetIntConfigVar("stopendofloop", s_stopPrefWas)
+        s_stopPrefWas = nil
+    end
+    if s_stopArmed then
+        reaper.GetSet_LoopTimeRange(true, true, 0, 0, false)
+    end
+    s_stopArmed = false
+    s_stopKey   = ""
+    reaper.SetExtState(SEC, "autoStopArmed", "", false)
+end
+
+local function autostop_arm(ls, le)
+    if not reaper.SNM_GetIntConfigVar then return false end
+    -- stopendofloop is a GLOBAL REAPER preference, not a project one: save the
+    -- user's value the first time and restore it on disarm and on exit.
+    if s_stopPrefWas == nil then
+        s_stopPrefWas = reaper.SNM_GetIntConfigVar("stopendofloop", 0)
+    end
+    reaper.SNM_SetIntConfigVar("stopendofloop", 1)
+    reaper.GetSet_LoopTimeRange(true, true, ls, le, false)
+    reaper.GetSetRepeat(0)
+    s_stopArmed = true
+    s_stopKey   = string.format("%.5f:%.5f", ls, le)
+    -- The browser reads this flag so it does NOT also send its own stop. If
+    -- arming cannot happen (no SWS, for instance) the flag stays empty and the
+    -- browser's detection remains the fallback: losing precision is acceptable,
+    -- losing auto-stop is not.
+    reaper.SetExtState(SEC, "autoStopArmed", "1", false)
+    return true
+end
+
+-- `loop_active` comes from loop_tick: the loop owns the range when it is on.
+local function autostop_tick(loop_active)
+    if loop_active then
+        if s_stopArmed then autostop_cleanup() end
+        return
+    end
+    local ctrl = reaper.GetExtState(SEC, "autoStop")
+    if ctrl ~= "on" then
+        if s_stopArmed then autostop_cleanup() end
+        return
+    end
+    local ls = tonumber(reaper.GetExtState(SEC, "autoStopStart"))
+    local le = tonumber(reaper.GetExtState(SEC, "autoStopEnd"))
+    if not (ls and le and le > ls) then
+        if s_stopArmed then autostop_cleanup() end
+        return
+    end
+    local key = string.format("%.5f:%.5f", ls, le)
+    if key ~= s_stopKey then autostop_arm(ls, le) end
+end
+
 local function loop_tick()
     local ctrl = reaper.GetExtState(SEC, "nativeLoop")
 
@@ -123,7 +207,12 @@ local function loop_tick()
         local lm = tonumber(reaper.GetExtState(SEC, "loopMax")) or 0
         if ls and le and le > ls then
             local new_key = string.format("%.5f:%.5f:%d", ls, le, lm)
-            if new_key ~= s_key then loop_arm(ls, le, lm) end
+            if new_key ~= s_key then
+                -- The loop wins the range: release the auto-stop before taking
+                -- it, or the GetSetRepeat(1) below would fight its 0.
+                if s_stopArmed then autostop_cleanup() end
+                loop_arm(ls, le, lm)
+            end
         end
     end
 
@@ -406,18 +495,62 @@ local chords = bridge_new("chords", "XR_Chords", "chordsTrack", true)
 -- result to a file living next to ReaSet.html, where Players fetch() it.
 -- See ReaSet.html's "Shared setlist sync" section for the JS-side encode.
 
+-- Where REAPER's web interface serves files from.
+--
+-- This used to be hardcoded to "<resource>/Plugins/reaper_www_root". When that
+-- path is not the right one for an install, io.open fails silently: the file is
+-- never written, the browser gets a 404, and NOBODY RETURNS AN ERROR — the whole
+-- path looks like it works. Measured on a real install where the correct
+-- directory was "<resource>/reaper_www_root" instead.
+--
+-- Resolved by looking instead: the right directory is the one ReaSet.html itself
+-- lives in, which is exactly the one the browser asks with a relative URL. If it
+-- is not found, the first writable candidate wins.
+local s_wwwRoot = nil
+local function www_root()
+    if s_wwwRoot then return s_wwwRoot end
+    local base = reaper.GetResourcePath()
+    local cands = { base .. "/reaper_www_root", base .. "/Plugins/reaper_www_root" }
+    for _, d in ipairs(cands) do
+        local f = io.open(d .. "/ReaSet.html", "rb")
+        if f then f:close(); s_wwwRoot = d; return d end
+    end
+    for _, d in ipairs(cands) do
+        local probe = d .. "/.reaset_probe"
+        local f = io.open(probe, "wb")
+        if f then f:close(); os.remove(probe); s_wwwRoot = d; return d end
+    end
+    s_wwwRoot = cands[1]
+    return s_wwwRoot
+end
+
 local SYNC_FILE_NAME = "reaset_setlist_sync.json"
 
 local function sync_file_path()
-    return reaper.GetResourcePath() .. "/Plugins/reaper_www_root/" .. SYNC_FILE_NAME
+    return www_root() .. "/" .. SYNC_FILE_NAME
 end
 
 local s_syncLastCount = nil   -- last chunk-count value already written to disk
 
 local function sync_tick()
-    local count_str = reaper.GetExtState(SEC, "setlistChunkCount")
-    if count_str == "" or count_str == s_syncLastCount then return end
+    -- Gate on a MONOTONIC revision, not on the chunk count.
+    --
+    -- This used to compare setlistChunkCount against the last one handled, and
+    -- that silently dropped most pushes: toggling a skip flag changes the
+    -- payload by three characters, so the chunk count stays identical, the
+    -- comparison sees no change, and the shared file is never rewritten —
+    -- Players keep displaying the old setlist with no sign anything failed.
+    -- Only edits that happened to push the payload across a chunk boundary got
+    -- through, which is why it looked like it worked.
+    local rev_str = reaper.GetExtState(SEC, "setlistRev")
+    if rev_str == "" then
+        -- Older ReaSet.html that doesn't send a rev yet: fall back to the old
+        -- count-based trigger so a mixed pair still syncs at all.
+        rev_str = reaper.GetExtState(SEC, "setlistChunkCount")
+    end
+    if rev_str == "" or rev_str == s_syncLastCount then return end
 
+    local count_str = reaper.GetExtState(SEC, "setlistChunkCount")
     local count = tonumber(count_str)
     if not count or count < 1 then return end
 
@@ -443,7 +576,7 @@ local function sync_tick()
         f:write('{"v":1,"b64":"' .. table.concat(parts) .. '"}')
         f:close()
     end
-    s_syncLastCount = count_str   -- mark handled either way — a permissions
+    s_syncLastCount = rev_str     -- mark handled either way — a permissions
                                    -- error won't be retried every tick
 end
 
@@ -469,6 +602,7 @@ local function tick_body()
 
     -- 1) Loop engine
     loop_tick()
+    autostop_tick(s_active)
 
     -- 2/3) Lyrics + Chords note bridges (share the same cursor position)
     local cur_pos = reaper.GetPlayState() > 0
@@ -520,6 +654,8 @@ local function on_exit()
     reaper.SetExtState(SEC, "tick", "", false)
     reaper.SetExtState(SEC, "error", "", false)
     if s_active then loop_cleanup() end
+    -- stopendofloop is a GLOBAL REAPER preference: hand it back as it was.
+    autostop_cleanup()
     -- Drop the presence flag so ReaSet falls back to JS loop next session.
     reaper.SetExtState(SEC, "nativeLoopReady", "0", false)
 end

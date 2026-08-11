@@ -92,7 +92,9 @@ This project was iterated, debugged, and tested with:
 
 Final functional validation was performed in REAPER with real setlist usage tests.
 
-> ⚖️ Legal note: keep and respect original licenses of reused components (e.g., GPL v3 where applicable).
+> ⚖️ Legal note: ReaSet v3.0+ is proprietary and free to use — see [`LICENSE`](./LICENSE).
+> Versions up to v2.x were GPL v3 and remain so. Third-party scripts kept in
+> `Legacy/` have their own licences: see [`Legacy/LICENSE-NOTICE.md`](./Legacy/LICENSE-NOTICE.md).
 
 ---
 
@@ -868,7 +870,9 @@ Este proyecto fue iterado, depurado y testeado con apoyo de:
 
 La validación funcional final se hizo en REAPER con pruebas reales de uso en setlist.
 
-> ⚖️ Nota legal: mantener y respetar licencias originales de los componentes reutilizados (por ejemplo, GPL v3 donde aplique).
+> ⚖️ Nota legal: ReaSet v3.0+ es propietario y de uso gratuito — ver [`LICENSE`](./LICENSE).
+> Las versiones hasta la v2.x fueron GPL v3 y lo siguen siendo. Los scripts de
+> terceros en `Legacy/` conservan su licencia: ver [`Legacy/LICENSE-NOTICE.md`](./Legacy/LICENSE-NOTICE.md).
 
 ---
 
