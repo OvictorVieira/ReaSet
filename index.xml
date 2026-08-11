@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<index version="1" name="ReaSet">
+  <category name="ReaSet">
+    <reapack name="ReaSet" type="webinterface" desc="ReaSet — live setlist and lyrics/chords web interface">
+      <version name="2.2" author="David Jorquera (djenttleman)" time="2026-07-28T23:56:35Z">
+        <source file="Reaset.lua" type="script" main="main" hash="12207ec3165d3074ce0fd1414be1593e566bbc751b5ae67acc416737f3c48bbb3058">https://raw.githubusercontent.com/djenttleman/ReaSet/refs/tags/v2.2/Reaset.lua</source>
+        <source file="ReaSet.html" hash="122043dbb4ad38082fad70d3d5f5283d2c1ce6596a283cb35d00389e87d47f88845d">https://raw.githubusercontent.com/djenttleman/ReaSet/refs/tags/v2.2/ReaSet.html</source>
+        <source file="Sortable.min.js" hash="1220bf4241bc73fef7f11c59a283a69fe8051cdd31c6d8ff5a2b9ba219e7831fcf76">https://raw.githubusercontent.com/djenttleman/ReaSet/refs/tags/v2.2/Sortable.min.js</source>
+        <changelog><![CDATA[
+ReaSet v2.2: unified background bridge, live lyrics/chords carousel,
+Director/Player mode and reliability improvements.
+        ]]></changelog>
+      </version>
+      <metadata>
+        <link rel="website">https://github.com/djenttleman/ReaSet</link>
+        <link rel="donation">https://www.paypal.com/donate/?hosted_button_id=JNX7Q2G8S6YT8</link>
+        <description><![CDATA[
+ReaSet is a REAPER web interface focused on live performance. It manages
+setlists, controls transport and displays real-time lyrics and chords.
+        ]]></description>
+      </metadata>
+    </reapack>
+
+    <reapack name="ReaSet Tools" type="script" desc="Optional authoring and diagnostic tools for ReaSet">
+      <version name="2.2" author="David Jorquera (djenttleman)" time="2026-07-28T23:56:35Z">
+        <source file="Lyrics_Tapper.lua" main="main" hash="1220427508ff49edada99ad7f4d77ed755236f94a7aa4d9b1c546d9763e63a8f7a98">https://raw.githubusercontent.com/djenttleman/ReaSet/refs/tags/v2.2/Lyrics_Tapper.lua</source>
+        <source file="ReaSet_Diagnose.lua" main="main" hash="1220ca7e1cd88e1383efbcb185760f0d43a552a846f20d3bcb615591610b5d82e0f2">https://raw.githubusercontent.com/djenttleman/ReaSet/refs/tags/v2.2/ReaSet_Diagnose.lua</source>
+      </version>
+      <metadata>
+        <link rel="website">https://github.com/djenttleman/ReaSet#5-tools</link>
+        <description><![CDATA[
+Optional tools for authoring lyrics/chords items and diagnosing the ReaSet bridge.
+Lyrics Tapper requires ReaImGui, which the ReaBoot recipe installs with this package.
+        ]]></description>
+      </metadata>
+    </reapack>
+  </category>
+
+  <metadata>
+    <link rel="website">https://github.com/djenttleman/ReaSet</link>
+    <description><![CDATA[Official ReaPack repository for ReaSet.]]></description>
+  </metadata>
+</index>

@@ -178,7 +178,22 @@ save.
 ---
 
 ## 6) Installation
-### Step 1 — Copy web interface files
+
+### Recommended — Install with ReaBoot
+
+[**Install ReaSet with ReaBoot**](https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2Fdjenttleman%2FReaSet%2Fmain%2Freaboot.json)
+
+ReaBoot installs ReaPack (if needed), registers `Reaset.lua` in REAPER's Main
+Action List and puts the web files in `reaper_www_root`. The installer also
+offers the optional ReaSet tools, ReaImGui and the recommended SWS extension.
+
+After installation, open **Actions > Show action list**, find **Reaset** and run
+it. ReaBoot deliberately does not change user preferences, so enabling it as a
+REAPER Startup Action remains a manual, recommended step.
+
+### Manual installation
+
+#### Step 1 — Copy web interface files
 Copy to REAPER web folder (where `main.js` is located):
 - `ReaSet.html`
 - `Sortable.min.js`
@@ -188,19 +203,19 @@ Copy to REAPER web folder (where `main.js` is located):
 
 **macOS**
 - Resource Path: `~/Library/Application Support/REAPER/`
-- Web root (typical): `~/Library/Application Support/REAPER/Plugins/reaper_www_root/`
+- Web root: `~/Library/Application Support/REAPER/reaper_www_root/`
 
 **Windows**
 - Resource Path: `%APPDATA%\REAPER\`
-- Web root (typical): `%APPDATA%\REAPER\Plugins\reaper_www_root\`
+- Web root: `%APPDATA%\REAPER\reaper_www_root\`
 
 **Linux**
 - Resource Path: `~/.config/REAPER/`
-- Web root (typical): `~/.config/REAPER/Plugins/reaper_www_root/`
+- Web root: `~/.config/REAPER/reaper_www_root/`
 
 > `main.js` is provided by REAPER Web Interface (not included in this project).
 
-### Step 2 — Install the Lua script (one script only)
+#### Step 2 — Install the Lua script (one script only)
 1. Open REAPER.
 2. Go to **Actions > Show action list**.
 3. Use **ReaScript: Load...** and load **`Reaset.lua`**.
@@ -220,16 +235,16 @@ Copy to REAPER web folder (where `main.js` is located):
 - **Windows:** `%APPDATA%\REAPER\Scripts\`
 - **Linux:** `~/.config/REAPER/Scripts/`
 
-### Step 3 — Prepare project
+#### Step 3 — Prepare project
 1. Create/rename track `lyrics`.
 2. Create/rename track `chords`.
 3. Add lyrics/chords into item notes.
 4. Verify song regions in timeline.
 
-### Step 4 — Launch interface
+#### Step 4 — Launch interface
 1. Open REAPER + project.
 2. Open web interface and load `ReaSet.html`.
-3. Run Lyrics and Chords Lua scripts.
+3. Run `Reaset.lua`.
 
 ---
 
@@ -979,7 +994,24 @@ simplemente no se guarda y no dice nada.
 ---
 
 ## 6) Instalación
-### Paso 1 — Copiar interfaz web
+
+### Recomendado — Instalar con ReaBoot
+
+[**Instalar ReaSet con ReaBoot**](https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2Fdjenttleman%2FReaSet%2Fmain%2Freaboot.json)
+
+ReaBoot instala ReaPack (si hace falta), registra `Reaset.lua` en la lista de
+acciones Main de REAPER y coloca los archivos web en `reaper_www_root`. El
+instalador también ofrece las herramientas opcionales de ReaSet, ReaImGui y la
+extensión SWS recomendada.
+
+Después de instalar, abre **Actions > Show action list**, busca **Reaset** y
+ejecútalo. ReaBoot no modifica preferencias del usuario deliberadamente, por
+lo que activarlo como Startup Action de REAPER sigue siendo un paso manual
+recomendado.
+
+### Instalación manual
+
+#### Paso 1 — Copiar interfaz web
 Copiar en la carpeta web de REAPER (donde existe `main.js`):
 - `ReaSet.html`
 - `Sortable.min.js`
@@ -989,19 +1021,19 @@ Copiar en la carpeta web de REAPER (donde existe `main.js`):
 
 **macOS**
 - Resource Path: `~/Library/Application Support/REAPER/`
-- Web root (habitual): `~/Library/Application Support/REAPER/Plugins/reaper_www_root/`
+- Web root: `~/Library/Application Support/REAPER/reaper_www_root/`
 
 **Windows**
 - Resource Path: `%APPDATA%\REAPER\`
-- Web root (habitual): `%APPDATA%\REAPER\Plugins\reaper_www_root\`
+- Web root: `%APPDATA%\REAPER\reaper_www_root\`
 
 **Linux**
 - Resource Path: `~/.config/REAPER/`
-- Web root (habitual): `~/.config/REAPER/Plugins/reaper_www_root/`
+- Web root: `~/.config/REAPER/reaper_www_root/`
 
 > `main.js` lo provee REAPER Web Interface (no viene en este proyecto).
 
-### Paso 2 — Instalar el script Lua (un solo script)
+#### Paso 2 — Instalar el script Lua (un solo script)
 1. Abrir REAPER.
 2. Ir a **Actions > Show action list**.
 3. Usar **ReaScript: Load...** y cargar **`Reaset.lua`**.
@@ -1022,16 +1054,16 @@ Copiar en la carpeta web de REAPER (donde existe `main.js`):
 - **Windows:** `%APPDATA%\REAPER\Scripts\`
 - **Linux:** `~/.config/REAPER/Scripts/`
 
-### Paso 3 — Preparar proyecto
+#### Paso 3 — Preparar proyecto
 1. Crear/renombrar pista `lyrics`.
 2. Crear/renombrar pista `chords`.
 3. Escribir letras/acordes en notas de items.
 4. Verificar regiones de canciones en timeline.
 
-### Paso 4 — Abrir interfaz
+#### Paso 4 — Abrir interfaz
 1. Abrir REAPER + proyecto.
 2. Abrir interfaz web y cargar `ReaSet.html`.
-3. Ejecutar scripts Lua de Lyrics y Chords.
+3. Ejecutar `Reaset.lua`.
 
 ---
 
