@@ -1,0 +1,29 @@
+{
+  "name": "ReaSet",
+  "sub_title": "Live setlist, transport, lyrics and chords for REAPER",
+  "description": "Installs ReaSet into REAPER, including its unified background script and web interface. Optional tools and recommended extensions can be selected below.",
+  "website": "https://github.com/djenttleman/ReaSet",
+  "skip_additional_packages": true,
+  "required_packages": [
+    "https://raw.githubusercontent.com/djenttleman/ReaSet/main/index.xml#p=ReaSet/ReaSet&v=latest"
+  ],
+  "features": {
+    "tools": {
+      "name": "ReaSet authoring and diagnostic tools",
+      "default": false,
+      "description": "Installs Lyrics Tapper and ReaSet Diagnose, plus the ReaImGui extension required by Lyrics Tapper.",
+      "packages": [
+        "https://raw.githubusercontent.com/djenttleman/ReaSet/main/index.xml#p=ReaSet/ReaSet%20Tools&v=latest",
+        "https://raw.githubusercontent.com/ReaTeam/Extensions/master/index.xml#p=API/reaper_imgui.ext&v=latest"
+      ]
+    },
+    "sws": {
+      "name": "SWS/S&M Extension (recommended)",
+      "default": true,
+      "description": "Recommended for reading Item Notes used by ReaSet lyrics and chords. ReaSet transport remains usable without it.",
+      "packages": [
+        "https://raw.githubusercontent.com/ReaTeam/Extensions/master/index.xml#p=Extensions/reaper-oss_SWS.ext&v=latest"
+      ]
+    }
+  }
+}
