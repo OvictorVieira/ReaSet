@@ -8,11 +8,22 @@
  *          2) Lyrics notes → web bridge (was X-Raym Convert Lyrics ...)
  *          3) Chords notes → web bridge (was X-Raym Convert Chords ...)
  *
+ *        It also owns two things the browser cannot do on its own:
+ *
+ *          4) The shared setlist file, for Player devices.
+ *          5) The setlist library in <project folder>/reaset/setlists, so
+ *             setlists live with the project instead of in one browser's
+ *             localStorage.
+ *
  * Credits:
- *   - Lyrics/Chords note bridge logic: X-Raym (GPL v3)
- *     https://github.com/X-Raym/REAPER-ReaScripts
+ *   - Lyrics/Chords note bridge: inspired by X-Raym's scripts of the same
+ *     purpose (https://github.com/X-Raym/REAPER-ReaScripts). Independent
+ *     implementation — see docs/RELICENSING.md for the line-by-line
+ *     comparison behind that claim. The originals are kept, unmodified and
+ *     under their own GPL v3, in Legacy/.
  *   - Native loop engine + unification: ReaSet project.
- * Licence: GPL v3 (inherits from the X-Raym components it reuses).
+ * Licence: see LICENSE. Proprietary, free to use. Versions up to v2.x were
+ *          released under GPL v3 and remain so.
  *
  * INSTALL (one time only):
  *   Actions → "ReaScript: Load..." → select Reaset.lua
@@ -114,6 +125,86 @@ end
 
 -- Returns false when the caller should skip the rest of this tick (a cleanup
 -- + defer already happened is NOT done here; caller just continues normally).
+----------------------------------------------------------------------------
+-- ARMED AUTO-STOP — "stop at this position", resolved by the engine
+----------------------------------------------------------------------------
+-- ARM, DON'T DETECT.
+--
+-- The browser used to DETECT the end of a song and SEND a stop, and that path
+-- can never be punctual: ~60ms poll, 72-107ms round-trip, and on top of that
+-- Main_OnCommand does not stop the transport on the spot — it stops it on the
+-- next audio block. A SET/POS landing in that gap runs while the transport is
+-- STILL ROLLING, so it seeks PLAYBACK into the next song, which is audible.
+--
+-- Here REAPER is told where to stop BEFORE it matters. It stops in its own
+-- audio engine, at the exact sample, and at the critical moment no command
+-- travels at all. Verified on a real region transition: stops 10.7ms before the
+-- boundary without ever crossing it.
+--
+-- IT LIVES HERE, NEXT TO THE LOOP ENGINE, ON PURPOSE: the loop time range is
+-- ONE range and both features want it — the loop with GetSetRepeat(1), the
+-- auto-stop with 0. They are mutually exclusive per song, so there has to be a
+-- single arbiter rather than two that fight. The loop wins: a song marked to
+-- loop does not auto-stop.
+
+local s_stopArmed   = false
+local s_stopKey     = ""
+local s_stopPrefWas = nil   -- the user's global preference, to put back
+
+local function autostop_cleanup()
+    if s_stopPrefWas ~= nil and reaper.SNM_SetIntConfigVar then
+        reaper.SNM_SetIntConfigVar("stopendofloop", s_stopPrefWas)
+        s_stopPrefWas = nil
+    end
+    if s_stopArmed then
+        reaper.GetSet_LoopTimeRange(true, true, 0, 0, false)
+    end
+    s_stopArmed = false
+    s_stopKey   = ""
+    reaper.SetExtState(SEC, "autoStopArmed", "", false)
+end
+
+local function autostop_arm(ls, le)
+    if not reaper.SNM_GetIntConfigVar then return false end
+    -- stopendofloop is a GLOBAL REAPER preference, not a project one: save the
+    -- user's value the first time and restore it on disarm and on exit.
+    if s_stopPrefWas == nil then
+        s_stopPrefWas = reaper.SNM_GetIntConfigVar("stopendofloop", 0)
+    end
+    reaper.SNM_SetIntConfigVar("stopendofloop", 1)
+    reaper.GetSet_LoopTimeRange(true, true, ls, le, false)
+    reaper.GetSetRepeat(0)
+    s_stopArmed = true
+    s_stopKey   = string.format("%.5f:%.5f", ls, le)
+    -- The browser reads this flag so it does NOT also send its own stop. If
+    -- arming cannot happen (no SWS, for instance) the flag stays empty and the
+    -- browser's detection remains the fallback: losing precision is acceptable,
+    -- losing auto-stop is not.
+    reaper.SetExtState(SEC, "autoStopArmed", "1", false)
+    return true
+end
+
+-- `loop_active` comes from loop_tick: the loop owns the range when it is on.
+local function autostop_tick(loop_active)
+    if loop_active then
+        if s_stopArmed then autostop_cleanup() end
+        return
+    end
+    local ctrl = reaper.GetExtState(SEC, "autoStop")
+    if ctrl ~= "on" then
+        if s_stopArmed then autostop_cleanup() end
+        return
+    end
+    local ls = tonumber(reaper.GetExtState(SEC, "autoStopStart"))
+    local le = tonumber(reaper.GetExtState(SEC, "autoStopEnd"))
+    if not (ls and le and le > ls) then
+        if s_stopArmed then autostop_cleanup() end
+        return
+    end
+    local key = string.format("%.5f:%.5f", ls, le)
+    if key ~= s_stopKey then autostop_arm(ls, le) end
+end
+
 local function loop_tick()
     local ctrl = reaper.GetExtState(SEC, "nativeLoop")
 
@@ -123,7 +214,12 @@ local function loop_tick()
         local lm = tonumber(reaper.GetExtState(SEC, "loopMax")) or 0
         if ls and le and le > ls then
             local new_key = string.format("%.5f:%.5f:%d", ls, le, lm)
-            if new_key ~= s_key then loop_arm(ls, le, lm) end
+            if new_key ~= s_key then
+                -- The loop wins the range: release the auto-stop before taking
+                -- it, or the GetSetRepeat(1) below would fight its 0.
+                if s_stopArmed then autostop_cleanup() end
+                loop_arm(ls, le, lm)
+            end
         end
     end
 
@@ -195,6 +291,13 @@ end
 --   • trailing symbols ignored    → "Lyrics*", "Chords --", "[Lyrics]"
 -- Anything that leaves extra WORDS behind does NOT match, on purpose:
 -- "Backing Lyrics" or "Lyrics Bus" stay ordinary audio tracks.
+--
+-- This is the canonical implementation. Tools/Lyrics_Tapper.lua has its own
+-- copy (normalize_track_name there too, ported to match this one exactly) —
+-- ReaScripts don't share a module loader across files without a fragile
+-- relative dofile(), so the two are kept as intentionally duplicated,
+-- byte-identical algorithms rather than one unverified cross-file include.
+-- If you change the rules here, port the same change there.
 local function normalize_track_name(name)
     local s = name:lower()
     -- Strip leading decoration repeatedly so mixed prefixes like "* 01 - " unwind
@@ -399,18 +502,62 @@ local chords = bridge_new("chords", "XR_Chords", "chordsTrack", true)
 -- result to a file living next to ReaSet.html, where Players fetch() it.
 -- See ReaSet.html's "Shared setlist sync" section for the JS-side encode.
 
+-- Where REAPER's web interface serves files from.
+--
+-- This used to be hardcoded to "<resource>/Plugins/reaper_www_root". When that
+-- path is not the right one for an install, io.open fails silently: the file is
+-- never written, the browser gets a 404, and NOBODY RETURNS AN ERROR — the whole
+-- path looks like it works. Measured on a real install where the correct
+-- directory was "<resource>/reaper_www_root" instead.
+--
+-- Resolved by looking instead: the right directory is the one ReaSet.html itself
+-- lives in, which is exactly the one the browser asks with a relative URL. If it
+-- is not found, the first writable candidate wins.
+local s_wwwRoot = nil
+local function www_root()
+    if s_wwwRoot then return s_wwwRoot end
+    local base = reaper.GetResourcePath()
+    local cands = { base .. "/reaper_www_root", base .. "/Plugins/reaper_www_root" }
+    for _, d in ipairs(cands) do
+        local f = io.open(d .. "/ReaSet.html", "rb")
+        if f then f:close(); s_wwwRoot = d; return d end
+    end
+    for _, d in ipairs(cands) do
+        local probe = d .. "/.reaset_probe"
+        local f = io.open(probe, "wb")
+        if f then f:close(); os.remove(probe); s_wwwRoot = d; return d end
+    end
+    s_wwwRoot = cands[1]
+    return s_wwwRoot
+end
+
 local SYNC_FILE_NAME = "reaset_setlist_sync.json"
 
 local function sync_file_path()
-    return reaper.GetResourcePath() .. "/Plugins/reaper_www_root/" .. SYNC_FILE_NAME
+    return www_root() .. "/" .. SYNC_FILE_NAME
 end
 
 local s_syncLastCount = nil   -- last chunk-count value already written to disk
 
 local function sync_tick()
-    local count_str = reaper.GetExtState(SEC, "setlistChunkCount")
-    if count_str == "" or count_str == s_syncLastCount then return end
+    -- Gate on a MONOTONIC revision, not on the chunk count.
+    --
+    -- This used to compare setlistChunkCount against the last one handled, and
+    -- that silently dropped most pushes: toggling a skip flag changes the
+    -- payload by three characters, so the chunk count stays identical, the
+    -- comparison sees no change, and the shared file is never rewritten —
+    -- Players keep displaying the old setlist with no sign anything failed.
+    -- Only edits that happened to push the payload across a chunk boundary got
+    -- through, which is why it looked like it worked.
+    local rev_str = reaper.GetExtState(SEC, "setlistRev")
+    if rev_str == "" then
+        -- Older ReaSet.html that doesn't send a rev yet: fall back to the old
+        -- count-based trigger so a mixed pair still syncs at all.
+        rev_str = reaper.GetExtState(SEC, "setlistChunkCount")
+    end
+    if rev_str == "" or rev_str == s_syncLastCount then return end
 
+    local count_str = reaper.GetExtState(SEC, "setlistChunkCount")
     local count = tonumber(count_str)
     if not count or count < 1 then return end
 
@@ -436,8 +583,214 @@ local function sync_tick()
         f:write('{"v":1,"b64":"' .. table.concat(parts) .. '"}')
         f:close()
     end
-    s_syncLastCount = count_str   -- mark handled either way — a permissions
+    s_syncLastCount = rev_str     -- mark handled either way — a permissions
                                    -- error won't be retried every tick
+end
+
+----------------------------------------------------------------------------
+-- BASE64URL DECODE  — the return path of the browser's _b64uEncode
+----------------------------------------------------------------------------
+-- sync_tick above never needed this: it copies the browser's base64 straight
+-- into the shared file and lets the browser decode it again. The library does
+-- need it, because it writes real JSON to disk that a human may open.
+
+local B64U_ALPHABET   = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+local B64U_DECODE_MAP = {}
+for i = 1, #B64U_ALPHABET do
+    B64U_DECODE_MAP[B64U_ALPHABET:sub(i, i)] = i - 1
+end
+
+-- Reverses ReaSet.html's _b64uEncode. Verified standalone against real output
+-- of that function (including accented UTF-8 text) before landing here —
+-- REAPER's ReaScript Lua has no base64 of its own.
+local function b64u_decode(input)
+    local bits, value, out = 0, 0, {}
+    for i = 1, #input do
+        local d = B64U_DECODE_MAP[input:sub(i, i)]
+        if d then
+            value = (value << 6) | d
+            bits = bits + 6
+            if bits >= 8 then
+                bits = bits - 8
+                out[#out + 1] = string.char((value >> bits) & 0xFF)
+            end
+        end
+    end
+    return table.concat(out)
+end
+
+----------------------------------------------------------------------------
+-- SETLIST LIBRARY  — a /reaset folder living next to the project
+----------------------------------------------------------------------------
+-- THE DISK IS THE ONLY SOURCE OF TRUTH. The browser is a client, not a store:
+-- there are never two versions to reconcile, there is one and it gets read.
+--
+--   <project folder>/
+--     reaset/
+--       setlists/
+--         Default.json
+--         Rehearsal set.json
+--
+-- ONE FILE PER SETLIST, deliberately: if one gets corrupted or hand-edited
+-- badly it takes down that setlist, not the whole library. And they can be
+-- backed up, versioned or sent around individually.
+--
+-- WHY NOT ProjExtState: it only reaches the disk if the user saves, and those
+-- changes don't appear in the undo history, so there is no signal that
+-- anything is pending. Closing without saving takes them away silently.
+--
+-- WHY ALSO AN INDEX IN reaper_www_root: the browser cannot list a directory
+-- or read arbitrary paths — only fetch inside the web interface's www root.
+-- The index is derived and disposable; the disk is what counts.
+
+local LIB_INDEX_NAME = "reaset_setlists.json"
+
+local function lib_index_path()
+    return www_root() .. "/" .. LIB_INDEX_NAME
+end
+
+-- <project folder>/reaset/setlists, or nil if the project was never saved.
+local function lib_dir()
+    local _, projfn = reaper.EnumProjects(-1, "")
+    if not projfn or projfn == "" then return nil end
+    local dir = projfn:match("^(.*)[/\\][^/\\]*$")
+    if not dir then return nil end
+    return dir .. "/reaset/setlists"
+end
+
+-- Short, stable checksum, only to tell apart names that sanitise the same.
+local function lib_hash4(s)
+    local h = 5381
+    for i = 1, #s do h = (h * 33 + s:byte(i)) % 65536 end
+    return string.format("%04x", h)
+end
+
+-- Characters forbidden on Windows and on macOS, plus control ones. Windows is
+-- a target platform, so the rule is the union of both, not the rule of
+-- whichever machine happened to create the file.
+local WIN_RESERVED = {
+    CON=true, PRN=true, AUX=true, NUL=true,
+    COM1=true, COM2=true, COM3=true, COM4=true, COM5=true,
+    COM6=true, COM7=true, COM8=true, COM9=true,
+    LPT1=true, LPT2=true, LPT3=true, LPT4=true, LPT5=true,
+    LPT6=true, LPT7=true, LPT8=true, LPT9=true,
+}
+
+local function lib_name_is_safe(name)
+    if name == "" or #name > 80 then return false end
+    if name:find('[/\\:%*%?"<>|%c]') then return false end
+    if name:find("^[%s%.]") or name:find("[%s%.]$") then return false end
+    if WIN_RESERVED[name:upper()] then return false end
+    return true
+end
+
+-- DETERMINISTIC: the same name always yields the same file, with no separate
+-- map that could drift out of sync. Ordinary names stay as they are and stay
+-- readable in Finder/Explorer; only the ones that need sanitising carry the
+-- suffix, and that suffix is what makes them collision-free.
+local function lib_filename(name)
+    if lib_name_is_safe(name) then return name .. ".json" end
+    local safe = name:gsub('[/\\:%*%?"<>|%c]', "_"):gsub("^[%s%.]+", ""):gsub("[%s%.]+$", "")
+    if safe == "" then safe = "setlist" end
+    if #safe > 60 then safe = safe:sub(1, 60) end
+    return safe .. "-" .. lib_hash4(name) .. ".json"
+end
+
+local function json_escape(s)
+    return (s:gsub('[\\"]', "\\%0"):gsub("\n", "\\n"):gsub("\r", "\\r"):gsub("\t", "\\t"))
+end
+
+local function read_all(path)
+    local f = io.open(path, "rb"); if not f then return nil end
+    local s = f:read("*a"); f:close(); return s
+end
+
+-- Rebuilds the index by reading the DIRECTORY, not an in-memory copy: what the
+-- browser sees is literally what is on disk, including a file the user added,
+-- edited or deleted by hand.
+local function lib_rebuild_index()
+    local dir = lib_dir()
+    local bodies = {}
+    if dir then
+        local i = 0
+        while true do
+            local fn = reaper.EnumerateFiles(dir, i)
+            if not fn then break end
+            if fn:match("%.json$") then
+                local body = read_all(dir .. "/" .. fn)
+                -- Copied VERBATIM: no JSON parser is needed in Lua, and what
+                -- the browser receives is byte for byte what is on disk.
+                if body and body:find('"songs"') then bodies[#bodies + 1] = body end
+            end
+            i = i + 1
+        end
+    end
+    local stamp = dir and json_escape(dir) or ""
+    local out = '{"v":2,"proj":"' .. stamp .. '","sets":[' .. table.concat(bodies, ",") .. ']}'
+    local f = io.open(lib_index_path(), "wb")
+    if f then f:write(out); f:close() end
+    reaper.SetExtState(SEC, "libraryPath", dir or "!UNSAVED", false)
+    reaper.SetExtState(SEC, "libraryCount", tostring(#bodies), false)
+    reaper.SetExtState(SEC, "wwwRoot", www_root(), false)
+end
+
+-- Writes or deletes ONE setlist. An empty `songs_json` means delete.
+local function lib_apply(name, songs_json)
+    local dir = lib_dir()
+    if not dir then return false end
+    reaper.RecursiveCreateDirectory(dir, 0)
+    local path = dir .. "/" .. lib_filename(name)
+    if songs_json == "" then
+        os.remove(path)
+    else
+        local f = io.open(path, "wb")
+        if not f then return false end
+        f:write('{"v":1,"name":"' .. json_escape(name) .. '","songs":' .. songs_json .. '}')
+        f:close()
+    end
+    return true
+end
+
+local s_libRev    = nil
+local s_libLoaded = false
+local s_libProj   = nil
+
+local function library_tick()
+    -- The project changed (or this is the first tick): the folder is a
+    -- different one, so the index is regenerated from the new disk before
+    -- anything gets served.
+    local cur = reaper.EnumProjects(-1)
+    if cur ~= s_libProj then
+        s_libProj = cur; s_libLoaded = false; s_libRev = nil
+    end
+    if not s_libLoaded then
+        lib_rebuild_index()
+        s_libLoaded = true
+        return
+    end
+
+    local rev = reaper.GetExtState(SEC, "libRev")
+    if rev == "" or rev == s_libRev then return end
+
+    local name_b64 = reaper.GetExtState(SEC, "libName")
+    if name_b64 == "" then return end
+    local n = tonumber(reaper.GetExtState(SEC, "libChunks"))
+    if not n then return end
+
+    local parts = {}
+    for i = 0, n - 1 do
+        local c = reaper.GetExtState(SEC, "libChunk" .. i)
+        -- A chunk that hasn't landed yet: don't write half a setlist. Leaving
+        -- s_libRev untouched makes the next tick retry.
+        if c == "" then return end
+        parts[#parts + 1] = c
+    end
+
+    local name = b64u_decode(name_b64)
+    if name == "" then return end
+    lib_apply(name, n == 0 and "" or b64u_decode(table.concat(parts)))
+    lib_rebuild_index()
+    s_libRev = rev
 end
 
 ----------------------------------------------------------------------------
@@ -462,6 +815,7 @@ local function tick_body()
 
     -- 1) Loop engine
     loop_tick()
+    autostop_tick(s_active)
 
     -- 2/3) Lyrics + Chords note bridges (share the same cursor position)
     local cur_pos = reaper.GetPlayState() > 0
@@ -471,6 +825,10 @@ local function tick_body()
 
     -- 4) Shared setlist file, written whenever a Director pushes
     sync_tick()
+
+    -- 5) Setlist library: serves the project's /reaset/setlists folder and
+    --    writes back whatever the browser saves.
+    library_tick()
 end
 
 local function main()
@@ -513,6 +871,8 @@ local function on_exit()
     reaper.SetExtState(SEC, "tick", "", false)
     reaper.SetExtState(SEC, "error", "", false)
     if s_active then loop_cleanup() end
+    -- stopendofloop is a GLOBAL REAPER preference: hand it back as it was.
+    autostop_cleanup()
     -- Drop the presence flag so ReaSet falls back to JS loop next session.
     reaper.SetExtState(SEC, "nativeLoopReady", "0", false)
 end

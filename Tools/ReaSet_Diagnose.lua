@@ -9,7 +9,7 @@
  *   Actions → Show action list → find "ReaSet_Diagnose" → Run
  *   Read the report in the ReaScript console window that opens.
  *
- * Licence: GPL v3
+ * Licence: see ../LICENSE
 --]]
 
 local SEC         = "ReaSet"

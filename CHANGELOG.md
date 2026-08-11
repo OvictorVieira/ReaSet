@@ -6,6 +6,113 @@
 
 ---
 
+## v3.0 — Armed transport, and a new licence
+*August 11, 2026*
+
+### Licence
+
+- **ReaSet is now proprietary and free to use** — see [`LICENSE`](./LICENSE).
+  You may use it for anything, including commercially, on as many machines as
+  you like, and share unmodified copies. Selling it or distributing modified
+  versions needs written permission.
+- **This is not retroactive.** Versions up to v2.x were GPL v3 and stay GPL v3
+  for anyone who has them, permanently.
+- The change was possible because `Reaset.lua` never actually derived from the
+  X-Raym scripts its header claimed to inherit from: a line-by-line comparison
+  finds 18 identical lines out of 119, and every one of them is `end` or
+  `break`. Zero shared functions. The header over-declared an obligation the
+  code never contracted, and has been corrected. Full evidence in
+  [`docs/RELICENSING.md`](./docs/RELICENSING.md).
+- X-Raym's own scripts in `Legacy/` keep their GPL v3 and their authorship, now
+  declared explicitly in [`Legacy/LICENSE-NOTICE.md`](./Legacy/LICENSE-NOTICE.md).
+- New [`CONTRIBUTING.md`](./CONTRIBUTING.md) with a contributor licence
+  agreement, so contributions can be used in ReaSet Pro.
+
+### Transport — arm, don't detect
+
+The end of a song used to be *detected* by the browser, which then *sent* a
+stop. That path can never be punctual, and the reason is worth writing down:
+~60 ms poll, plus a 72-107 ms round-trip, plus — the part that took longest to
+find — **`Main_OnCommand` does not stop the transport on the spot. It stops it
+on the next audio block.** A reposition landing in that gap runs while the
+transport is still rolling, so it seeks *playback* into the next song.
+
+- **Auto-stop is now armed in advance.** ReaSet tells REAPER where to stop
+  before it matters, so REAPER stops in its own audio engine at the exact
+  sample and no command travels at the critical moment. Measured on a real
+  region transition: stops 10.7 ms before the boundary, never crossing it.
+  **Fixes the next song being briefly audible at the end of the current one.**
+- It lives next to the loop engine on purpose: the loop time range is one
+  range and both features want it, so there is a single arbiter instead of two
+  that fight. A song marked to loop does not auto-stop.
+- If arming is not possible (no SWS, for instance) the browser's old detection
+  stays as the fallback. Losing precision is acceptable; losing auto-stop is
+  not.
+- **MIDI Init redesigned.** It used to jump to the *start of the next song* and
+  play ~100 ms there so plugins would receive transport — which made that
+  song's opening audible every single time, whether or not the regions were
+  contiguous. Now the transport simply starts 5 ms before the song you asked
+  for. Five is enough because the MIDI is quantised to the grid; the old 100 ms
+  was margin for a case that no longer exists.
+- **Position extrapolation** (`getExtrapolatedPos`), and the end-of-region
+  trigger now uses it instead of a position up to a poll interval stale.
+- Repositioning after a stop waits for the transport to **confirm** it stopped,
+  instead of guessing with a timer that was shorter than the measured
+  round-trip.
+
+### Setlists now live with the project, not in one browser
+
+Setlists used to exist only in the `localStorage` of whichever browser built
+them. Open ReaSet on the iPad and your show was not there. Clear the browser's
+data and it was gone. Copy the project to the backup machine and only the audio
+travelled.
+
+- **Setlists are now stored in `<project folder>/reaset/setlists/`**, one JSON
+  file per setlist, written by `Reaset.lua`. They travel with the `.rpp`, they
+  can be backed up and versioned, and they can be opened and read by a human.
+- **The disk is the only source of truth.** The browser is a client, not a
+  store. There are never two versions to reconcile, so there is no adopt /
+  migrate / don't-clobber logic — which is what every bug this feature ever had
+  came from. A setlist built on the iPad shows up on the laptop with no merge
+  at all, because both read the same file.
+- **One file per setlist, on purpose.** A corrupted or badly hand-edited file
+  takes down that setlist, not the whole library.
+- **Filenames are deterministic and cross-platform.** The same name always maps
+  to the same file, with no side map that could drift. Ordinary names stay
+  readable in Finder/Explorer; only names needing sanitising get a short
+  checksum suffix, which is what makes them collision-free. The forbidden-
+  character rule is the union of the Windows and macOS rules, not whichever
+  machine happened to create the file.
+- **If the project cannot be read, it says so** — a warning in the setlist
+  dropdown itself, and pushing is blocked. Letting you edit a phantom copy that
+  will never be saved would be worse. What is already on screen is kept, since
+  blanking it mid-show over one failed read would be worse still.
+- **Your existing setlists migrate themselves** the first time you open ReaSet
+  with a saved project: if the disk has none and this browser has some, they
+  are pushed before the empty disk becomes the truth.
+- Not `ProjExtState`: that only reaches the disk if you save, and it leaves no
+  mark in the undo history — so closing without saving takes your setlists away
+  with no warning that anything was pending.
+- **New `Tools/ReaSet_LibraryDoctor.lua`**, read-only: prints the project's
+  setlist folder, which `reaper_www_root` actually holds `ReaSet.html` and
+  whether it is writable, the state of the index, and what `Reaset.lua` last
+  published — so a setlist that is not saving points at the link that broke.
+
+### Fixed
+
+- **Director→Player setlist sync silently dropped most edits.** It triggered on
+  the chunk *count* changing, and toggling a skip flag moves the payload by
+  three characters — so the count stayed identical, the shared file was never
+  rewritten, and Players kept showing the old setlist with no sign anything had
+  failed. Only edits that happened to cross a chunk boundary got through, which
+  is why it looked like it worked. Now gated on a monotonic revision.
+- **The web-interface directory was hardcoded** to `<resource>/Plugins/reaper_www_root`.
+  On installs where that is not the right path, `io.open` fails silently: the
+  file is never written, the browser gets a 404, and nobody returns an error.
+  It is now resolved by looking for where `ReaSet.html` itself lives.
+
+---
+
 ## v2.2 — Live Lyrics Carousel, Reaset.lua Unification & Director/Player Mode
 *July 28, 2026*
 
@@ -49,6 +156,118 @@
 # Español
 
 ---
+
+## v3.0 — Transporte armado, y licencia nueva
+*11 de agosto de 2026*
+
+### Licencia
+
+- **ReaSet pasa a ser propietario y de uso gratuito** — ver [`LICENSE`](./LICENSE).
+  Podés usarlo para lo que quieras, incluso comercialmente, en las máquinas que
+  quieras, y compartir copias sin modificar. Venderlo o distribuir versiones
+  modificadas requiere permiso escrito.
+- **No es retroactivo.** Las versiones hasta la v2.x fueron GPL v3 y lo siguen
+  siendo para quien las tenga, para siempre.
+- El cambio fue posible porque `Reaset.lua` nunca derivó realmente de los
+  scripts de X-Raym que su cabecera decía heredar: la comparación línea a línea
+  da 18 líneas idénticas sobre 119, y todas son `end` o `break`. Cero funciones
+  compartidas. La cabecera declaraba una obligación que el código no contrajo, y
+  se corrigió. La evidencia completa está en
+  [`docs/RELICENSING.md`](./docs/RELICENSING.md).
+- Los scripts de X-Raym en `Legacy/` conservan su GPL v3 y su autoría, ahora
+  declaradas explícitamente en [`Legacy/LICENSE-NOTICE.md`](./Legacy/LICENSE-NOTICE.md).
+- Nuevo [`CONTRIBUTING.md`](./CONTRIBUTING.md) con acuerdo de contribución, para
+  que las contribuciones puedan usarse en ReaSet Pro.
+
+### Transporte — armar, no detectar
+
+El fin de una canción lo *detectaba* el navegador, que entonces *mandaba* un
+stop. Ese camino no puede ser puntual, y la razón vale escribirla: poll de
+~60 ms, más 72-107 ms de ida y vuelta, más —lo que más costó encontrar—
+**`Main_OnCommand` no detiene el transporte en el acto: lo detiene en el próximo
+bloque de audio.** Una reposición que caiga en ese hueco se ejecuta con el
+transporte todavía rodando, así que hace un seek *de reproducción* a la canción
+siguiente.
+
+- **El auto-stop ahora se arma por adelantado.** ReaSet le dice a REAPER dónde
+  parar antes de que importe, así que para en su propio motor de audio, en el
+  sample exacto, y en el instante crítico no viaja ningún comando. Medido sobre
+  una transición de región real: para 10,7 ms antes del borde, sin cruzarlo
+  nunca. **Arregla que se escuchara un instante de la canción siguiente al
+  terminar la actual.**
+- Vive junto al motor de loop a propósito: el rango de loop es uno solo y las
+  dos features lo quieren, así que hay un único árbitro en vez de dos que se
+  pisen. Una canción marcada para loopear no auto-para.
+- Si armar no es posible (sin SWS, por ejemplo), la detección vieja del
+  navegador queda como respaldo. Perder precisión es aceptable; perder el
+  auto-stop no.
+- **MIDI Init rediseñado.** Antes saltaba al *inicio de la canción siguiente* y
+  reproducía ~100 ms ahí para que los plugins recibieran transporte — lo que
+  hacía sonar el arranque de ese tema todas las veces, fueran o no contiguas las
+  regiones. Ahora el transporte simplemente arranca 5 ms antes de la canción que
+  pediste. Cinco alcanzan porque el MIDI está cuantizado a la grilla; los 100 ms
+  viejos eran margen para un caso que ya no existe.
+- **Extrapolación de posición** (`getExtrapolatedPos`), y el disparo de fin de
+  región ahora la usa en vez de una posición hasta un intervalo de poll vieja.
+- La reposición tras un stop espera a que el transporte **confirme** que paró,
+  en vez de adivinar con un temporizador más corto que la ida y vuelta medida.
+
+### Los setlists ahora viven con el proyecto, no en un navegador
+
+Los setlists existían solo en el `localStorage` del navegador que los armó.
+Abrías ReaSet en el iPad y tu show no estaba. Borrabas los datos del navegador y
+se iba. Copiabas el proyecto a la máquina de respaldo y viajaba solo el audio.
+
+- **Los setlists se guardan en `<carpeta del proyecto>/reaset/setlists/`**, un
+  archivo JSON por setlist, escritos por `Reaset.lua`. Viajan con el `.rpp`, se
+  pueden respaldar y versionar, y los puede abrir y leer una persona.
+- **El disco es la única fuente de verdad.** El navegador es un cliente, no un
+  almacén. Nunca hay dos versiones que conciliar, así que no hay lógica de
+  adoptar / migrar / no pisar — que es de donde salieron todos los bugs que
+  tuvo esta función. Un setlist armado en el iPad aparece en la laptop sin
+  ningún merge, porque los dos leen el mismo archivo.
+- **Un archivo por setlist, a propósito.** Uno corrupto o mal editado a mano se
+  lleva ese setlist, no la biblioteca entera.
+- **Los nombres de archivo son deterministas y multiplataforma.** El mismo
+  nombre da siempre el mismo archivo, sin un mapa aparte que pudiera
+  desincronizarse. Los nombres normales quedan legibles en el Finder o el
+  Explorador; solo los que necesitan saneo llevan un sufijo de checksum corto,
+  que es lo que los vuelve libres de colisión. La regla de caracteres
+  prohibidos es la unión de la de Windows y la de macOS, no la de la máquina
+  donde se creó el archivo.
+- **Si no se puede leer el proyecto, lo dice** — un aviso en la propia lista de
+  setlists, y se bloquea el guardado. Dejarte editar una copia fantasma que
+  nunca se va a guardar sería peor. Lo que ya está en pantalla se conserva,
+  porque vaciarla a mitad de un show por una lectura fallida sería peor todavía.
+- **Tus setlists actuales se migran solos** la primera vez que abrís ReaSet con
+  un proyecto guardado: si el disco no tiene ninguno y este navegador tiene
+  algunos, se empujan antes de que el disco vacío se vuelva la verdad.
+- No se usó `ProjExtState`: solo llega al disco si guardás, y no deja marca en
+  el historial de deshacer — así que cerrar sin guardar se lleva tus setlists
+  sin ninguna señal de que había algo pendiente.
+- **Nuevo `Tools/ReaSet_LibraryDoctor.lua`**, de solo lectura: imprime la
+  carpeta de setlists del proyecto, cuál `reaper_www_root` tiene realmente
+  `ReaSet.html` y si es escribible, el estado del índice, y lo último que
+  publicó `Reaset.lua` — para que un setlist que no guarda señale el eslabón
+  que se cortó.
+
+### Arreglado
+
+- **El sync de setlist Director→Player descartaba en silencio casi toda
+  edición.** Se disparaba con el cambio del *conteo* de chunks, y togglear un
+  skip mueve el payload tres caracteres — así que el conteo quedaba igual, el
+  archivo compartido nunca se reescribía, y los Players seguían mostrando el
+  setlist viejo sin ninguna señal de falla. Solo pasaban las ediciones que
+  casualmente cruzaban un límite de chunk, que es por qué parecía funcionar.
+  Ahora se dispara con una revisión monotónica.
+- **El directorio del web interface estaba hardcodeado** a
+  `<resource>/Plugins/reaper_www_root`. En instalaciones donde esa no es la ruta
+  correcta, `io.open` falla en silencio: el archivo nunca se escribe, el
+  navegador recibe 404, y nadie devuelve un error. Ahora se resuelve buscando
+  dónde vive el propio `ReaSet.html`.
+
+---
+
 
 ## v2.2 — Carrusel de letras en vivo, unificación de Reaset.lua y modo Director/Player
 *28 de julio de 2026*

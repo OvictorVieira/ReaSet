@@ -40,7 +40,7 @@ Project foundation:
 Main goals:
 - Organize and run songs (regions) during live shows.
 - Control transport (play/stop/cue/next).
-- Manage multiple setlists with local persistence.
+- Manage multiple setlists, stored with the REAPER project itself.
 - Display synced lyrics/chords from dedicated tracks.
 
 ---
@@ -51,7 +51,7 @@ Main goals:
 - 🎯 Song states: active, queued, skipped, loop, chain.
 - ⏯️ On-screen transport controls.
 - 💾 JSON export/import.
-- 🧠 Local persistence via `localStorage`, isolated per REAPER project.
+- 🗄️ Setlists stored in `<project folder>/reaset/setlists/`, one file each — they travel with the `.rpp`. Other preferences stay in `localStorage`, isolated per project.
 - 🎤 Lyrics panel + 🎸 chords panel.
 - 🎨 Visual customization (themes/fonts/sizes/chord color/display filters).
 - 🗂️ Nested sub-regions with individual loop, skip, color and notes overrides.
@@ -92,7 +92,9 @@ This project was iterated, debugged, and tested with:
 
 Final functional validation was performed in REAPER with real setlist usage tests.
 
-> ⚖️ Legal note: keep and respect original licenses of reused components (e.g., GPL v3 where applicable).
+> ⚖️ Legal note: ReaSet v3.0+ is proprietary and free to use — see [`LICENSE`](./LICENSE).
+> Versions up to v2.x were GPL v3 and remain so. Third-party scripts kept in
+> `Legacy/` have their own licences: see [`Legacy/LICENSE-NOTICE.md`](./Legacy/LICENSE-NOTICE.md).
 
 ---
 
@@ -161,6 +163,17 @@ self-tests the lookup pipeline at a known-good position, so a badly
 positioned playhead can never look like a broken bridge.
 
 - Load via Actions → ReaScript: Load… → `Tools/ReaSet_Diagnose.lua` → Run.
+
+### 🗄️ Library Doctor — `Tools/ReaSet_LibraryDoctor.lua`
+The same idea for the setlist library. Also read-only. It prints the project's
+`/reaset/setlists` folder with every setlist file and its song count, which
+`reaper_www_root` actually holds `ReaSet.html` (and whether it is writable),
+whether the index the browser fetches exists, and what `Reaset.lua` last
+published. Between them you can see exactly which link broke in the chain
+browser → `Reaset.lua` → disk — instead of a setlist that just quietly does not
+save.
+
+- Load via Actions → ReaScript: Load… → `Tools/ReaSet_LibraryDoctor.lua` → Run.
 
 ---
 
@@ -231,7 +244,16 @@ Copy to REAPER web folder (where `main.js` is located):
 7. Export `.json` backup.
 
 ### Persistence and backups
-- Browser-local state (`localStorage`).
+- **Setlists live with the project**, in `<project folder>/reaset/setlists/`,
+  one JSON file each, written by `Reaset.lua`. The disk is the source of truth:
+  every device reading that project sees the same setlists, with no merge step.
+  Open ReaSet on a second machine or a tablet and your show is simply there.
+- This requires the project to have been **saved at least once** — an unsaved
+  project has no folder to write to, and ReaSet says so in the setlist dropdown
+  rather than pretending to save.
+- Setlists you already had in a browser migrate themselves on first open.
+- Other state (themes, sizes, panel preferences) is still browser-local
+  (`localStorage`).
 - Use Export/Import JSON for backup/migration.
 - Recommended: dated backups before major edits.
 
@@ -816,7 +838,7 @@ Base del proyecto:
 Objetivo principal:
 - Ordenar y ejecutar canciones (regiones) durante un show.
 - Controlar transporte (play/stop/cue/next).
-- Administrar múltiples setlists con persistencia local.
+- Administrar múltiples setlists, guardados junto al proyecto de REAPER.
 - Mostrar letras y acordes sincronizados desde pistas dedicadas.
 
 ---
@@ -827,7 +849,7 @@ Objetivo principal:
 - 🎯 Estado por canción: activa, en cola, omitida, loop, chain.
 - ⏯️ Controles de transporte en pantalla.
 - 💾 Exportación/importación de setlists en JSON.
-- 🧠 Persistencia local vía `localStorage`, aislada por proyecto de REAPER.
+- 🗄️ Setlists guardados en `<carpeta del proyecto>/reaset/setlists/`, un archivo cada uno — viajan con el `.rpp`. El resto de las preferencias sigue en `localStorage`, aislado por proyecto.
 - 🎤 Panel de letras + 🎸 panel de acordes.
 - 🎨 Personalización visual (temas, tipografías, tamaños, color de acordes, filtros de pantalla).
 - 🗂️ Regiones anidadas con loop, skip, color y notas individuales por sección.
@@ -868,7 +890,9 @@ Este proyecto fue iterado, depurado y testeado con apoyo de:
 
 La validación funcional final se hizo en REAPER con pruebas reales de uso en setlist.
 
-> ⚖️ Nota legal: mantener y respetar licencias originales de los componentes reutilizados (por ejemplo, GPL v3 donde aplique).
+> ⚖️ Nota legal: ReaSet v3.0+ es propietario y de uso gratuito — ver [`LICENSE`](./LICENSE).
+> Las versiones hasta la v2.x fueron GPL v3 y lo siguen siendo. Los scripts de
+> terceros en `Legacy/` conservan su licencia: ver [`Legacy/LICENSE-NOTICE.md`](./Legacy/LICENSE-NOTICE.md).
 
 ---
 
@@ -941,6 +965,17 @@ playhead mal ubicado nunca puede parecer un puente roto.
 
 - Cárgalo con Actions → ReaScript: Load… → `Tools/ReaSet_Diagnose.lua` → Run.
 
+### 🗄️ Library Doctor — `Tools/ReaSet_LibraryDoctor.lua`
+La misma idea para la biblioteca de setlists. También de solo lectura. Imprime
+la carpeta `/reaset/setlists` del proyecto con cada archivo de setlist y su
+cantidad de canciones, cuál `reaper_www_root` tiene realmente `ReaSet.html` (y
+si es escribible), si existe el índice que el navegador consulta, y qué fue lo
+último que publicó `Reaset.lua`. Entre los dos se ve exactamente en qué eslabón
+se cortó el camino navegador → `Reaset.lua` → disco — en vez de un setlist que
+simplemente no se guarda y no dice nada.
+
+- Cárgalo con Actions → ReaScript: Load… → `Tools/ReaSet_LibraryDoctor.lua` → Run.
+
 ---
 
 ## 6) Instalación
@@ -1011,7 +1046,17 @@ Copiar en la carpeta web de REAPER (donde existe `main.js`):
 7. Exportar `.json` de respaldo.
 
 ### Persistencia y backups
-- Estado local en navegador (`localStorage`).
+- **Los setlists viven con el proyecto**, en `<carpeta del proyecto>/reaset/setlists/`,
+  un archivo JSON cada uno, escritos por `Reaset.lua`. El disco es la fuente de
+  verdad: todos los dispositivos que lean ese proyecto ven los mismos setlists,
+  sin ningún paso de merge. Abrís ReaSet en otra máquina o en una tablet y tu
+  show simplemente está ahí.
+- Esto requiere que el proyecto se haya **guardado al menos una vez** — un
+  proyecto sin guardar no tiene carpeta donde escribir, y ReaSet lo avisa en la
+  lista de setlists en vez de aparentar que guarda.
+- Los setlists que ya tenías en un navegador se migran solos al primer abrir.
+- El resto del estado (temas, tamaños, preferencias de panel) sigue siendo local
+  del navegador (`localStorage`).
 - Respaldos/migración vía Export/Import JSON.
 - Recomendado: backup por fecha antes de cambios grandes.
 

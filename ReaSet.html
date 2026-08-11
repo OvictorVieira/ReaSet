@@ -531,7 +531,9 @@
             border: 1px solid rgba(255, 255, 255, 0.11);
             border-radius: var(--radius-card);
             min-height: 70px;
-            padding: 0 10px 0 0;
+            /* Symmetric: the left used to be 0, which pinned the song number
+               against the edge while the time had 10px + its own 8px. */
+            padding: 0 10px;
             cursor: pointer;
             transition: background 0.2s, box-shadow 0.2s;
             user-select: none;
@@ -859,14 +861,20 @@
         }
 
         /* Number */
+        /* Mirrors .song-duration at the other end of the row: same 8px inner
+           padding, so the number sits the same distance from the left edge as
+           the time does from the right. The row's own padding is symmetric
+           for the same reason. min-width rather than a fixed width so a
+           two-digit number still fits, while text-align keeps every number
+           in a column regardless of digit count. */
         .song-index {
-            width: 22px;
+            min-width: 22px;
             text-align: right;
             color: var(--text-subdued);
-            font-size: 11px;
-            font-family: var(--font-mono);
+            font-size: 13px;
+            font-variant-numeric: tabular-nums;
             flex-shrink: 0;
-            margin-right: 4px;
+            padding: 0 8px;
             cursor: pointer;
         }
 
@@ -944,9 +952,13 @@
         }
 
         /* Duration */
+        /* The UI font rather than the mono one — mono was there to stop the
+           digits jittering as the countdown ticks, and tabular-nums gives
+           exactly that (every digit the same advance width) without the
+           typewriter look. */
         .song-duration {
-            font-family: var(--font-mono);
-            font-size: 11px;
+            font-variant-numeric: tabular-nums;
+            font-size: 12px;
             color: rgba(255, 255, 255, 0.26);
             padding: 0 8px;
             flex-shrink: 0;
@@ -1293,8 +1305,8 @@
         }
 
         .grid-card-index {
-            font-size: 10px;
-            font-family: var(--font-mono);
+            font-size: 12px;
+            font-variant-numeric: tabular-nums;
             color: var(--text-subdued);
         }
 
@@ -1330,9 +1342,28 @@
         }
 
         .grid-card-dur {
-            font-family: var(--font-mono);
-            font-size: 10px;
+            font-variant-numeric: tabular-nums;
+            font-size: 11px;
             color: var(--text-subdued);
+        }
+
+        /* THE grid-irregularity fix. When a song goes active, updatePlaybackUI
+           adds .live-time to its duration element to show the countdown. That
+           class was written for the Live view: font-size 18px and
+           margin-bottom 28px. The list has an override that neutralises both
+           (.song-duration.live-time), but the GRID never got one — so the
+           active card alone grew ~40px taller and every neighbour shifted.
+           Active is now expressed only through weight and colour, and the
+           clock keeps its size. */
+        .grid-card-dur.live-time {
+            font-family: inherit;
+            font-size: 11px;
+            margin-bottom: 0;
+        }
+
+        .grid-card.active .grid-card-dur {
+            color: var(--color-live);
+            font-weight: 700;
         }
 
         /* TRANSPORT FOOTER */
@@ -1857,12 +1888,13 @@
             top: 12px;
             right: 50px;
         }
-        /* The canvas header already wraps to two lines on a phone; adding a
-           worded button would make it three. There it keeps the glyph only,
-           matching how Lyrics and Chords carry the same control. */
-        @media (max-width: 600px), (max-height: 520px) {
-            #canvas-fs-btn span { display: none; }
-        }
+        /* Glyph only, everywhere. It used to carry a worded label on anything
+           bigger than a phone, which made it the odd one out — Lyrics and
+           Chords have always shown this same control as a bare glyph. The
+           span stays in the DOM (setViewFullscreen still writes the current
+           state into it) so the accessible/hover text keeps updating; only
+           its display is dropped. */
+        #canvas-fs-btn span { display: none; }
         #canvas-fs-btn.is-on {
             background: rgba(30, 215, 96, 0.16);
             border-color: rgba(30, 215, 96, 0.45);
@@ -2361,9 +2393,17 @@
             margin-bottom: 28px;
         }
 
+        /* .live-time was written for the Live view's big clock and carries the
+           mono family plus its own size. Both have to be undone here, or the
+           ACTIVE row's countdown ends up in a different typeface and size
+           from every other row in the same list. Active now reads through
+           colour and weight only, so the number never changes shape as it
+           ticks. */
         .song-duration.live-time {
             margin-bottom: 0;
-            font-size: 14px;
+            font-family: inherit;
+            font-size: 12px;
+            font-weight: 700;
         }
 
         .live-next {
@@ -4298,7 +4338,7 @@
 
         <!-- SETLIST ROW -->
         <div class="app-setlist-row">
-            <select id="setlistSelect" class="n-select" onchange="changeSetlist()"></select>
+            <select id="setlistSelect" class="n-select" onchange="changeSetlist()" onmousedown="_libraryRefreshOnOpen()" onfocus="_libraryRefreshOnOpen()"></select>
             <button class="n-btn-new" onclick="createSetlist()" title="New">+</button>
             <button class="n-btn-new" id="editModeBtn" onclick="toggleEditMode()" title="Edit mode"><span class="emb-icon">&#9998;</span><span class="emb-label" id="editModeLabel">SHOW</span></button>
             <div class="dotmenu-wrap" id="dotMenuWrap" style="position:relative">
@@ -4798,18 +4838,26 @@
     </div>
 
     <!-- MIDI LEARN MODAL -->
-    <!-- MIDI Learn modal — DISABLED, see the MIDI MODULE note in the script
+    <!-- MIDI Learn modal — DISABLED, see the MIDI MODULE note in the script.
+
+         The section labels below were originally `<!- - Status row - ->` style
+         comments. HTML comments DO NOT NEST: the first `- ->` inside this
+         block terminated THIS comment early, so everything after it — the
+         status row, the action selector, the learn button, the mappings list —
+         was live DOM rendering at the bottom of the page, pushing the whole
+         app up and off the top of the viewport. Rewritten as plain text so
+         this block is one single, actually-closed comment.
 <div id="midi-modal-overlay" onclick="if(event.target===this)closeMidiModal()">
         <div class="midi-modal">
             <div class="midi-modal-title">MIDI Learn</div>
 
-            <!-- Status row -->
+            [ Status row ]
             <div class="midi-status-row">
                 <span class="midi-dot" id="midi-status-dot"></span>
                 <span id="midi-status-text">Inicializando…</span>
             </div>
 
-            <!-- Learn section -->
+            [ Learn section ]
             <div class="midi-learn-box">
                 <div class="midi-section-label">Acción a asignar</div>
                 <select id="midi-action-select" class="midi-action-select">
@@ -4832,7 +4880,7 @@
 
             <hr class="midi-hr">
 
-            <!-- Current mappings -->
+            [ Current mappings ]
             <div class="midi-section-label" style="margin-bottom:8px">Asignaciones activas</div>
             <div id="midi-mappings-list" class="midi-mappings-list">
                 <div style="font-size:12px;color:rgba(255,255,255,0.3);text-align:center;padding:12px 0">
@@ -5210,7 +5258,8 @@
         // Auto-detect Reaset.lua + read the lyrics/chords bridge diagnostics.
         // One-shot probe so the empty-state message is accurate immediately,
         // then a light refresh (these are tiny replies).
-        var _diagProbe = "GET/EXTSTATE/ReaSet/nativeLoopReady" +
+        var _diagProbe = "GET/EXTSTATE/ReaSet/autoStopArmed" +
+                         ";GET/EXTSTATE/ReaSet/nativeLoopReady" +
                          ";GET/EXTSTATE/ReaSet/lyricsTrack;GET/EXTSTATE/ReaSet/chordsTrack" +
                          ";GET/EXTSTATE/ReaSet/lyricsTrackMatches;GET/EXTSTATE/ReaSet/chordsTrackMatches" +
                          ";GET/EXTSTATE/ReaSet/tick;GET/EXTSTATE/ReaSet/error" +
@@ -5282,6 +5331,7 @@
             ["Briefly fires play/stop at the start of each region to initialize MIDI.\nOnly works with Auto-Stop enabled.", "Dispara brevemente play/stop al inicio de cada región para inicializar MIDI.\nSolo funciona con Auto-stop activado."],
             ["Requires holding STOP for 3 seconds before it takes effect.\nGuards against an accidental tap stopping the show.", "Requiere mantener STOP presionado 3 segundos para que tenga efecto.\nProtege de que un toque accidental detenga el show."],
             ["The Default setlist cannot be deleted.", "El setlist Default no se puede eliminar."],
+            ["Not connected to the project — changes will not be saved", "Sin conexión al proyecto — no se guardarán cambios"],
             ["Import successful.", "Importación exitosa."],
             ["Invalid file format.", "Formato de archivo inválido."],
             ["Error reading file.", "Error al leer el archivo."],
@@ -5542,6 +5592,13 @@
         // taps are never suppressed — so "I didn't press anything" jumps stop,
         // while real button presses keep working.
         var _lastReplyTs      = 0;
+        // _lastReplyTs updates on EVERY reply, but currentPos only refreshes on
+        // the TRANSPORT branch, and the polls run at different cadences. Using
+        // _lastReplyTs to extrapolate therefore measures the wrong interval and
+        // biases the result short. Measured on ReaSet Pro: +28.3ms systematic
+        // bias with _lastReplyTs, none with a TRANSPORT-only timestamp, and p95
+        // absolute error 32ms → 8.7ms.
+        var _lastTransportTs  = 0;
         var RESYNC_GAP_MS     = 700;   // reply-stream gap that counts as an interruption
         var RESYNC_GUARD_MS   = 600;   // suppress automatic transport commands this long after a gap
         var _resyncGuardUntil = 0;
@@ -5735,6 +5792,12 @@
                 wwr_req('SET/EXTSTATE/ReaSet/setlistChunk' + c + '/' + chunks[c]);
             }
             wwr_req('SET/EXTSTATE/ReaSet/setlistChunkCount/' + chunks.length);
+            // Monotonic revision, sent LAST, is what Reaset.lua triggers on. It
+            // used to trigger on the chunk COUNT changing, which silently dropped
+            // most pushes: toggling a skip flag moves the payload by three
+            // characters, the count stays identical, and the shared file was never
+            // rewritten — Players kept showing the old setlist.
+            wwr_req('SET/EXTSTATE/ReaSet/setlistRev/' + _syncLocalRev);
         }
 
         // Debounced entry point — every setlist edit (skip/loop/chain, reorder,
@@ -5745,6 +5808,127 @@
             if (REASET_MODE !== 'director') return;
             if (_syncPushTimer) clearTimeout(_syncPushTimer);
             _syncPushTimer = setTimeout(_syncPushNow, 1000);
+        }
+
+        // ── Setlist library: the disk is the source of truth ────────────────
+        //
+        // Setlists live in <project folder>/reaset/setlists/, one file each,
+        // written by Reaset.lua. See its "SETLIST LIBRARY" section for why the
+        // layout is what it is.
+        //
+        // THIS BROWSER IS A CLIENT, NOT A STORE. localStorage stopped being
+        // authoritative: there are never two versions to reconcile, there is
+        // one on disk and it gets read. That deletes in one stroke the
+        // adopt / migrate / don't-clobber logic that caused every bug this
+        // feature ever had — and it makes a setlist built on the iPad show up
+        // on the laptop with no merge at all, simply because both read the
+        // same file.
+        //
+        // If the index cannot be read, NOTHING is invented: the user is told.
+        // Editing a phantom copy that will never be saved is worse than not
+        // editing at all.
+        var LIBRARY_FILE  = 'reaset_setlists.json';
+        var LIB_SEND_GAP  = 250;   // ms between queued sends
+        var _libRev       = 0;
+        var _libQueue     = [];
+        var _libDraining  = false;
+        var _libConnected = false;  // has the index been read at all this session?
+        var _libReconciled = false; // nothing is pushed before that happens
+
+        function _libraryEnqueue(name) {
+            if (!_libReconciled) return;
+            if (REASET_MODE !== 'director') return;
+            var i = _libQueue.indexOf(name);
+            if (i !== -1) _libQueue.splice(i, 1);
+            _libQueue.push(name);
+            if (!_libDraining) _libraryDrain();
+        }
+
+        function _libraryDrain() {
+            if (!_libQueue.length) { _libDraining = false; return; }
+            _libDraining = true;
+            var name = _libQueue.shift();
+            var entries = setlists[name];          // undefined ⇒ delete
+            var nameB64 = _b64uEncode(name);
+
+            var chunks = [];
+            if (entries) {
+                var b64 = _b64uEncode(JSON.stringify(entries));
+                for (var i = 0; i < b64.length; i += SYNC_CHUNK_LEN) chunks.push(b64.slice(i, i + SYNC_CHUNK_LEN));
+            }
+            wwr_req('SET/EXTSTATE/ReaSet/libName/' + nameB64);
+            for (var c = 0; c < chunks.length; c++) {
+                wwr_req('SET/EXTSTATE/ReaSet/libChunk' + c + '/' + chunks[c]);
+            }
+            wwr_req('SET/EXTSTATE/ReaSet/libChunks/' + chunks.length);
+            // The revision goes last: it is the "this one is complete" signal.
+            wwr_req('SET/EXTSTATE/ReaSet/libRev/' + (++_libRev));
+
+            // Spaced out on purpose: the whole library at once would be dozens
+            // of requests, and REAPER's web interface collapses bursts.
+            setTimeout(_libraryDrain, LIB_SEND_GAP);
+        }
+
+        // Reads the index and adopts whatever the disk says. No branches, no
+        // merge.
+        function _librarySyncWithProject() {
+            fetch(LIBRARY_FILE + '?t=' + Date.now(), { cache: 'no-store' })
+                .then(function (res) { return res.ok ? res.json() : null; })
+                .catch(function () { return null; })
+                .then(function (doc) {
+                    if (!doc || doc.v !== 2 || !Object.prototype.toString.call(doc.sets).match(/Array/)) {
+                        // With no readable index there is no project to talk
+                        // to. Whatever is on screen is kept — blanking it
+                        // mid-show over a failed fetch would be worse — but the
+                        // user is warned and pushing is blocked, so nobody
+                        // edits something that will never be saved.
+                        _libConnected = false;
+                        updateSetlistDropdown();
+                        return;
+                    }
+                    _libConnected = true;
+
+                    var next = {}, n = 0;
+                    for (var i = 0; i < doc.sets.length; i++) {
+                        var s = doc.sets[i];
+                        if (s && typeof s.name === 'string' && s.songs) { next[s.name] = s.songs; n++; }
+                    }
+
+                    // One-time migration: this browser comes from the era when
+                    // localStorage was the store, and the disk has nothing yet.
+                    // Push what is here before the empty disk becomes the truth
+                    // and takes it away.
+                    var localNames = Object.keys(setlists || {});
+                    var localHasContent = localNames.some(function (k) { return (setlists[k] || []).length > 0; });
+                    if (n === 0 && localHasContent) {
+                        _libReconciled = true;
+                        for (var m = 0; m < localNames.length; m++) _libraryEnqueue(localNames[m]);
+                        updateSetlistDropdown();
+                        return;
+                    }
+
+                    if (n > 0) {
+                        setlists = next;
+                        if (!setlists[currentSetlistName]) currentSetlistName = Object.keys(setlists)[0];
+                        localStorage.setItem(STORAGE_KEY, JSON.stringify(setlists));
+                        localStorage.setItem(CURRENT_KEY, currentSetlistName);
+                        displayList = []; initialized = false;
+                    }
+                    _libReconciled = true;
+                    updateSetlistDropdown();
+                    if (n > 0 && typeof syncRegions === 'function') syncRegions();
+                });
+        }
+
+        // Re-read on demand when the list is opened: it is the natural moment,
+        // the user is about to choose. Rate-limited so opening and closing does
+        // not fire a burst.
+        var _libRefreshedAt = 0;
+        function _libraryRefreshOnOpen() {
+            var now = Date.now();
+            if (now - _libRefreshedAt < 3000) return;
+            _libRefreshedAt = now;
+            _librarySyncWithProject();
         }
 
         // Fetches the shared file and applies it if it's newer and from the same
@@ -5985,6 +6169,17 @@
             _loadSmoothSeekPreference();
             displayList = []; initialized = false;
             updateSetlistDropdown();
+            // Reconcile with the project: adopt when the disk has setlists,
+            // migrate when it has none and this browser does. Never a merge.
+            //
+            // On demand, with no timer. Any "wait a moment for Reaset.lua to
+            // catch up" delay would be a guess, and a losing one:
+            // REGION_LIST_END calls syncRegions() synchronously on the next
+            // line, so no delay could beat it. The index carries the project
+            // folder it belongs to instead, and a stale one is simply re-read
+            // when the list is opened.
+            _libReconciled = false;
+            _librarySyncWithProject();
         }
 
         // --- Per-song overrides (stop, delay, description, color) ---
@@ -6386,6 +6581,24 @@
         var LYR_WRAP_PUSH_FACTOR = 0.5;   // half a line's height per extra wrapped line
         var _lyrExtraPushPx = 0;
 
+        // The three verses as of the last render, used to tell a one-slot step
+        // around the drum from a jump that should crossfade instead.
+        //
+        // This declaration was MISSING: _renderLyrics only ever assigned
+        // `_lyrLast = {...}` (creating an implicit global) while READING
+        // `_lyrLast.n` earlier in the same function. Reading it before the
+        // first assignment throws ReferenceError, not undefined.
+        //
+        // It only bites when the lyrics panel is already open before the first
+        // verse arrives: normally the panel starts closed, so the first
+        // renders have animate === false, skip the read, and reach the
+        // assignment — after which the global exists and everything works.
+        //
+        // The throw happens inside wwr_onreply, so it killed the ENTIRE rest
+        // of that handler on every reply: the symptom is "lyrics never
+        // populate", not "animation glitches once".
+        var _lyrLast = { p: "", t: "", n: "" };
+
         function _lyrOneLineHeightPx() {
             var host = document.getElementById("lyrics-content");
             var fs = host ? parseFloat(window.getComputedStyle(host).fontSize) : NaN;
@@ -6701,6 +6914,15 @@
             }
             REASET_MODE = mode;
             try { localStorage.setItem('reaset_mode', mode); } catch (e) { /* private mode etc — mode still applies for this session */ }
+            // The mode starts as 'player' and only resolves here or when it is
+            // recovered from localStorage. _librarySyncWithProject() already
+            // ran before that, and its migration branch is gated on Director,
+            // so the queue dropped the push silently. Becoming Director has to
+            // retry: that is exactly the private-window case, where there is no
+            // saved mode to recover.
+            if (mode === 'director' && typeof _librarySyncWithProject === 'function') {
+                _librarySyncWithProject();
+            }
             document.getElementById('mode-select-overlay').classList.remove('open', 'forced');
             applyModeUI();
         }
@@ -6782,6 +7004,31 @@
                     case "TRANSPORT":
                         var nowPlaying = (parseInt(tok[1]) & 1) === 1;
                         currentPos = parseFloat(tok[2]);
+                        // Cancel the MIDI-init pre-roll artefact in ONE place. The
+                        // pre-roll leaves the cursor a few ms before the song start,
+                        // i.e. inside the PREVIOUS region when they are contiguous,
+                        // and the many places that resolve "active region" all
+                        // compare against currentPos. Clamping here fixes them all
+                        // at once instead of repeating the guard everywhere and
+                        // forgetting one. The offset is milliseconds: invisible to
+                        // the display, exact for the purpose.
+                        if (window._playIntent) {
+                            var _pi = window._playIntent;
+                            if (currentPos >= _pi.start || currentPos < _pi.start - 0.5) {
+                                window._playIntent = null;
+                            } else {
+                                currentPos = _pi.start;
+                            }
+                        }
+                        _lastTransportTs = _now;
+                        // A pending cue from an auto-stop: only now do we know REAPER
+                        // really stopped, so this SET/POS moves the cursor without
+                        // dragging playback along with it.
+                        if (!nowPlaying && window._pendingCuePos != null) {
+                            var _cue = window._pendingCuePos;
+                            window._pendingCuePos = null;
+                            wwr_req("SET/POS/" + _cue);
+                        }
                         // First playback of the session starts the session clock,
                         // which then runs through every later stop and pause.
                         if (nowPlaying && !wasPlayingLast) _sessionBegin();
@@ -6846,6 +7093,16 @@
                         // used to show it as a "⬡ NL" lamp, which therefore stayed lit
                         // on a crashed script; the ReaSet/tick heartbeat below is what
                         // actually detects that, and reports it in the panel status.
+                        if (tok[1] === "ReaSet" && tok[2] === "autoStopArmed") {
+                            // Reaset.lua confirms it told REAPER where to stop.
+                            // While this is 1, we do NOT send our own stop: the
+                            // audio engine will stop at the exact sample. If
+                            // arming was not possible (no SWS, for instance) the
+                            // flag stays empty and the detection below is the
+                            // fallback again — losing precision is acceptable,
+                            // losing auto-stop is not.
+                            window._autoStopArmed = (tok[3] === "1");
+                        }
                         if (tok[1] === "ReaSet" && tok[2] === "nativeLoopReady") {
                             window.REASET_NATIVE_LOOP = (tok[3] === "1");
                         }
@@ -7513,6 +7770,11 @@
             // push instead of one per keystroke. No-ops entirely outside Director
             // mode (checked inside _syncPushSoon).
             _syncPushSoon();
+            // Durable copy of THIS setlist into the project. Same choke point,
+            // different purpose: _syncPushSoon shares the active order with
+            // Players; this persists the named setlist so it survives the
+            // browser and travels with the project.
+            _libraryEnqueue(currentSetlistName);
         }
 
         // --- 5. MARKER PARSER ---
@@ -8214,6 +8476,25 @@
                     // let it fire on the next proven-fresh tick.
                     if (nxt) { if (!_suppressAutoTransport()) wwr_req("SET/POS/" + nxt.start); return; }
                 }
+                // Tell Reaset.lua where to stop BEFORE it matters, instead of
+                // detecting the end and sending a stop late. Published only when
+                // something changes, not every tick.
+                (function () {
+                    var wantStop = document.getElementById('autoStopToggle').checked
+                                   && !activeRegion.chain && !activeRegion.loop
+                                   && !getOverride(activeRegion.id).stopAfter;
+                    var key = wantStop ? (activeRegion.start + ":" + activeRegion.end) : "off";
+                    if (key === window._autoStopPublished) return;
+                    window._autoStopPublished = key;
+                    if (wantStop) {
+                        wwr_req("SET/EXTSTATE/ReaSet/autoStopStart/" + activeRegion.start +
+                                ";SET/EXTSTATE/ReaSet/autoStopEnd/" + activeRegion.end +
+                                ";SET/EXTSTATE/ReaSet/autoStop/on");
+                    } else {
+                        wwr_req("SET/EXTSTATE/ReaSet/autoStop/off");
+                    }
+                })();
+
                 var row = document.getElementById("row-" + activeRegion.id);
                 if (row) {
                     row.classList.add('active');
@@ -8534,7 +8815,11 @@
                 }
 
                 // End-of-region logic
-                var timeRem = activeRegion.end - currentPos;
+                // Extrapolated, not raw currentPos: the TRANSPORT reply arrives
+                // every ~60ms, so currentPos is up to a poll interval stale and the
+                // trigger below fires that much LATE, eating into the budget it
+                // then has to spend on the wwr_req round-trip.
+                var timeRem = activeRegion.end - getExtrapolatedPos();
                 // Reset end-of-region dedup when safely inside the region.
                 // This allows the trigger to re-arm after a song loop (region.loop)
                 // jumps the playhead back to the start.
@@ -8554,7 +8839,7 @@
                     // repeatedly and producing the "stuck / last-second repeating" bug.
                     if (window._lastRegionEndTrigger === activeRegion.id) { return; }
                     // Time-based lock: autoStop / stopAfter set this for ~400 ms after firing.
-                    // Guards against the stop → reposition → triggerMidi-PLAY sequence
+                    // Guards against the stop → reposition sequence
                     // resetting _lastRegionEndTrigger (via timeRem > 0.5 in the next region)
                     // while REAPER still briefly reports isPlaying = true.
                     if (window._endOfRegionLocked && Date.now() < window._endOfRegionLocked) { return; }
@@ -8582,10 +8867,12 @@
                     // Per-song overrides: stopAfter / delayAfter
                     var _rov = getOverride(activeRegion.id);
                     if (_rov.stopAfter) {
-                        window._endOfRegionLocked = Date.now() + 400; // lock before any async
-                        wwr_req(1016);
+                        window._endOfRegionLocked = Date.now() + 400;
                         var _nrs = findNextValidSong(activeIdx);
-                        if (_nrs) { setTimeout(function() { wwr_req("SET/POS/" + _nrs.start); }, 150); }
+                        wwr_req(1016);
+                        // Same reason as the auto-stop branch: the reposition waits
+                        // for the transport to confirm it stopped.
+                        if (_nrs) window._pendingCuePos = _nrs.start;
                         return;
                     }
                     if (_rov.delayAfter > 0) {
@@ -8620,14 +8907,30 @@
                         // sending STOP now would race with the user's already-dispatched PLAY
                         // and kill the new song's playback.
                         if (window._playRegionLocked && Date.now() < window._playRegionLocked) { return; }
-                        window._endOfRegionLocked = Date.now() + 400; // lock before any async
-                        wwr_req(1016);
+                        window._endOfRegionLocked = Date.now() + 400;
                         var nextR2 = findNextValidSong(activeIdx);
-                        if (nextR2) { setTimeout(function () {
-                            // Skip repositioning if user started a new song during the 100ms delay.
-                            if (window._playRegionLocked && Date.now() < window._playRegionLocked) { return; }
-                            wwr_req("SET/POS/" + nextR2.start); triggerMidi();
-                        }, 100); }
+                        // ARM, DON'T DETECT.
+                        //
+                        // Detecting the end here and sending a STOP can never be
+                        // punctual: ~60ms poll + 72-107ms round-trip, and on top of
+                        // that Main_OnCommand does not stop the transport on the
+                        // spot — it stops it on the next audio block. A SET/POS
+                        // landing in that gap runs while the transport is STILL
+                        // ROLLING, so it seeks PLAYBACK into the next song, which is
+                        // audible until the stop settles. Ordering the commands
+                        // inside one request does not help: the problem is not
+                        // arrival order, it is that the first one's effect is late.
+                        //
+                        // Reaset.lua now tells REAPER where to stop in advance, so
+                        // it stops in its own audio engine at the exact sample. While
+                        // that is armed we send nothing here; the reposition waits
+                        // for TRANSPORT to confirm playState 0.
+                        if (window._autoStopArmed) {
+                            if (nextR2) window._pendingCuePos = nextR2.start;
+                            return;
+                        }
+                        wwr_req(1016);
+                        if (nextR2) window._pendingCuePos = nextR2.start;
                         return;
                     }
                 }
@@ -8785,6 +9088,39 @@
         // restarts transport at the target and deliberately creates a hard jump.
         // `startWhenStopped` keeps Play Song behaviour intact without making
         // MIDI navigation start playback when REAPER was already stopped.
+        // Extrapolates currentPos forward from the last TRANSPORT reply's OWN
+        // timestamp. Does not extrapolate while stopped, before the first
+        // TRANSPORT reply, or across a long gap in the reply stream — in that
+        // case the timestamp is stale and extrapolating from it would put back
+        // the exact error this exists to remove.
+        //
+        // Assumes playrate 1.0: REAPER's TRANSPORT reply does not carry playrate.
+        function getExtrapolatedPos() {
+            if (!isPlaying || !_lastTransportTs) return currentPos;
+            var elapsedMs = Date.now() - _lastTransportTs;
+            if (elapsedMs > 1500) return currentPos;
+            return currentPos + (elapsedMs / 1000);
+        }
+
+        // MIDI Init: the transport starts a few ms BEFORE the song so plugins
+        // receive MIDI state with room to spare.
+        //
+        // The old design, when a song ended, jumped to the START OF THE NEXT ONE
+        // and played ~100ms there. That made the next song's opening audible every
+        // time — and it did not depend on the regions being contiguous, because it
+        // jumped explicitly to that point. It also spread STOP → wait → SEEK →
+        // PLAY → STOP across five requests with no guaranteed order between them.
+        //
+        // 5ms is enough because the MIDI is quantised to the grid; the old 100ms
+        // was margin for a case that no longer exists.
+        var MIDI_INIT_PREROLL = 0.005;
+
+        function midiInitPreroll(start) {
+            var el = document.getElementById('initSongMidiToggle');
+            if (!el || !el.checked) return start;
+            return Math.max(0, start - MIDI_INIT_PREROLL);
+        }
+
         function seekManualTransport(start, startWhenStopped) {
             var wasPlaying = isPlaying;
             if (!wasPlaying && startWhenStopped) {
@@ -8812,16 +9148,15 @@
                 // Setting this flag for 500ms tells the autoStop block to skip its STOP if
                 // the user just explicitly selected a song.
                 window._playRegionLocked   = Date.now() + 500;
-                // Separate flag consumed ONLY by triggerMidi()'s internal STOP guard.
-                // We cannot reuse _playRegionLocked here because cueRegion() also sets
-                // it — cue must let its own triggerMidi() STOP fire (it stops REAPER
-                // intentionally after the brief MIDI-arm play). This flag is set only
-                // when this path will actually issue PLAY, so triggerMidi()'s cleanup
-                // STOP cannot race with a user-initiated hard jump or fresh playback.
-                if (!isPlaying || !smoothSeekEnabled) {
-                    window._playbackInitiated = Date.now() + 500;
-                }
-                seekManualTransport(start, true); queuedRegion = null;
+                // The user decided: a cue left pending by an earlier auto-stop no
+                // longer applies and would move the cursor off their choice.
+                window._pendingCuePos = null;
+                // The pre-roll lands a few ms BEFORE the song start, which with
+                // contiguous regions is inside the previous one. Record the intent
+                // so the display does not briefly resolve the wrong song; the
+                // TRANSPORT handler clears it once the real start is crossed.
+                window._playIntent = { id: id, start: start };
+                seekManualTransport(midiInitPreroll(start), true); queuedRegion = null;
                 var all = document.querySelectorAll('.queued');
                 for (var i = 0; i < all.length; i++) all[i].classList.remove('queued');
             } else {
@@ -8848,25 +9183,14 @@
                 if (row) row.classList.add('queued');
             }
         }
-        function triggerMidi() {
-            if (!document.getElementById('initSongMidiToggle').checked) return;
-            wwr_req(1007);
-            setTimeout(function () {
-                // If the user explicitly started playback (playRegion) after this
-                // MIDI-arm PLAY was sent, skip the cleanup STOP — it would arrive at
-                // REAPER after the user's PLAY and kill their song.
-                // Note: cueRegion() sets _playRegionLocked but NOT _playbackInitiated,
-                // so cue's triggerMidi() STOP still fires correctly.
-                if (window._playbackInitiated && Date.now() < window._playbackInitiated) { return; }
-                wwr_req(1016);
-            }, 100);
-        }
         function cueRegion(start, id) {
             // Set the same lock as playRegion so autoStop's pending 100ms setTimeout
             // (from a stale transport response) cannot override our cued position
-            // or fire a conflicting triggerMidi PLAY+STOP on top of ours.
+            // on top of our cued position.
             window._playRegionLocked = Date.now() + 500;
-            wwr_req(1016); wwr_req("SET/POS/" + start); flashRow(id); triggerMidi();
+            // One compound request: REAPER executes in order within it, so stop
+            // and reposition can no longer arrive the wrong way round.
+            wwr_req("1016;SET/POS/" + start); flashRow(id);
         }
         function smartStop() {
             var activeIdx = -1;
@@ -9949,6 +10273,14 @@
         // --- 15. FILE I/O ---
         function updateSetlistDropdown() {
             var sel = document.getElementById("setlistSelect"); sel.innerHTML = "";
+            if (!_libConnected) {
+                // Honest over convenient: if the project's index could not be
+                // read, say so where the user is already looking.
+                var warn = document.createElement("option");
+                warn.text = "⚠ " + t("Not connected to the project — changes will not be saved");
+                warn.disabled = true;
+                sel.appendChild(warn);
+            }
             for (var name in setlists) {
                 if (setlists.hasOwnProperty(name)) {
                     var opt = document.createElement("option"); opt.value = name; opt.text = name;
@@ -10008,7 +10340,12 @@
                 "Delete Setlist",
                 "Delete '" + currentSetlistName + "'? This action cannot be undone.",
                 function () {
+                    var _gone = currentSetlistName;
                     delete setlists[currentSetlistName]; currentSetlistName = "Default";
+                    // Propagate the deletion: saveCurrentState() only pushes
+                    // the setlist that is now current, so without this the
+                    // deleted one would live on in the project forever.
+                    _libraryEnqueue(_gone);
                     saveCurrentState(); updateSetlistDropdown(); displayList = []; initialized = false; syncRegions();
                 },
                 "Delete"
@@ -10159,9 +10496,9 @@
            Everything is preserved verbatim below so it can be switched back
            on when ReaSet becomes an installable app with real MIDI access
            (see ROADMAP.md). Nothing else depends on it: every midi* action
-           here is only called from onMidiMessage, and triggerMidi() — which
-           fires REAPER's own transport to initialise MIDI hardware, and is
-           NOT Web MIDI — lives elsewhere and is untouched.
+           here is only called from onMidiMessage. The unrelated "MIDI Init"
+           feature — REAPER's own transport arriving a few ms before a song so
+           plugins get MIDI state, NOT Web MIDI — lives elsewhere.
 
         // ══════════════════════════════════════════════════════════
         // MIDI MODULE — Web MIDI API (Phase 1)
@@ -10825,6 +11162,36 @@
             if (!h) return;
             showAppAlert(t(h[1]), t(h[0]));
         }
+
+        // ── Reply-handler safety net ────────────────────────────────────────
+        // wwr_onreply is one long function that parses a reply and then drives
+        // every display in the app. A throw anywhere inside it skips everything
+        // after that point — and because REAPER calls it again on the very next
+        // reply, a bug that throws every time leaves the UI permanently frozen
+        // with NO error visible anywhere.
+        //
+        // This does not fix bugs, it makes them loud and survivable: the reply
+        // that threw is lost, the next one is processed normally, and the cause
+        // is printed instead of swallowed. Rate-limited so a persistent fault
+        // reports a few times rather than flooding the console every 33ms.
+        (function () {
+            var _realOnReply = window.wwr_onreply;
+            if (typeof _realOnReply !== 'function') return;
+            var _thrown = 0;
+            window.wwr_onreply = function (results, ts) {
+                try {
+                    return _realOnReply.call(this, results, ts);
+                } catch (e) {
+                    if (_thrown < 5) {
+                        _thrown++;
+                        try {
+                            console.error('ReaSet: reply handler threw — this reply was dropped, '
+                                + 'updates continue with the next one.', e);
+                        } catch (e2) { /* console unavailable */ }
+                    }
+                }
+            };
+        })();
     </script>
 </body>
 
