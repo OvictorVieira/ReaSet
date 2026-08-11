@@ -54,6 +54,18 @@
                the bar and that offset can never drift apart. Overridden for phones
                and again when running full screen (notch). */
             --topbar-h: 56px;
+            /* Height of the warning-banner stack, in real pixels, written by
+               JS from a ResizeObserver (see #reaset-banner-stack). It is
+               MEASURED and not assumed because the banner text wraps to one or
+               two lines depending on width and language — a hardcoded height
+               would be wrong on exactly the devices this matters for. 0 when
+               no banner is showing, which is almost always. */
+            --reaset-banner-h: 0px;
+            /* Where content that is NOT inside .app-frame has to start:
+               below the banner stack AND below the top bar. Overlay views read
+               this instead of --topbar-h so a banner pushes them down too
+               rather than covering their first line. */
+            --reaset-content-top: calc(var(--reaset-banner-h) + var(--topbar-h));
             --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
             --font-mono: 'SF Mono', 'Roboto Mono', 'Consolas', 'Courier New', monospace;
         }
@@ -277,8 +289,36 @@
             overflow: hidden;
             display: flex;
             flex-direction: column;
-            height: 100dvh;
-            position: relative;
+            /* PINNED TO THE VIEWPORT, not sized in viewport units.
+               `height: 100dvh` was leaving a dead strip at the bottom in iOS
+               Home Screen mode: with viewport-fit=cover the window covers the
+               whole screen, but the value dvh resolves to there is not
+               guaranteed to be that same height, and when it comes up short
+               the shell simply ends early and the page background shows below
+               the transport bar. `position: fixed` + `inset: 0` does not ask
+               for a number at all — the containing block IS the viewport, so
+               the shell fills whatever the window actually is, on every
+               engine and through rotation. Verified on iOS 26: the gap under
+               the transport bar measures 0.0. */
+            position: fixed;
+            inset: 0;
+            /* Room for the warning banners, which are pinned above this. */
+            padding-top: var(--reaset-banner-h);
+        }
+
+        /* ── Warning banner stack ──────────────────────────────
+           One container for every top warning (reconnecting, second Director)
+           so there is a single thing to measure and a single thing for the
+           layout to make room for. Stacked in DOM order if more than one is
+           up at a time, instead of silently overlapping as they used to when
+           each was its own `position: fixed; top: 0` element. */
+        #reaset-banner-stack {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 99999;
+            pointer-events: none;
         }
 
         /* TOP TABS */
@@ -1852,6 +1892,23 @@
             body.reaset-fullscreen { --topbar-h: calc(46px + env(safe-area-inset-top)); }
         }
 
+        /* THE TOP INSET BELONGS TO WHATEVER IS PHYSICALLY FIRST — exactly one
+           element, never two.
+           The rule is: that element's BACKGROUND fills the strip behind the
+           clock and the Dynamic Island, and its TEXT starts below them. With
+           no banner that element is the top bar (above). With a banner up, it
+           is the banner — so the top bar hands the inset back, or the two
+           would each reserve it and the layout would be pushed down twice.
+           `body.reaset-banner-open` is set by the same code that shows a
+           banner, so the two can never disagree; inferring it from the DOM
+           would be a second source of truth for the same fact. */
+        body.reaset-fullscreen #reaset-banner-stack { padding-top: env(safe-area-inset-top); }
+        body.reaset-fullscreen.reaset-banner-open .app-topbar { padding-top: 0; }
+        body.reaset-fullscreen.reaset-banner-open { --topbar-h: 56px; }
+        @media (max-width: 600px), (max-height: 520px) {
+            body.reaset-fullscreen.reaset-banner-open { --topbar-h: 46px; }
+        }
+
         /* ── View chrome ─────────────────────────────────────────────────
            Lyrics, Chords and Canvas were inset:0 — edge to edge, swallowing
            the top bar. They now start below it by default, so the clock, the
@@ -1862,7 +1919,7 @@
            one persisted setting behind two controls, so they can't disagree. */
         body:not(.reaset-viewfs) #lyrics-panel,
         body:not(.reaset-viewfs) #chords-panel,
-        body:not(.reaset-viewfs) #canvas-mode { top: var(--topbar-h); }
+        body:not(.reaset-viewfs) #canvas-mode { top: var(--reaset-content-top); }
 
         .panel-fs-btn {
             width: 28px;
@@ -5619,6 +5676,105 @@
             _setConnBanner(false);
         }
 
+        // ── Warning banner stack ───────────────────────
+        // Every top warning goes in here rather than being its own
+        // `position: fixed; top: 0` element. Two reasons, and the second is
+        // the one that was actually broken:
+        //
+        //   1. Two banners up at once used to render exactly on top of each
+        //      other, so one of the two warnings was invisible.
+        //   2. Nothing made room for them. A banner covered the top bar, and
+        //      in iOS Home Screen mode its first line landed underneath the
+        //      clock and the Dynamic Island. Now the stack's height is
+        //      published as --reaset-banner-h and the layout offsets by it.
+        //
+        // The height is MEASURED, never assumed: the text wraps to one or two
+        // lines depending on width, language and which warning it is, and it
+        // re-wraps on rotation. A ResizeObserver is the only version of this
+        // that cannot go stale.
+        var _bannerStack = null, _bannerRO = null;
+        function _bannerHost() {
+            if (_bannerStack && _bannerStack.isConnected) return _bannerStack;
+            _bannerStack = document.getElementById('reaset-banner-stack');
+            if (!_bannerStack) {
+                _bannerStack = document.createElement('div');
+                _bannerStack.id = 'reaset-banner-stack';
+                document.body.appendChild(_bannerStack);
+            }
+            if (!_bannerRO && window.ResizeObserver) {
+                _bannerRO = new ResizeObserver(_bannerMeasure);
+                _bannerRO.observe(_bannerStack);
+            }
+            return _bannerStack;
+        }
+        function _bannerMeasure() {
+            var host = document.getElementById('reaset-banner-stack');
+            var h = host ? host.offsetHeight : 0;
+            document.documentElement.style.setProperty('--reaset-banner-h', h + 'px');
+            // Drives the CSS that decides whether the top inset belongs to the
+            // banner or to the top bar. Set from here so it is derived from
+            // the same measurement, and cannot disagree with it.
+            document.body.classList.toggle('reaset-banner-open', h > 0);
+        }
+        // Rotation and split-view resize change the wrap; ResizeObserver
+        // catches those, this is the belt for engines without it.
+        window.addEventListener('resize', _bannerMeasure);
+        window.addEventListener('orientationchange', _bannerMeasure);
+
+        // ── Layout probe: ?diag=layout ──────────────────────────────────
+        // An iOS Home Screen launch has no address bar, no dev tools and no
+        // console, so the numbers that decide this layout — the safe-area
+        // insets, what the viewport units actually resolve to, how tall the
+        // window really is — are invisible exactly where they matter. Two
+        // fixes for the standalone layout were written and reverted before
+        // this existed; both were reasoning about values nobody had read.
+        //
+        // Off unless asked for by URL, so it costs a string comparison.
+        (function () {
+            if (!/(?:^|[?&])diag=layout(?:&|$)/.test(window.location.search || '')) return;
+            var box = document.createElement('pre');
+            box.style.cssText = 'position:fixed;left:6px;bottom:6px;z-index:2147483647;margin:0;' +
+                'background:rgba(0,0,0,.86);color:#0f0;font:11px/1.35 monospace;padding:8px 10px;' +
+                'border:1px solid #0f0;border-radius:6px;pointer-events:none;white-space:pre;';
+            document.body.appendChild(box);
+            var probe = document.createElement('div');
+            probe.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:100dvh;visibility:hidden;pointer-events:none;';
+            document.body.appendChild(probe);
+            function sa(side) {
+                // env() cannot be read from JS, so it is bounced through a
+                // custom property on a real element and read back computed.
+                var d = document.createElement('div');
+                d.style.cssText = 'position:fixed;top:0;left:0;height:env(safe-area-inset-' + side + ',0px);width:1px;visibility:hidden;';
+                document.body.appendChild(d);
+                var v = d.getBoundingClientRect().height;
+                d.remove();
+                return v;
+            }
+            function draw() {
+                var frame = document.querySelector('.app-frame');
+                var tr = document.querySelector('.app-transport');
+                var fr = frame ? frame.getBoundingClientRect() : null;
+                var tb = tr ? tr.getBoundingClientRect() : null;
+                box.textContent =
+                    'screen.height   ' + screen.height + '\n' +
+                    'innerHeight     ' + window.innerHeight + '\n' +
+                    '100dvh          ' + probe.getBoundingClientRect().height.toFixed(1) + '\n' +
+                    'safe top/bot    ' + sa('top').toFixed(1) + ' / ' + sa('bottom').toFixed(1) + '\n' +
+                    'frame top/bot   ' + (fr ? fr.top.toFixed(1) + ' / ' + fr.bottom.toFixed(1) : '-') + '\n' +
+                    'transport bot   ' + (tb ? tb.bottom.toFixed(1) : '-') + '\n' +
+                    'GAP under bar   ' + (tb ? (window.innerHeight - tb.bottom).toFixed(1) : '-') + '\n' +
+                    'banner-h        ' + getComputedStyle(document.documentElement).getPropertyValue('--reaset-banner-h').trim() + '\n' +
+                    'standalone      ' + (navigator.standalone === true) + '\n' +
+                    'body classes    ' + (document.body.className || '(none)');
+            }
+            draw();
+            setInterval(draw, 500);
+        })();
+
+        var BANNER_CSS = 'display:block;text-align:center;font-size:13px;color:#fff;' +
+            'font-weight:600;padding:6px 10px;letter-spacing:.02em;' +
+            'box-shadow:0 2px 8px rgba(0,0,0,.35);pointer-events:none;';
+
         // Minimal "reconnecting" banner, created lazily so no HTML markup changes.
         function _setConnBanner(show) {
             var el = document.getElementById('reaset-conn-banner');
@@ -5627,16 +5783,14 @@
                     el = document.createElement('div');
                     el.id = 'reaset-conn-banner';
                     el.textContent = '⚠ Reconectando con REAPER — control automático en pausa';
-                    el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;' +
-                        'background:#b45309;color:#fff;text-align:center;font-size:13px;' +
-                        'font-weight:600;padding:6px 10px;letter-spacing:.02em;' +
-                        'box-shadow:0 2px 8px rgba(0,0,0,.35);pointer-events:none;';
-                    document.body.appendChild(el);
+                    el.style.cssText = BANNER_CSS + 'background:#b45309;';
+                    _bannerHost().appendChild(el);
                 }
                 el.style.display = '';
             } else if (el) {
                 el.style.display = 'none';
             }
+            _bannerMeasure();
         }
 
         // Browser-level hints: react the instant the OS reports the drop/return.
@@ -6132,11 +6286,8 @@
                 if (!el) {
                     el = document.createElement('div');
                     el.id = 'reaset-director-conflict-banner';
-                    el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99998;' +
-                        'background:#7f1d1d;color:#fff;text-align:center;font-size:13px;' +
-                        'font-weight:600;padding:6px 10px;letter-spacing:.02em;' +
-                        'box-shadow:0 2px 8px rgba(0,0,0,.35);pointer-events:none;';
-                    document.body.appendChild(el);
+                    el.style.cssText = BANNER_CSS + 'background:#7f1d1d;';
+                    _bannerHost().appendChild(el);
                 }
                 // Refreshed on every show, not just on creation — the name may
                 // arrive a probe cycle after the id/timestamp already did.
@@ -6145,6 +6296,10 @@
             } else if (el) {
                 el.style.display = 'none';
             }
+            // The label can grow from one line to two when the other device's
+            // real name replaces its id, so re-measure on every show, not just
+            // when the element is first created.
+            _bannerMeasure();
         }
         // Polled independently of mode so a stored Director that skipped
         // chooseMode() on boot (see "Recalling a stored mode..." below) still
