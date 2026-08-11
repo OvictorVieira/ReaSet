@@ -138,7 +138,9 @@ def test_readme_header_contains_brand_assets_and_graphical_reaboot_button():
         "main%2Freaboot.json"
     )
 
-    assert '<img src="assets/reaset-logo.png" alt="ReaSet" width="520">' in readme
+    logo = '<img src="assets/reaset-logo.svg" alt="ReaSet" width="520">'
+    assert logo in readme
+    assert logo in spanish_readme
     assert '<img src="assets/readme-hero.svg"' in readme
     assert f'<a href="{install_url}">' in readme
     assert (

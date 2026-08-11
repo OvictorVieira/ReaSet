@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="assets/reaset-logo.png" alt="ReaSet" width="520">
+  <img src="assets/reaset-logo.svg" alt="ReaSet" width="520">
 </h1>
 
 <p align="center">
