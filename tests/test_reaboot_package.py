@@ -150,14 +150,37 @@ def test_readme_header_contains_brand_assets_and_graphical_reaboot_button():
     assert install_url in spanish_readme
 
     assets = [
-        ROOT / "assets/reaset-logo.png",
+        ROOT / "assets/reaset-logo.png",  # compatibility endpoint
+        ROOT / "assets/reaset-logo.svg",
         ROOT / "assets/install-via-reaboot.svg",
         ROOT / "assets/readme-hero.svg",
     ]
     assert all(asset.is_file() and asset.stat().st_size > 0 for asset in assets)
-    for asset in assets[1:]:
-        svg = ET.parse(asset).getroot()
-        assert svg.tag.endswith("svg")
+    for asset in assets:
+        if asset.suffix == ".svg":
+            svg = ET.parse(asset).getroot()
+            assert svg.tag.endswith("svg")
+
+
+def test_readme_logo_uses_a_transparent_note_cutout():
+    svg = ET.parse(ROOT / "assets/reaset-logo.svg").getroot()
+    namespace = "{http://www.w3.org/2000/svg}"
+    mask = svg.find(f".//{namespace}mask[@id='note-cutout']")
+
+    assert mask is not None
+    assert "transparent musical-note cutout" in svg.findtext(f"{namespace}desc", "")
+    visible_circle = svg.find(f"{namespace}circle")
+    assert visible_circle is not None
+    assert visible_circle.attrib["mask"] == "url(#note-cutout)"
+
+    # Black geometry subtracts alpha only inside the mask; it must never be a
+    # visible sibling painted over the green circle.
+    masked_elements = set(mask.iter())
+    black_elements = [
+        element for element in svg.iter() if element.attrib.get("fill") == "#000000"
+    ]
+    assert black_elements
+    assert all(element in masked_elements for element in black_elements)
 
 
 def test_readme_is_digestible_and_full_manuals_are_preserved():
