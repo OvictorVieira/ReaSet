@@ -141,7 +141,7 @@ def test_readme_header_contains_brand_assets_and_graphical_reaboot_button():
     logo = '<img src="assets/reaset-logo-transparent.svg" alt="ReaSet" width="520">'
     assert logo in readme
     assert logo in spanish_readme
-    assert '<img src="assets/readme-hero.svg"' in readme
+    assert '<img src="assets/readme-hero-v2.svg"' in readme
     assert f'<a href="{install_url}">' in readme
     assert (
         '<img src="assets/install-via-reaboot.svg" '
@@ -154,7 +154,7 @@ def test_readme_header_contains_brand_assets_and_graphical_reaboot_button():
         ROOT / "assets/reaset-logo.svg",  # previous SVG compatibility endpoint
         ROOT / "assets/reaset-logo-transparent.svg",
         ROOT / "assets/install-via-reaboot.svg",
-        ROOT / "assets/readme-hero.svg",
+        ROOT / "assets/readme-hero-v2.svg",
     ]
     assert all(asset.is_file() and asset.stat().st_size > 0 for asset in assets)
     for asset in assets:
