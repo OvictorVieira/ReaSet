@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">Your setlist. Your show. In control.</title>
+  <desc id="desc">ReaSet visual banner with live-performance feature indicators</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0E0E0E"/>
+      <stop offset="1" stop-color="#111A14"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="360" rx="24" fill="url(#bg)"/>
+  <circle cx="1050" cy="52" r="150" fill="#1ED760" opacity=".08" filter="url(#glow)"/>
+  <rect x="1" y="1" width="1198" height="358" rx="23" fill="none" stroke="#FFFFFF" stroke-opacity=".09" stroke-width="2"/>
+
+  <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Helvetica Neue',Arial,sans-serif">
+    <rect x="62" y="48" width="304" height="34" rx="17" fill="#1ED760" fill-opacity=".12" stroke="#1ED760" stroke-opacity=".45"/>
+    <circle cx="84" cy="65" r="5" fill="#1ED760"/>
+    <text x="214" y="71" fill="#1ED760" font-size="15" font-weight="700" letter-spacing=".5" text-anchor="middle" textLength="245" lengthAdjust="spacingAndGlyphs">BUILT FOR LIVE PERFORMANCE</text>
+
+    <text x="62" y="155" fill="#1ED760" font-size="62" font-weight="900">Your setlist.</text>
+    <text x="62" y="220" fill="#B3B3B3" font-size="62" font-weight="400">Your show.</text>
+    <text x="62" y="285" fill="#1ED760" font-size="62" font-weight="900">In control.</text>
+
+    <g transform="translate(690 88)">
+      <rect width="438" height="202" rx="18" fill="#181818" stroke="#FFFFFF" stroke-opacity=".10"/>
+      <text x="26" y="38" fill="#555555" font-size="12" font-weight="700" letter-spacing="2">LIVE STATUS</text>
+      <circle cx="314" cy="33" r="5" fill="#1ED760"/>
+      <text x="328" y="38" fill="#1ED760" font-size="12" font-weight="700" textLength="78" lengthAdjust="spacingAndGlyphs">CONNECTED</text>
+      <line x1="26" y1="57" x2="412" y2="57" stroke="#FFFFFF" stroke-opacity=".08"/>
+      <g font-family="'SF Mono','Roboto Mono',Consolas,monospace" font-size="13">
+        <circle cx="34" cy="88" r="5" fill="#1ED760"/><text x="51" y="93" fill="#FFFFFF" font-weight="700">SHOW</text><text x="272" y="93" fill="#B3B3B3">Setlist ready</text>
+        <circle cx="34" cy="124" r="5" fill="#64D2FF"/><text x="51" y="129" fill="#FFFFFF" font-weight="700">LYRICS</text><text x="272" y="129" fill="#B3B3B3">Live sync</text>
+        <circle cx="34" cy="160" r="5" fill="#BF5AF2"/><text x="51" y="165" fill="#FFFFFF" font-weight="700">CHORDS</text><text x="272" y="165" fill="#B3B3B3">Live sync</text>
+      </g>
+      <rect x="26" y="179" width="386" height="4" rx="2" fill="#232323"/>
+      <rect x="26" y="179" width="254" height="4" rx="2" fill="#1ED760"/>
+    </g>
+  </g>
+</svg>

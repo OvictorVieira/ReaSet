@@ -24,7 +24,7 @@
   <sub>Uso gratuito · macOS · Windows · Linux</sub>
 </p>
 
-<img src="assets/readme-hero.svg" alt="Tu setlist. Tu show. En control.">
+<img src="assets/readme-hero-v2.svg" alt="Tu setlist. Tu show. En control.">
 
 ## Hecho para el escenario
 
