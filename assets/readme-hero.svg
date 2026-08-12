@@ -15,7 +15,7 @@
   <rect x="1" y="1" width="1198" height="358" rx="23" fill="none" stroke="#FFFFFF" stroke-opacity=".09" stroke-width="2"/>
 
   <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Helvetica Neue',Arial,sans-serif">
-    <rect x="64" y="48" width="275" height="34" rx="17" fill="#1ED760" fill-opacity=".12" stroke="#1ED760" stroke-opacity=".45"/>
+    <rect x="62" y="48" width="304" height="34" rx="17" fill="#1ED760" fill-opacity=".12" stroke="#1ED760" stroke-opacity=".45"/>
     <circle cx="84" cy="65" r="5" fill="#1ED760"/>
     <text x="99" y="71" fill="#1ED760" font-size="15" font-weight="700" letter-spacing=".5">BUILT FOR LIVE PERFORMANCE</text>
 
@@ -26,8 +26,8 @@
     <g transform="translate(690 88)">
       <rect width="438" height="202" rx="18" fill="#181818" stroke="#FFFFFF" stroke-opacity=".10"/>
       <text x="26" y="38" fill="#555555" font-size="12" font-weight="700" letter-spacing="2">LIVE STATUS</text>
-      <circle cx="375" cy="33" r="5" fill="#1ED760"/>
-      <text x="388" y="38" fill="#1ED760" font-size="12" font-weight="700">CONNECTED</text>
+      <circle cx="322" cy="33" r="5" fill="#1ED760"/>
+      <text x="412" y="38" fill="#1ED760" font-size="12" font-weight="700" text-anchor="end">CONNECTED</text>
       <line x1="26" y1="57" x2="412" y2="57" stroke="#FFFFFF" stroke-opacity=".08"/>
       <g font-family="'SF Mono','Roboto Mono',Consolas,monospace" font-size="13">
         <circle cx="34" cy="88" r="5" fill="#1ED760"/><text x="51" y="93" fill="#FFFFFF" font-weight="700">SHOW</text><text x="272" y="93" fill="#B3B3B3">Setlist ready</text>
