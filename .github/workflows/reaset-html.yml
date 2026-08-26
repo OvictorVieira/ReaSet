@@ -36,9 +36,14 @@ jobs:
       # Node is preinstalled on GitHub-hosted runners, but the tests SKIP when
       # it is missing rather than fail — so relying on that implicitly would
       # turn a broken runner image into a silent pass. Pinned explicitly.
+      #
+      # Current LTS rather than the oldest version that works: the runners
+      # already warn that Node 20 is on its way out, and `node --check` plus a
+      # handful of ES5 functions will run on anything, so there is nothing to
+      # gain from pinning to something with a deprecation notice on it.
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - name: Install test runner
         run: python -m pip install --disable-pip-version-check pytest
       - name: Parse the inline script and check the transport/block contracts
