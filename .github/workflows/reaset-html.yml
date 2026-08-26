@@ -1,0 +1,45 @@
+name: Validate ReaSet.html
+
+# Separate from the ReaBoot workflow on purpose. That one validates the
+# packaging surface (index, recipe, immutable source hashes) and is
+# path-filtered to it; ReaSet.html matches none of those paths, so until this
+# file existed nothing in CI ever looked at the file the whole app lives in.
+#
+# The paths below list only what is actually validated. Reaset.lua is
+# deliberately absent: nothing here checks it yet, and a green tick that
+# checked nothing is worse than no tick.
+
+on:
+  push:
+    paths:
+      - ReaSet.html
+      - tests/test_reaset_html.py
+      - .github/workflows/reaset-html.yml
+  pull_request:
+    paths:
+      - ReaSet.html
+      - tests/test_reaset_html.py
+      - .github/workflows/reaset-html.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Node is preinstalled on GitHub-hosted runners, but the tests SKIP when
+      # it is missing rather than fail — so relying on that implicitly would
+      # turn a broken runner image into a silent pass. Pinned explicitly.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install test runner
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Parse the inline script and check the transport/block contracts
+        run: python -m pytest tests/test_reaset_html.py -q
