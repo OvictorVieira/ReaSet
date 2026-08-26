@@ -495,6 +495,43 @@ def test_view_tabs_have_one_owner(script_body: str) -> None:
         )
 
 
+@requires_node
+def test_every_stop_button_says_whether_it_needs_a_hold() -> None:
+    """A Stop button that needs a three-second hold must say so.
+
+    Hold is the default and the right default — a stray tap must not stop a
+    show. But the label was a literal "STOP" in the main transport's markup and
+    in Live View's, and nothing ever updated either: the button said STOP,
+    wanted three seconds, and did nothing at all for a tap. Silently. That is
+    the worst failure a transport control can have, and it cost a real testing
+    session.
+
+    Asserts every Stop button carries a label element, and that the one
+    function that writes them covers all of them at once.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    # Each handler is a Stop control; each must have a label to update.
+    stop_buttons = re.findall(r"<button[^>]*(?:handleMainStopPress|handleStopPress)[^>]*>(.*?)</button>",
+                              html, re.S)
+    assert len(stop_buttons) >= 3, f"expected the three Stop buttons, found {len(stop_buttons)}"
+    for markup in stop_buttons:
+        assert 'class="stop-label"' in markup, (
+            "a Stop button has no .stop-label, so its text can never be kept in "
+            f"step with the hold mode: {markup.strip()[:80]}"
+        )
+
+    scripts = inline_scripts(html)[0]
+    body = extract_function(scripts, "_refreshStopLabels")
+    assert "querySelectorAll('.stop-label')" in body, (
+        "_refreshStopLabels no longer writes every label at once — one button "
+        "will drift out of step with the others"
+    )
+    assert "STOP (Hold)" in body and "_stopMode" in body, (
+        "the label no longer reflects _stopMode"
+    )
+
+
 def test_modal_buttons_use_classes_that_exist(script_body: str) -> None:
     """showAppConfirm() REPLACES the OK button's className.
 

@@ -4694,9 +4694,14 @@
             <button class="t-btn t-btn-stop" id="main-stop-btn" onmousedown="handleMainStopPress(this)"
                 onmouseup="handleMainStopRelease(this)" ontouchstart="handleMainStopPress(this)"
                 ontouchend="handleMainStopRelease(this)" style="user-select:none;-webkit-user-select:none">■
-                STOP</button>
+                <span class="stop-label">STOP</span></button>
             <button id="footer-loop-btn" class="t-btn t-btn-loop" onclick="toggleCurrentLoop()">↻ Loop</button>
-            <button class="t-btn t-btn-sync" onclick="wwr_start()">SYNC</button>
+            <!-- wwr_start() restarts REAPER's polling loop. This said SYNC,
+                 which beside PLAY / STOP / Loop reads as "sync the setlist" —
+                 the one thing it does not do. It is the recovery a musician has
+                 when a venue's wifi drops mid-show, so it is named for that. -->
+            <button class="t-btn t-btn-sync" onclick="wwr_start()"
+                title="Restart the connection to REAPER. Does not change the setlist.">RECONNECT</button>
         </div>
     </div>
 
@@ -4878,8 +4883,9 @@
 
         <div class="sidebar-section">
             <div class="sidebar-section-title">REAPER Connection</div>
-            <button class="sidebar-action-btn sab-slate" onclick="wwr_start();closeSidebar()">
-                <span class="sab-icon">↻</span> Sync
+            <button class="sidebar-action-btn sab-slate" onclick="wwr_start();closeSidebar()"
+                title="Restart the connection to REAPER. Does not change the setlist.">
+                <span class="sab-icon">↻</span> Reconnect
             </button>
         </div>
 
@@ -5358,7 +5364,7 @@
             <button class="lt-btn lt-stop" onmousedown="handleMainStopPress(this)"
                 onmouseup="handleMainStopRelease(this)" ontouchstart="handleMainStopPress(this)"
                 ontouchend="handleMainStopRelease(this)" style="user-select:none;-webkit-user-select:none">■
-                STOP</button>
+                <span class="stop-label">STOP</span></button>
             <button class="lt-btn lt-play" id="live-play-btn" onclick="togglePlay()">▶ PLAY</button>
             <button class="lt-btn lt-ghost" onclick="liveNav('next', event)">⏭</button>
             <button class="lt-btn lt-ghost" id="live-loop-btn" onclick="toggleCurrentLoop(event)">↻ Loop</button>
@@ -5505,7 +5511,7 @@
                         <button class="lt-btn lt-ghost" onclick="canvasNav('prev')">⏮</button>
                         <button class="lt-btn lt-stop" id="cw-stop-btn" onmousedown="handleStopPress()"
                             onmouseup="handleStopRelease()" ontouchstart="handleStopPress()"
-                            ontouchend="handleStopRelease()" style="user-select:none;-webkit-user-select:none">■ STOP
+                            ontouchend="handleStopRelease()" style="user-select:none;-webkit-user-select:none">■ <span class="stop-label">STOP</span>
                             (Hold)</button>
                         <button class="lt-btn lt-play" id="cw-play-btn" onclick="togglePlay()">▶ PLAY</button>
                         <button class="lt-btn lt-ghost" onclick="canvasNav('next')">⏭</button>
@@ -6103,6 +6109,11 @@
             ["Green", "Verde"],
             ["Blue", "Azul"],
             ["CONTROLLER", "CONTROLLER"],
+            ["STOP (Hold)", "STOP (Mantener)"],
+            ["RECONNECT", "RECONECTAR"],
+            ["Reconnect", "Reconectar"],
+            ["Restart the connection to REAPER. Does not change the setlist.",
+             "Reinicia la conexión con REAPER. No cambia el setlist."],
             ["Setlist changed", "Setlist cambiado"],
             ["also claimed Director — this device is keeping control",
              "también reclamó Director — este dispositivo mantiene el control"],
@@ -11862,12 +11873,7 @@
         // Stop button Tap/Hold toggle
         var _stopMode = localStorage.getItem('reaset_stop_mode') || 'hold'; // 'hold' | 'tap'
         function toggleStopMode() {
-            _stopMode = (_stopMode === 'hold') ? 'tap' : 'hold';
-            localStorage.setItem('reaset_stop_mode', _stopMode);
-            var btn = document.getElementById('cw-stop-mode-btn');
-            var stopBtn = document.getElementById('cw-stop-btn');
-            if (btn) btn.innerText = 'Mode: ' + (_stopMode === 'hold' ? 'Hold' : 'Tap');
-            if (stopBtn) stopBtn.innerText = (_stopMode === 'hold') ? 'STOP (Hold)' : 'STOP';
+            setStopMode(_stopMode === 'hold' ? 'tap' : 'hold');
         }
         function handleStopPress() {
             if (_stopMode === 'tap') { smartStop(); return; }
@@ -11892,28 +11898,35 @@
             cancelStopHold();
         }
         // Initialise stop mode UI
-        (function initStopMode() {
-            var btn = document.getElementById('cw-stop-mode-btn');
-            var stopBtn = document.getElementById('cw-stop-btn');
-            if (btn) btn.innerText = 'Mode: ' + (_stopMode === 'hold' ? 'Hold' : 'Tap');
-            if (stopBtn) stopBtn.innerText = (_stopMode === 'hold') ? 'STOP (Hold)' : 'STOP';
-            // Sync sidebar toggle
+        (function initStopMode() { _refreshStopLabels(); })();
+
+        // EVERY Stop button says whether it needs a hold.
+        //
+        // Hold is the default, and it is the right default: a stray tap must
+        // not stop a show. But the label was a literal "STOP" in the markup of
+        // the main transport and of Live View, and nothing ever updated either
+        // — so on a fresh device the button said STOP, wanted three seconds,
+        // and did nothing at all for a tap. Silently. No error, no feedback,
+        // just a transport that would not stop.
+        //
+        // Only the Canvas copy relabelled itself, and it did that by
+        // overwriting innerText, which also threw away the ■ in front. Hence a
+        // label span per button: the icon is markup and stays put.
+        function _refreshStopLabels() {
+            var txt = (_stopMode === 'hold') ? t('STOP (Hold)') : t('STOP');
+            var els = document.querySelectorAll('.stop-label');
+            for (var i = 0; i < els.length; i++) els[i].textContent = txt;
+            var cwBtn = document.getElementById('cw-stop-mode-btn');
+            if (cwBtn) cwBtn.innerText = 'Mode: ' + (_stopMode === 'hold' ? 'Hold' : 'Tap');
             var sidebarToggle = document.getElementById('stopHoldToggle');
             if (sidebarToggle) sidebarToggle.checked = (_stopMode === 'hold');
-        })();
+        }
 
         // Unified setStopMode — called by sidebar toggle & canvas toggle
         function setStopMode(mode) {
             _stopMode = mode;
             localStorage.setItem('reaset_stop_mode', _stopMode);
-            // Sync canvas widget
-            var cwBtn = document.getElementById('cw-stop-mode-btn');
-            var cwStop = document.getElementById('cw-stop-btn');
-            if (cwBtn) cwBtn.innerText = 'Mode: ' + (_stopMode === 'hold' ? 'Hold' : 'Tap');
-            if (cwStop) cwStop.innerText = (_stopMode === 'hold') ? 'STOP (Hold)' : 'STOP';
-            // Sync sidebar checkbox
-            var sidebarToggle = document.getElementById('stopHoldToggle');
-            if (sidebarToggle) sidebarToggle.checked = (_stopMode === 'hold');
+            _refreshStopLabels();
         }
 
         // Main bottom-bar Stop button Tap/Hold handlers
