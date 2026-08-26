@@ -334,6 +334,72 @@ def test_race_harness_dependencies_still_exist(script_body: str, kind: str, name
     )
 
 
+@requires_node
+def test_save_current_state_skips_unchanged_state(script_body: str) -> None:
+    """saveCurrentState() must not re-publish a state that has not changed.
+
+    It is the choke point for edits, but syncRegions() calls it on every
+    REGION reply — polled once a second — so without this guard the whole
+    setlist is re-uploaded and a sync push re-armed every second of every
+    session, whether or not a flag moved. Measured on a real project, that
+    flood made REAPER drop most of the SET/POS commands a user's taps
+    produced: 102 commands in 8 seconds, 12 of them the user's.
+
+    Runs the real function with the publishing side effects stubbed and
+    counts how many of three identical calls get through.
+    """
+    harness = (
+        """
+        var calls = 0, pushes = 0;
+        // Declared beside saveCurrentState() in ReaSet.html, so it is not part
+        // of the extracted function and has to be provided here.
+        var _lastSavedSig = null;
+        var currentSetlistName = 'Set A';
+        var displayList = [
+            { id: '1', chain: true,  skipped: false, loop: false },
+            { id: '2', chain: false, skipped: false, loop: false }
+        ];
+        var setlists = {}, STORAGE_KEY = 'k', CURRENT_KEY = 'c';
+        var g_songOverrides = {};
+        function getOverride(id) { return g_songOverrides[id] || {}; }
+        function getSongEnd(song) {
+            var ov = getOverride(song.id);
+            if (ov.stopAfter) return 'stop';
+            if (ov.delayAfter > 0) return 'wait';
+            return song.chain ? 'continue' : 'auto';
+        }
+        var localStorage = { setItem: function () {} };
+        var document = { getElementById: function () { return { checked: true }; } };
+        function _syncPushSoon() { pushes++; }
+        function _libraryEnqueue() { calls++; }
+        """
+        + extract_function(script_body, "saveCurrentState")
+        + """
+        saveCurrentState(); saveCurrentState(); saveCurrentState();
+        var afterIdentical = pushes;
+        // A song switching from auto to stop leaves chain false and the
+        // id/chain/skipped/loop tuple identical — the signature has to notice
+        // anyway, or every follower keeps drawing the old blocks.
+        g_songOverrides['2'] = { stopAfter: true };
+        saveCurrentState();
+        console.log(afterIdentical + ',' + pushes);
+        """
+    )
+    assert re.search(r"\bvar\s+_lastSavedSig\b", script_body), (
+        "_lastSavedSig is gone from ReaSet.html — saveCurrentState() would throw "
+        "on the real page, where an undeclared read is not silently tolerated"
+    )
+    identical, after_edit = run_node(harness).strip().split(",")
+    assert identical == "1", (
+        f"three identical saves produced {identical} pushes — the unchanged-state "
+        f"guard is gone, and the request queue floods again"
+    )
+    assert after_edit == "2", (
+        "changing a song's end-state produced no push, so followers would keep "
+        "rendering the previous blocks"
+    )
+
+
 def test_modal_buttons_use_classes_that_exist(script_body: str) -> None:
     """showAppConfirm() REPLACES the OK button's className.
 

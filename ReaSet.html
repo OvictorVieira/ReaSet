@@ -9101,8 +9101,41 @@
             if (cs !== lastRenderChecksum) { lastRenderChecksum = cs; renderSetlist(); updatePlaybackUI(); }
         }
 
+        // Signature of everything that leaves this device, so an unchanged
+        // state can be recognised as unchanged.
+        var _lastSavedSig = null;
+
         function saveCurrentState() {
             var fmt = displayList.map(function (r) { return { id: r.id, chain: r.chain, skipped: r.skipped, loop: r.loop }; });
+
+            // SAVE ONLY WHAT CHANGED.
+            //
+            // This is the choke point for EDITS, but syncRegions() calls it on
+            // every REGION reply — and REGION is polled once a second. So the
+            // whole setlist was re-uploaded to the project library, and a
+            // shared-sync push re-armed, every second of every session,
+            // whether or not a single flag had moved. Roughly forty
+            // ~800-character base64 writes a second, forever.
+            //
+            // That was survivable while nothing competed for the request
+            // queue. It stopped being survivable when tapping a song became a
+            // cue — a command that has to LAND, promptly, while the user taps
+            // again. Measured on a real project: 102 commands in the 8 seconds
+            // of a click sequence, of which 12 were the user's; REAPER dropped
+            // most of the SET/POS in between.
+            //
+            // The signature covers everything that reaches the wire, not just
+            // `fmt`: switching a song from auto to stop leaves chain false and
+            // fmt identical, while changing what every follower renders.
+            var _asEl = document.getElementById('autoStopToggle');
+            var sig = currentSetlistName + '|' + ((!_asEl || _asEl.checked) ? 1 : 0) + '|' +
+                JSON.stringify(displayList.map(function (r) {
+                    return [r.id, !!r.chain, !!r.skipped, !!r.loop,
+                            getSongEnd(r), getOverride(r.id).delayAfter || 0];
+                }));
+            if (sig === _lastSavedSig) return;
+            _lastSavedSig = sig;
+
             setlists[currentSetlistName] = fmt;
             localStorage.setItem(STORAGE_KEY, JSON.stringify(setlists));
             localStorage.setItem(CURRENT_KEY, currentSetlistName);
