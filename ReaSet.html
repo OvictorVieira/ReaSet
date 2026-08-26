@@ -5521,7 +5521,8 @@
                          ";GET/EXTSTATE/ReaSet/setlistRev;GET/EXTSTATE/ReaSet/setlistFileRev" +
                          ";GET/EXTSTATE/ReaSet/directorPinHash" +
                          ";GET/EXTSTATE/ReaSet/directorHeartbeatId;GET/EXTSTATE/ReaSet/directorHeartbeatTs" +
-                         ";GET/EXTSTATE/ReaSet/directorHeartbeatName";
+                         ";GET/EXTSTATE/ReaSet/directorHeartbeatName" +
+                         ";GET/EXTSTATE/ReaSet/directorClaimId";
         wwr_req(_diagProbe);
         wwr_req_recur(_diagProbe, 2000);
         wwr_start();
@@ -5721,6 +5722,16 @@
             ["Green", "Verde"],
             ["Blue", "Azul"],
             ["Setlist changed", "Setlist cambiado"],
+            ["also claimed Director — this device is keeping control",
+             "también reclamó Director — este dispositivo mantiene el control"],
+            ["is already controlling this REAPER session.", "ya está controlando esta sesión de REAPER."],
+            ["Only one Director is allowed at a time.", "Solo se permite un Director a la vez."],
+            ["Take over as Director? The other device becomes read-only.",
+             "¿Tomar el control como Director? El otro dispositivo pasa a solo lectura."],
+            ["Another device claimed Director first — opening read-only.",
+             "Otro dispositivo reclamó Director primero — se abre en solo lectura."],
+            ["is now the Director — this device is read-only",
+             "ahora es el Director — este dispositivo es de solo lectura"],
             ["Amber", "Ámbar"],
             ["Teal", "Verde azulado"]
         ];
@@ -6714,23 +6725,157 @@
             return _directorHeartbeatName ? ('El dispositivo "' + _directorHeartbeatName + '"') : 'Otro dispositivo';
         }
 
+        // ── Director lease (#6) ─────────────────────────────────────────────
+        //
+        // The invariant is "at most one active Director per REAPER session".
+        // The old code only WARNED: a second device could read the warning,
+        // press Continue, and both would drive the same REAPER.
+        //
+        // REAPER's ExtState is the only place every device can agree on a
+        // value, and it is single-valued and last-writer-wins. That is enough
+        // to arbitrate without inventing LAN discovery or a lease server:
+        //
+        //   1. CLAIM   write directorClaimId = me
+        //   2. SETTLE  wait long enough for at least one probe to read it back
+        //   3. CHECK   if the value still names me, the lease is mine
+        //
+        // Two devices claiming within the same second both write; the later
+        // write survives; the earlier one reads a foreign id and stands down.
+        // Neither needs to know about the other.
+        //
+        // Once held, the lease is asserted by a heartbeat. A holder that reads
+        // a foreign, LIVE heartbeat has been displaced and stands down. If both
+        // somehow beat at once, the id comparison breaks the tie the same way
+        // on both devices, so exactly one yields rather than both.
+        var DIRECTOR_BEAT_MS  = 4000;
+        // Three missed beats, not two. Switching apps on a phone throttles
+        // timers, and #6 is explicit that a brief background must not cost the
+        // lease. A stale lease only ever enables an EXPLICIT takeover — never
+        // an automatic one — so erring long here costs nothing.
+        var DIRECTOR_TTL_MS   = 12000;
+        // Long enough for at least one 2s probe to read the claim back.
+        var DIRECTOR_CLAIM_MS = 2600;
+
+        var _directorClaimId  = '';
+        var _directorLease    = 'none';   // 'none' | 'pending' | 'held' | 'lost'
+
+        // The lease keys are the ONE write a non-Director is allowed to make.
+        //
+        // wwr_req's Player gate exists to guarantee a read-only device can
+        // never move REAPER, and that guarantee is untouched here: these
+        // commands write ReaSet's own arbitration keys under SET/EXTSTATE
+        // ReaSet/director*, never a transport action, never a setlist chunk.
+        // Without this, claiming a lease would be impossible — the claim has to
+        // happen BEFORE the device is a Director, and the gate would drop it,
+        // leaving the arbitration permanently deadlocked in favour of whoever
+        // was already there.
+        function _dcWriteLease(cmd, reason) {
+            RSDiag.cmd(cmd, reason || 'director-lease');
+            return _wwrReqReal.call(window, cmd);
+        }
+
         function _dcForeignActive() {
             return !!_directorHeartbeatId && _directorHeartbeatId !== _syncInstanceId() &&
-                   (Date.now() - _dcLastChangeAt) < 9000; // ~2 missed 4s beats = gone
+                   (Date.now() - _dcLastChangeAt) < DIRECTOR_TTL_MS;
+        }
+
+        // Asks REAPER for the lease and reports back. Fails CLOSED: no
+        // evidence that the claim landed means no lease.
+        function requestDirectorLease(onDecision) {
+            var me = _syncInstanceId();
+            _directorLease = 'pending';
+            RSDiag.log('LEASE_CLAIM', { me: me, incumbent: _directorHeartbeatId || '-' });
+            _dcWriteLease('SET/EXTSTATE/ReaSet/directorClaimId/' + me +
+                          ';SET/EXTSTATE/ReaSet/directorClaimTs/' + Date.now(), 'director-claim');
+            setTimeout(function () {
+                // Re-check the heartbeat as well as the claim. Two devices
+                // claiming far enough apart that neither sees the other's claim
+                // can both win their own — the second one's incumbent check ran
+                // before the first one's heartbeat had propagated. The
+                // heartbeat has had a full settle window to arrive by now, so
+                // looking again here closes most of that gap; the tiebreak in
+                // _dcWatchConflict closes the rest within a couple of seconds.
+                var won = (_directorClaimId === me) && !_dcForeignActive();
+                RSDiag.log(won ? 'LEASE_GRANTED' : 'LEASE_DENIED', {
+                    me: me,
+                    claimHolder: _directorClaimId || '(no reply)',
+                    incumbent: _directorHeartbeatId || '-'
+                });
+                _directorLease = won ? 'held' : 'lost';
+                onDecision(won);
+            }, DIRECTOR_CLAIM_MS);
         }
 
         function _dcStartHeartbeat() {
             if (_dcHeartbeatTimer) return;
             var beat = function () {
-                wwr_req('SET/EXTSTATE/ReaSet/directorHeartbeatId/' + _syncInstanceId() +
-                         ';SET/EXTSTATE/ReaSet/directorHeartbeatTs/' + Date.now() +
-                         ';SET/EXTSTATE/ReaSet/directorHeartbeatName/' + encodeURIComponent(_deviceName()));
+                _dcWriteLease('SET/EXTSTATE/ReaSet/directorHeartbeatId/' + _syncInstanceId() +
+                              ';SET/EXTSTATE/ReaSet/directorHeartbeatTs/' + Date.now() +
+                              ';SET/EXTSTATE/ReaSet/directorHeartbeatName/' + encodeURIComponent(_deviceName()),
+                              'director-heartbeat');
             };
             beat();
-            _dcHeartbeatTimer = setInterval(beat, 4000);
+            _dcHeartbeatTimer = setInterval(beat, DIRECTOR_BEAT_MS);
         }
         function _dcStopHeartbeat() {
             if (_dcHeartbeatTimer) { clearInterval(_dcHeartbeatTimer); _dcHeartbeatTimer = null; }
+        }
+
+        // Stand down: stop asserting the lease and drop to read-only, right
+        // now, without waiting for a rerender. wwr_req's Player gate is the
+        // actual enforcement, so flipping REASET_MODE revokes write authority
+        // in the same tick — a displaced Director cannot get one more command
+        // through on its way out.
+        //
+        // The stored mode is deliberately NOT rewritten to 'player'. This
+        // device is still a Director by intent; it simply does not hold the
+        // lease right now, and forcing it to re-pick the mode on the next
+        // reload would be its own kind of mid-show trap.
+        function _dcStandDown(reason) {
+            if (REASET_MODE !== 'director') return;
+            RSDiag.log('LEASE_STAND_DOWN', { reason: reason });
+            _directorLease = 'lost';
+            _dcStopHeartbeat();
+            REASET_MODE = 'player';
+            applyModeUI();
+            _setDisplacedBanner(true);
+        }
+
+        // Runs once, a couple of probe cycles after boot, for a device that
+        // remembers being Director.
+        function _dcVerifyStoredDirector() {
+            if (REASET_MODE !== 'director') return;
+            if (_dcForeignActive()) {
+                // Someone is holding the lease right now. Standing down is not
+                // a downgrade of intent — the mode stays stored — it just means
+                // this device is not the one driving REAPER at the moment.
+                // Reclaiming is available from the mode badge, deliberately as
+                // an explicit act.
+                _dcStandDown('another-director-active-on-boot');
+                return;
+            }
+            requestDirectorLease(function (won) {
+                if (!won) { _dcStandDown('lost-boot-claim'); return; }
+                applyModeUI();   // lease held → the heartbeat starts here
+            });
+        }
+
+        function _setDisplacedBanner(show) {
+            var el = document.getElementById('reaset-director-displaced-banner');
+            if (show) {
+                if (!el) {
+                    el = document.createElement('div');
+                    el.id = 'reaset-director-displaced-banner';
+                    el.style.cssText = BANNER_CSS + 'background:#7f1d1d;';
+                    _bannerHost().appendChild(el);
+                }
+                el.textContent = '\u26A0 ' + _dcForeignLabel() + ' ' +
+                    t('is now the Director — this device is read-only');
+                el.style.display = '';
+            } else if (el) {
+                el.style.display = 'none';
+            }
+            _bannerMeasure();
         }
 
         // Small red banner, same lazy-create pattern as the reconnect banner.
@@ -6747,7 +6892,8 @@
                 }
                 // Refreshed on every show, not just on creation — the name may
                 // arrive a probe cycle after the id/timestamp already did.
-                el.textContent = '⚠ ' + _dcForeignLabel() + ' también está en modo Director — ambos pueden controlar REAPER a la vez';
+                el.textContent = '⚠ ' + _dcForeignLabel() + ' ' +
+                    t('also claimed Director — this device is keeping control');
                 el.style.display = '';
             } else if (el) {
                 el.style.display = 'none';
@@ -6759,9 +6905,26 @@
         }
         // Polled independently of mode so a stored Director that skipped
         // chooseMode() on boot (see "Recalling a stored mode..." below) still
-        // gets warned if a second Director shows up mid-show.
+        // reacts if another Director shows up mid-show.
+        //
+        // The banner is now the fallback, not the outcome. A holder that sees a
+        // live foreign heartbeat has been displaced and stands down. If both
+        // devices somehow beat at once — the claim protocol makes this hard,
+        // not impossible — the id comparison resolves it identically on both,
+        // so exactly one yields instead of both, or neither.
         function _dcWatchConflict() {
-            setInterval(function () { _setConflictBanner(REASET_MODE === 'director' && _dcForeignActive()); }, 2000);
+            setInterval(function () {
+                if (REASET_MODE !== 'director') { _setConflictBanner(false); return; }
+                if (!_dcForeignActive()) { _setConflictBanner(false); _setDisplacedBanner(false); return; }
+                if (_syncInstanceId() < _directorHeartbeatId) {
+                    _dcStandDown('foreign-heartbeat-wins-tiebreak');
+                    return;
+                }
+                // We win the tiebreak, so we keep the lease and re-assert it.
+                // Still warn: two Directors beating at all is a fault worth
+                // seeing, even when it resolves in our favour.
+                _setConflictBanner(true);
+            }, 2000);
         }
 
         function _initProjectStorage(newKey) {
@@ -7530,11 +7693,43 @@
                     if (entered === null) return; // cancelled — stay on the selector
                     if (_pinHash(entered.trim()) !== _directorPinHash) { window.alert('PIN incorrecto.'); return; }
                 }
+                // BLOCKED BY DEFAULT, not warned about.
+                //
+                // The old flow showed this same fact as a confirm() and let the
+                // user proceed, which meant the documented invariant was really
+                // "one Director unless somebody clicks OK". Two control
+                // surfaces issuing transport at one REAPER is not a state to
+                // offer as an option in a dialog nobody reads mid-soundcheck.
+                //
+                // Takeover still exists — it has to, or a Director whose laptop
+                // died would lock everyone out — but it is a separate,
+                // deliberate second confirmation, and it revokes the old
+                // device's authority rather than running two.
                 if (_dcForeignActive()) {
-                    if (!window.confirm('⚠ ' + _dcForeignLabel() + ' ya está activo como Director.\n' +
-                        'Si continúas, ambos podrán controlar REAPER al mismo tiempo.\n¿Continuar de todas formas?')) return;
+                    RSDiag.log('LEASE_BLOCKED', { incumbent: _directorHeartbeatId });
+                    if (!window.confirm('\u26A0 ' + _dcForeignLabel() + ' ' +
+                        t('is already controlling this REAPER session.') + '\n\n' +
+                        t('Only one Director is allowed at a time.') + '\n\n' +
+                        t('Take over as Director? The other device becomes read-only.'))) {
+                        return; // stay on the selector; Player remains available
+                    }
                 }
+                // Whether this is a first claim or an explicit takeover, the
+                // lease decides. Nothing becomes Director on optimism.
+                requestDirectorLease(function (won) {
+                    if (!won) {
+                        window.alert(t('Another device claimed Director first — opening read-only.'));
+                        _applyChosenMode('player');
+                        return;
+                    }
+                    _applyChosenMode('director');
+                });
+                return;
             }
+            _applyChosenMode(mode);
+        }
+
+        function _applyChosenMode(mode) {
             REASET_MODE = mode;
             try { localStorage.setItem('reaset_mode', mode); } catch (e) { /* private mode etc — mode still applies for this session */ }
             // The mode starts as 'player' and only resolves here or when it is
@@ -7557,7 +7752,12 @@
             badge.classList.toggle('is-player',   REASET_MODE === 'player');
             document.getElementById('mode-badge-label').textContent = (REASET_MODE === 'director') ? t('DIRECTOR') : t('PLAYER');
             if (REASET_MODE === 'player') { _syncStartPlayerPolling(); _dcStopHeartbeat(); }
-            else { _dcStartHeartbeat(); }
+            // 'pending' must not beat. A Director reconnecting after someone
+            // else took over would otherwise announce itself as live before
+            // finding out it has been displaced, and the incumbent would see a
+            // foreign heartbeat and start doubting its own lease.
+            else if (_directorLease === 'lost' || _directorLease === 'pending') { _dcStopHeartbeat(); }
+            else { _dcStartHeartbeat(); _setDisplacedBanner(false); }
         }
 
         // Boot: force the picker only on a genuinely fresh device (no stored
@@ -7565,7 +7765,28 @@
         // device already chose Director deliberately at some point — it just
         // avoids re-forcing the choice on every accidental refresh or restart,
         // which would otherwise strand a Director mid-show behind a modal.
-        if (REASET_MODE_STORED) { applyModeUI(); } else { openModeSelector(true); }
+        // A STORED DIRECTOR MODE IS A MEMORY, NOT A CLAIM ON THE PRESENT.
+        //
+        // The old boot path started a heartbeat straight from localStorage with
+        // no check at all, which is how a Director that dropped off the Wi-Fi
+        // and came back silently re-armed itself alongside whoever had taken
+        // over in the meantime.
+        //
+        // The UI is applied immediately — a Director reloading mid-show must
+        // not be stranded behind a modal, and REAPER's own playback is
+        // unaffected by any of this — but the lease is verified before this
+        // device starts asserting it. In the short window before that resolves
+        // it can still act; blocking a working Director on the chance that
+        // someone else took over would be its own kind of mid-show trap.
+        if (REASET_MODE_STORED) {
+            if (REASET_MODE === 'director') {
+                _directorLease = 'pending';
+                applyModeUI();
+                setTimeout(_dcVerifyStoredDirector, DIRECTOR_CLAIM_MS);
+            } else {
+                applyModeUI();
+            }
+        } else { openModeSelector(true); }
         _refreshEditModeBtn();
         // Runs after the UI exists so the first walk sees every static node.
         applyLanguage(REASET_LANG, true);
@@ -7807,6 +8028,11 @@
                         }
                         if (tok[1] === "ReaSet" && tok[2] === "directorHeartbeatId") {
                             _directorHeartbeatId = tok.slice(3).join('\t');
+                        }
+                        // The lease claim, read back so a claimant can find out
+                        // whether its write is the one that survived.
+                        if (tok[1] === "ReaSet" && tok[2] === "directorClaimId") {
+                            _directorClaimId = tok.slice(3).join('\t');
                         }
                         if (tok[1] === "ReaSet" && tok[2] === "directorHeartbeatTs") {
                             // Liveness is judged by this VALUE changing across polls,
