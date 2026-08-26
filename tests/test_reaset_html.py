@@ -283,6 +283,57 @@ def test_heartbeat_proof_of_life(script_body, prev, nxt, expected, why):
     assert run_node(harness).strip() == ("true" if expected else "false"), why
 
 
+HARNESS = ROOT / "Tools" / "stage_race_test.js"
+
+# What Tools/stage_race_test.js reaches into on the page. Not an exhaustive
+# list of the file's globals — just the ones that would break it silently.
+#
+# Matched on a word boundary, not as a substring: "function smartStop" is
+# happily contained in "function smartStopX", so a plain `in` check would sail
+# straight past exactly the rename this is meant to catch. Found by mutating
+# smartStop's name and watching this test pass anyway.
+HARNESS_DEPENDENCIES = [
+    ("var", "displayList"),
+    ("var", "currentPos"),
+    ("var", "isPlaying"),
+    ("function", "smartStop"),
+    ("function", "playRegion"),
+    ("function", "togglePlay"),
+]
+
+
+@requires_node
+def test_race_harness_parses() -> None:
+    """The harness is pasted into a console by someone mid-test.
+
+    Same exposure as ReaSet.html and the same reason to guard it: a syntax
+    error here costs the person running a 20-rep race test their time, at the
+    moment they are least equipped to debug a paste.
+    """
+    result = subprocess.run(
+        ["node", "--check", str(HARNESS)], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, f"{HARNESS.name} is invalid JS:\n{result.stderr}"
+
+
+@pytest.mark.parametrize(
+    "kind,name", HARNESS_DEPENDENCIES, ids=[d[1] for d in HARNESS_DEPENDENCIES]
+)
+def test_race_harness_dependencies_still_exist(script_body: str, kind: str, name: str) -> None:
+    """The harness drives ReaSet.html's own entry points, by name.
+
+    That is deliberate — it is what makes the harness exercise the shipping
+    path instead of a parallel one — but it also means a rename in ReaSet.html
+    breaks it silently, and the breakage surfaces as a confusing console error
+    during a race test rather than as a failing build.
+    """
+    pattern = r"\b" + kind + r"\s+" + re.escape(name) + r"\b"
+    assert re.search(pattern, script_body), (
+        f"Tools/stage_race_test.js drives `{name}` but ReaSet.html no longer "
+        f"declares it as a {kind} — the harness needs updating alongside the rename"
+    )
+
+
 def test_play_target_has_no_first_song_fallback(script_body: str) -> None:
     """Locks the #3 fix.
 

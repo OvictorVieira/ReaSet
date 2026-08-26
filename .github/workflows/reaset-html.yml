@@ -13,11 +13,13 @@ on:
   push:
     paths:
       - ReaSet.html
+      - Tools/stage_race_test.js
       - tests/test_reaset_html.py
       - .github/workflows/reaset-html.yml
   pull_request:
     paths:
       - ReaSet.html
+      - Tools/stage_race_test.js
       - tests/test_reaset_html.py
       - .github/workflows/reaset-html.yml
   workflow_dispatch:
