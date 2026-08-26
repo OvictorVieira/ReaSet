@@ -259,21 +259,53 @@ setlist". The timeline is the evidence; a description of the symptom is not.
 
 ## 8. Rollback
 
-Every track in this epic is a separate branch and a series of small commits, so
-a single behaviour can be reverted without taking the rest with it.
+Every behaviour landed as its own small commit, so one can be reverted without
+taking the rest with it: `git revert <sha>`, newest first if you revert more
+than one.
 
-| Behaviour | Branch |
-|---|---|
-| Diagnostics | `test/stage-diagnostics` |
-| Selection / Play / Queue / Pause / Stop | `fix/stage-transport` |
-| Active setlist sync | `fix/active-setlist-sync` |
-| Single Director | `fix/single-director` |
-| Controller role | `feat/controller-mode` |
-| Visual blocks | `feat/setlist-block-spacing` |
+**Commits, not branch names.** The per-track branches were working refs and
+were deleted once everything was merged. These SHAs are permanent, and a SHA is
+what a revert actually takes.
 
-Last known-good upstream state before this epic: `9a3c568`.
+| Behaviour | Issue | Commit(s) — revert newest first |
+|---|---|---|
+| Transport diagnostics (`?diag=transport`) | #10 | `aa1c070` |
+| Deterministic selection and Play | #3 | `95aec18` |
+| Queue a song tap while playing | #9 | `aeb40e9` |
+| Authoritative Pause / Stop | #4 | `08df167` |
+| Active named-setlist sync | #5 | `7ed53a3`, `0d7652d` |
+| Single active Director | #6 | `fcfef7b`, `540be57`, `ebad0ea` |
+| Controller / Performer role | #7 | `3620055`, `540be57`, `04c088a` |
+| Visual playback blocks | #8 | `7ed53a3`, `5164488` |
+| CI for `ReaSet.html` | #10 | `853741b`, `85a52b6` |
 
-**Before a show**, if anything in this matrix is unresolved: check out that
-commit's `ReaSet.html` and `Reaset.lua`, reload the browser on every device,
-and confirm the Director badge and the region list appear. Known behaviour of
-that build is documented in `docs/USER_GUIDE.md`.
+Two commits appear in two rows, so reverting one row can disturb the other:
+
+- `7ed53a3` carries both the shared end-state (which #8 needs to draw the same
+  blocks on a follower) and the chunk-integrity guard (#5). Reverting it for one
+  takes the other with it.
+- `540be57` sits between #6 and #7 — it forces edit mode off when a Director is
+  downgraded, a case that only exists because both are present.
+
+### The fast rollback is not a revert
+
+Before a show, if anything in this matrix is unresolved, do not reason about
+commits. Put the last known-good files back:
+
+```bash
+WEB=~/Library/Application\ Support/REAPER/reaper_www_root
+SCR=~/Library/Application\ Support/REAPER/Scripts
+
+git show 9a3c568:ReaSet.html > "$WEB/ReaSet.html"
+git show 9a3c568:Reaset.lua  > "$SCR/Reaset.lua"
+```
+
+Then **restart the script in REAPER** — Actions → Show action list → Running
+scripts → terminate `Reaset`, then run it again. Replacing the file does not
+change the code already running in memory, and this is the step people skip.
+Hard-reload the browser on every device afterwards (`Cmd+Shift+R`; on iOS,
+clear Safari data or use a private tab).
+
+Confirm the rollback took: the Director badge appears and the region list
+populates. `9a3c568` is the last upstream state before this epic and is the
+build documented in `docs/USER_GUIDE.md`.

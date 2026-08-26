@@ -429,7 +429,7 @@ Hard edges:
 `ReaSet.html` is one 11 355-line file, so tracks are separated by **region of
 the file**, and integration is serialized.
 
-| Track | Issues | Branch | Regions of `ReaSet.html` it owns | Other files |
+| Track | Issues | Branch (deleted after merge — see the rollback table in `STAGE_TEST_MATRIX.md` for the permanent SHAs) | Regions of `ReaSet.html` it owns | Other files |
 |---|---|---|---|---|
 | **F — QA** | #10 | `test/stage-diagnostics` | new `RSDiag` block inserted just after the `wwr_req` gate (~5310); one-line instrumentation calls elsewhere | `docs/STAGE_TEST_MATRIX.md` (new) |
 | **A — Transport** | #3 → #9 → #4 | `fix/stage-transport` | 9281–9370 (`seekManualTransport`/`playRegion`/`cueRegion`/`smartStop`/`togglePlay`), 7160–7195 (TRANSPORT case), 8960–9095 (queue + end-of-region), 10613–10640 (keyboard), 10685–10690 (MIDI), 7894 (init cursor) | — |
