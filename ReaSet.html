@@ -392,27 +392,36 @@
             color: var(--text-secondary);
         }
 
-        .vtab.t-show {
+        /* .active is what makes a tab the CURRENT one; the t-* class only says
+           which colour it uses when it is. Without .active in these selectors
+           the colour belonged to the tab itself, so SHOW — the only tab whose
+           markup carried its t-* class — was lit permanently and the other four
+           could never light at all, whatever _setViewTabActive() toggled.
+
+           This is the contract the sidebar copies of these tabs have always
+           used (.sview-btn.t-show.active); the topbar was left behind when they
+           were added. */
+        .vtab.t-show.active {
             color: var(--color-brand);
             border-bottom-color: var(--color-brand);
         }
 
-        .vtab.t-lyrics {
+        .vtab.t-lyrics.active {
             color: var(--color-chain);
             border-bottom-color: var(--color-chain);
         }
 
-        .vtab.t-chords {
+        .vtab.t-chords.active {
             color: var(--color-loop);
             border-bottom-color: var(--color-loop);
         }
 
-        .vtab.t-live {
+        .vtab.t-live.active {
             color: var(--color-live);
             border-bottom-color: var(--color-live);
         }
 
-        .vtab.t-canvas {
+        .vtab.t-canvas.active {
             color: var(--color-timer);
             border-bottom-color: var(--color-timer);
         }
@@ -4612,16 +4621,16 @@
             <div class="vtab t-show active" id="tab-btn-show" onclick="showMainView()">
                 <span class="vtab-icon">▶</span><span>SHOW</span>
             </div>
-            <div class="vtab" id="tab-btn-lyrics" onclick="toggleLyricsPanel()">
+            <div class="vtab t-lyrics" id="tab-btn-lyrics" onclick="toggleLyricsPanel()">
                 <span class="vtab-icon">♪</span><span>LYRICS</span>
             </div>
-            <div class="vtab" id="tab-btn-chords" onclick="toggleChordsPanel()">
+            <div class="vtab t-chords" id="tab-btn-chords" onclick="toggleChordsPanel()">
                 <span class="vtab-icon">♭</span><span>CHORDS</span>
             </div>
-            <div class="vtab" id="tab-btn-live" onclick="openLiveView()">
+            <div class="vtab t-live" id="tab-btn-live" onclick="openLiveView()">
                 <span class="vtab-icon">▶</span><span>LIVE</span>
             </div>
-            <div class="vtab" id="tab-btn-canvas" onclick="openCanvasMode()">
+            <div class="vtab t-canvas" id="tab-btn-canvas" onclick="openCanvasMode()">
                 <span class="vtab-icon">▣</span><span>CANVAS</span>
             </div>
 
@@ -10563,14 +10572,14 @@
         function openCanvasMode() {
             canvasOpen = true;
             document.getElementById("canvas-mode").classList.add("open");
-            _setViewTabActive('canvas', true);
+            updateTopTabs();
             updatePlaybackUI();
         }
 
         function closeCanvasMode() {
             canvasOpen = false;
             document.getElementById("canvas-mode").classList.remove("open");
-            _setViewTabActive('canvas', false);
+            updateTopTabs();
             toggleCanvasEdit(false);
         }
 
@@ -11520,13 +11529,20 @@
             if (side) side.classList.toggle('active', on);
         }
 
+        // The ONE place that decides which tab is current. It used to set three
+        // of the five and leave live/canvas to be switched on by whoever opened
+        // them — two mechanisms, neither complete, so any interleaving left the
+        // bar disagreeing with the screen. Everything that opens or closes a
+        // view calls this now and sets nothing itself.
         function updateTopTabs() {
             var lyricsOpen = document.getElementById('lyrics-panel').classList.contains('open');
             var chordsOpen = document.getElementById('chords-panel').classList.contains('open');
             var noneOpen = !lyricsOpen && !chordsOpen && !liveViewOpen && !canvasOpen;
-            _setViewTabActive('show', noneOpen);
+            _setViewTabActive('show',   noneOpen);
             _setViewTabActive('lyrics', lyricsOpen);
             _setViewTabActive('chords', chordsOpen);
+            _setViewTabActive('live',   !!liveViewOpen);
+            _setViewTabActive('canvas', !!canvasOpen);
         }
 
         // F11: Chords font/size/color prefs
@@ -11981,7 +11997,7 @@
             liveViewOpen = true;
             document.getElementById("live-view").classList.add("open");
             document.getElementById("live-setlist-name").innerText = currentSetlistName;
-            _setViewTabActive('live', true);
+            updateTopTabs();
             _lrmLastSongId = null; // force region map rebuild on open
             applyLiveSettings();
             updatePlaybackUI();
@@ -11989,7 +12005,6 @@
         function closeLiveView() {
             liveViewOpen = false;
             document.getElementById("live-view").classList.remove("open");
-            _setViewTabActive('live', false);
             closeLiveConfig();
             updateTopTabs();
         }

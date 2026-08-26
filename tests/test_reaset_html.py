@@ -444,6 +444,57 @@ def test_lyrics_polling_is_cancellable(script_body: str) -> None:
         )
 
 
+VIEW_TABS = ["show", "lyrics", "chords", "live", "canvas"]
+
+
+@pytest.mark.parametrize("tab", VIEW_TABS)
+def test_view_tab_highlight_contract(tab: str) -> None:
+    """Every view tab must be able to light up, and only when it is current.
+
+    The topbar's colour rule was `.vtab.t-show { ... }` with no `.active`, and
+    only SHOW's markup carried its t-* class. So SHOW was lit permanently and
+    the other four could never light at all, whatever _setViewTabActive()
+    toggled — the class it sets was one the topbar CSS did not read. The
+    sidebar copies of the same tabs already used `.sview-btn.t-show.active`;
+    the topbar was left behind when they were added.
+
+    Nothing fails when a selector simply does not match, which is why this went
+    unnoticed: the bar just quietly disagreed with the screen.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    assert re.search(r'class="vtab t-' + tab + r'[ "]', html), (
+        f"the {tab} tab has no t-{tab} class, so no colour rule can ever match it"
+    )
+    assert re.search(r"\.vtab\.t-" + tab + r"\.active\s*\{", html), (
+        f".vtab.t-{tab} is styled without requiring .active — the colour belongs "
+        f"to the tab instead of to the current view"
+    )
+
+
+def test_view_tabs_have_one_owner(script_body: str) -> None:
+    """updateTopTabs() must decide all five tabs.
+
+    It used to set three and leave live/canvas to whoever opened them: two
+    mechanisms, neither complete, so any interleaving left the bar disagreeing
+    with the screen. Opening a view could switch its own tab on but never
+    switched SHOW off.
+    """
+    body = extract_function(script_body, "updateTopTabs")
+    for tab in VIEW_TABS:
+        assert "'" + tab + "'" in body, (
+            f"updateTopTabs() no longer sets the {tab} tab, so it can go stale "
+            f"whenever another view changes"
+        )
+    for fn in ("openCanvasMode", "closeCanvasMode", "openLiveView", "closeLiveView"):
+        src = extract_function(script_body, fn)
+        assert "updateTopTabs()" in src, f"{fn}() does not refresh the tab bar"
+        assert "_setViewTabActive" not in src, (
+            f"{fn}() sets a tab directly again — that is the split ownership "
+            f"that let the bar disagree with the screen"
+        )
+
+
 def test_modal_buttons_use_classes_that_exist(script_body: str) -> None:
     """showAppConfirm() REPLACES the OK button's className.
 
