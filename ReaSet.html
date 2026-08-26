@@ -470,52 +470,135 @@
             flex-shrink: 0;
         }
 
-        /* Matches the ＋ and ⋯ buttons beside it — same pill radius, same
-           surface, same hover — so the setlist row reads as one control group
-           instead of a bare form field wedged between two buttons.
+        /* THE LIST HAD TO STOP BEING A NATIVE <select>.
+           A native select's popup is drawn by the operating system, not the
+           browser: on macOS no CSS reaches it at all, and `option { background }`
+           only half-works on Windows/Linux. So the control below is a button
+           plus a real element, styled like the ⋯ menu next to it — which is
+           what makes the list stylable in the first place.
 
-           appearance:none was already here, which removed the platform arrow
-           and put nothing back: the select had no affordance at all. The
-           chevron is an inline SVG so it costs no request, and it is drawn in a
-           mid grey that holds up on both the dark and light themes rather than
-           a colour that only works on one. */
-        .n-select {
+           The <select> itself stays in the DOM, hidden. It is still what
+           updateSetlistDropdown() fills and what changeSetlist() reads, so the
+           existing logic is untouched and there is one source of truth.
+
+           The closed control keeps the appearance it always had. */
+        .setlist-picker {
             flex: 1;
-            background: rgba(255, 255, 255, 0.07);
+            min-width: 0;
+            position: relative;
+        }
+
+        .n-select {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .n-select-btn {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0, 0, 0, 0.4);
             color: var(--text-primary);
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            border-radius: var(--radius-pill);
-            padding: 8px 34px 8px 14px;
-            height: 34px;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: var(--radius-sm);
+            padding: 8px 12px;
             font-size: 13px;
             font-weight: 600;
             font-family: var(--font-ui);
             outline: none;
-            min-width: 0;
             cursor: pointer;
-            transition: all 0.18s;
-            appearance: none;
+            text-align: left;
+            transition: border-color 0.18s;
+        }
+
+        .n-select-btn:hover { border-color: rgba(255, 255, 255, 0.26); }
+
+        .n-select-btn .sp-label {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
             text-overflow: ellipsis;
-            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1.5 6 6.5 11 1.5' fill='none' stroke='%23999' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>");
-            background-repeat: no-repeat;
-            background-position: right 12px center;
+            white-space: nowrap;
         }
 
-        .n-select:hover {
-            background-color: var(--bg-elevated);
-            border-color: rgba(255, 255, 255, 0.2);
+        .n-select-btn .sp-chev {
+            flex: 0 0 auto;
+            opacity: 0.55;
+            transition: transform 0.18s;
         }
 
-        .n-select:focus-visible {
-            border-color: var(--color-brand);
+        .setlist-picker.open .n-select-btn .sp-chev { transform: rotate(180deg); }
+
+        .setlist-picker-list {
+            display: none;
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            right: 0;
+            background: var(--bg-card);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+            overflow: hidden auto;
+            /* A long library has to scroll rather than run off a phone. */
+            max-height: min(52vh, 340px);
+            z-index: 100;
         }
 
-        /* The popup itself is drawn by the OS, so its list inherits nothing
-           from above — without this the options render as black-on-white in a
-           dark UI on several platforms. */
-        .n-select option {
-            background: #1c1c1e;
-            color: #fff;
+        .setlist-picker.open .setlist-picker-list { display: block; }
+
+        .setlist-picker-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            padding: 12px 14px;
+            font-size: 13px;
+            font-weight: 600;
+            font-family: var(--font-ui);
+            color: var(--text-secondary);
+            background: none;
+            border: 0;
+            cursor: pointer;
+            text-align: left;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .setlist-picker-item:hover {
+            background: rgba(255, 255, 255, 0.07);
+            color: var(--text-primary);
+        }
+
+        .setlist-picker-item.is-current {
+            color: var(--color-brand);
+        }
+
+        /* Reserved whether or not it is filled, so the names stay on one
+           vertical line instead of shifting as the selection moves. */
+        .setlist-picker-item .sp-check {
+            flex: 0 0 14px;
+            font-size: 12px;
+        }
+
+        .setlist-picker-item .sp-name {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .setlist-picker-warn {
+            padding: 11px 14px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #f0a37a;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            cursor: default;
         }
 
         .n-btn-new {
@@ -4064,7 +4147,8 @@
         /* The setlist dropdown STAYS visible: a Controller has to be able to
            read which set is active. It is read-only for them, which
            changeSetlist() enforces rather than the CSS. */
-        body.reaset-controller #setlistSelect { pointer-events: none; opacity: 0.85; }
+        body.reaset-controller #setlistPickerBtn,
+        body.reaset-player     #setlistPickerBtn { pointer-events: none; opacity: 0.85; }
 
         /* Chain / loop / skip are authoring controls whose STATE is exactly
            what a performer needs to read — does this run into the next song,
@@ -4540,7 +4624,17 @@
 
         <!-- SETLIST ROW -->
         <div class="app-setlist-row">
-            <select id="setlistSelect" class="n-select" onchange="changeSetlist()" onmousedown="_libraryRefreshOnOpen()" onfocus="_libraryRefreshOnOpen()"></select>
+            <div class="setlist-picker" id="setlistPicker">
+                <button class="n-select-btn" id="setlistPickerBtn" onclick="toggleSetlistPicker(event)" title="Setlist">
+                    <span class="sp-label" id="setlistPickerLabel">Default</span>
+                    <svg class="sp-chev" width="11" height="7" viewBox="0 0 12 8" fill="none" aria-hidden="true"><path d="M1 1.5 6 6.5 11 1.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <div class="setlist-picker-list" id="setlistPickerList"></div>
+                <!-- Hidden, but still the source of truth: updateSetlistDropdown()
+                     fills it and changeSetlist() reads it, so the picker above is
+                     presentation only and nothing else had to change. -->
+                <select id="setlistSelect" class="n-select" tabindex="-1" aria-hidden="true" onchange="changeSetlist()"></select>
+            </div>
             <button class="n-btn-new authoring-only" onclick="createSetlist()" title="New">+</button>
             <button class="n-btn-new" id="editModeBtn" onclick="toggleEditMode()" title="Edit mode"><span class="emb-icon">&#9998;</span><span class="emb-label" id="editModeLabel">SHOW</span></button>
             <div class="dotmenu-wrap authoring-only" id="dotMenuWrap" style="position:relative">
@@ -5572,6 +5666,10 @@
 
             var lastKeyed = {};
 
+            var OFF_MSG = '[RSDiag] LOGGING IS OFF — nothing was captured.\n' +
+                          'Ligue com  RSDiag.on()  (recarrega e fica ligado), ou abra a página com ?diag=transport.\n' +
+                          'Depois reproduza o problema e chame RSDiag.save() de novo.';
+
             return {
                 get enabled() { return on; },
 
@@ -5628,7 +5726,20 @@
                     return out;
                 },
 
+                // Turning it on should not require getting a query string
+                // right on a phone. Persisted, so it survives the reload it
+                // performs and every reload after it.
+                on: function () {
+                    try { localStorage.setItem('reaset_diag', 'transport'); } catch (e) {}
+                    location.reload();
+                },
+                off: function () {
+                    try { localStorage.removeItem('reaset_diag'); } catch (e) {}
+                    location.reload();
+                },
+
                 dump: function () {
+                    if (!on) { console.warn(OFF_MSG); return 0; }
                     var l = this.lines();
                     if (window.console && console.log) console.log(l.join('\n'));
                     return l.length;
@@ -5636,7 +5747,20 @@
 
                 // Downloadable snapshot for a bug report (see the template in
                 // docs/STAGE_TEST_MATRIX.md).
+                //
+                // REFUSES to write when logging was never on. It used to hand
+                // back a file containing nothing but a header, which looks
+                // exactly like a valid capture of a bug that left no trace —
+                // so the report comes back empty, twice, and the person
+                // reproducing a real fault is told to go and do it again. A
+                // diagnostic that fails silently is worse than none.
                 save: function () {
+                    if (!on) { console.warn(OFF_MSG); return; }
+                    if (n === 0) {
+                        console.warn('[RSDiag] o buffer está vazio — nada foi capturado ainda. ' +
+                                     'Reproduza o problema com a página aberta e tente de novo.');
+                        return;
+                    }
                     var head = [
                         '# ReaSet transport diagnostics',
                         '# userAgent: ' + (navigator.userAgent || '?'),
@@ -11894,7 +12018,76 @@
                     if (name === currentSetlistName) opt.selected = true; sel.appendChild(opt);
                 }
             }
+            // The picker mirrors this list, so it is refreshed from the same
+            // choke point rather than by every caller remembering to.
+            renderSetlistPicker();
         }
+        // ── Setlist picker ──────────────────────────────────────────────
+        // Presentation over the hidden <select>. Items are built as elements
+        // with real listeners rather than interpolated onclick strings: a
+        // setlist called  Rock 'n' Roll  would break out of the attribute and
+        // silently kill the row.
+        function renderSetlistPicker() {
+            var list  = document.getElementById('setlistPickerList');
+            var label = document.getElementById('setlistPickerLabel');
+            if (label) label.textContent = currentSetlistName;
+            if (!list) return;
+            list.innerHTML = '';
+
+            if (!_libConnected) {
+                var warn = document.createElement('div');
+                warn.className = 'setlist-picker-warn';
+                warn.textContent = '\u26A0 ' + t('Not connected to the project — changes will not be saved');
+                list.appendChild(warn);
+            }
+
+            for (var name in setlists) {
+                if (!setlists.hasOwnProperty(name)) continue;
+                (function (n) {
+                    var b = document.createElement('button');
+                    b.className = 'setlist-picker-item' + (n === currentSetlistName ? ' is-current' : '');
+                    var chk = document.createElement('span');
+                    chk.className = 'sp-check';
+                    chk.textContent = (n === currentSetlistName) ? '\u2713' : '';
+                    var nm = document.createElement('span');
+                    nm.className = 'sp-name';
+                    nm.textContent = n;
+                    b.appendChild(chk); b.appendChild(nm);
+                    b.addEventListener('click', function (e) {
+                        e.stopPropagation();
+                        pickSetlist(n);
+                    });
+                    list.appendChild(b);
+                })(name);
+            }
+        }
+
+        function toggleSetlistPicker(e) {
+            if (e) e.stopPropagation();
+            var wrap = document.getElementById('setlistPicker');
+            if (!wrap) return;
+            if (wrap.classList.contains('open')) { wrap.classList.remove('open'); return; }
+            closeDotMenu();
+            // Same moment the native select used to refresh on: the user is
+            // about to choose, so re-read the project's index first.
+            _libraryRefreshOnOpen();
+            renderSetlistPicker();
+            wrap.classList.add('open');
+        }
+
+        function closeSetlistPicker() {
+            var wrap = document.getElementById('setlistPicker');
+            if (wrap) wrap.classList.remove('open');
+        }
+
+        function pickSetlist(name) {
+            closeSetlistPicker();
+            var sel = document.getElementById('setlistSelect');
+            if (!sel || sel.value === name) return;
+            sel.value = name;
+            changeSetlist();
+        }
+
         function createSetlist() {
             if (!canEditSetlist()) { RSDiag.blocked('createSetlist', 'role-cannot-edit-setlist'); return; }
             var name = prompt("New setlist name:");
@@ -11911,7 +12104,7 @@
         function closeDotMenu() {
             document.getElementById('dotMenuDropdown').classList.remove('open');
         }
-        document.addEventListener('click', function () { closeDotMenu(); });
+        document.addEventListener('click', function () { closeDotMenu(); closeSetlistPicker(); });
 
         // --- APP MODALS ---
         var _confirmCallback = null;
