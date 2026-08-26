@@ -1732,7 +1732,19 @@
             box-shadow: 0 0 16px rgba(191, 90, 242, 0.3);
         }
 
+        /* The one button here that is not a transport control, and the only one
+           whose label did not fit: .t-btn is flex:1, so RECONNECT was given the
+           same width as PLAY and overflowed it on a phone. It is also the only
+           one you press when something is already wrong, so it takes a fixed,
+           smaller footprint and gives the space back to the three controls that
+           are used during a show. The glyph is the ↻ the sidebar already uses
+           for the same action. */
         .t-btn-sync {
+            flex: 0 0 auto;
+            width: 52px;
+            padding: 16px 0;
+            font-size: 19px;
+            line-height: 1;
             background: rgba(255, 255, 255, 0.07);
             color: rgba(255, 255, 255, 0.45);
             border: 1.5px solid rgba(255, 255, 255, 0.1);
@@ -4700,8 +4712,8 @@
                  which beside PLAY / STOP / Loop reads as "sync the setlist" —
                  the one thing it does not do. It is the recovery a musician has
                  when a venue's wifi drops mid-show, so it is named for that. -->
-            <button class="t-btn t-btn-sync" onclick="wwr_start()"
-                title="Restart the connection to REAPER. Does not change the setlist.">RECONNECT</button>
+            <button class="t-btn t-btn-sync" onclick="wwr_start()" aria-label="Reconnect"
+                title="Restart the connection to REAPER. Does not change the setlist.">&#8635;</button>
         </div>
     </div>
 
@@ -8235,6 +8247,13 @@
         }
 
         function _applyChosenMode(mode) {
+            // The displaced banner reports something that HAPPENED: this device
+            // held the lease and lost it. Choosing a mode is the acknowledgement
+            // — and on a Controller the notice is not merely stale, it is wrong,
+            // because it says read-only next to a live transport bar. Only
+            // _dcStandDown() raises it, so clearing it on an explicit choice
+            // cannot hide a fresh takeover.
+            _setDisplacedBanner(false);
             REASET_MODE = mode;
             try { localStorage.setItem('reaset_mode', mode); } catch (e) { /* private mode etc — mode still applies for this session */ }
             // The mode starts as 'player' and only resolves here or when it is
