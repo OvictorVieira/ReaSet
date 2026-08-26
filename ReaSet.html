@@ -6109,6 +6109,8 @@
             ["Green", "Verde"],
             ["Blue", "Azul"],
             ["CONTROLLER", "CONTROLLER"],
+            ["The device", "El dispositivo"],
+            ["Another device", "Otro dispositivo"],
             ["STOP (Hold)", "STOP (Mantener)"],
             ["RECONNECT", "RECONECTAR"],
             ["Reconnect", "Reconectar"],
@@ -7180,7 +7182,14 @@
         // yet, even though the id/timestamp already have — they're sent in
         // the same wwr_req call, so this is a narrow, self-healing gap).
         function _dcForeignLabel() {
-            return _directorHeartbeatName ? ('El dispositivo "' + _directorHeartbeatName + '"') : 'Otro dispositivo';
+            // Goes through t() like everything else. It did not, and it is
+            // prepended to strings that DO — so on an English device the
+            // takeover dialog and the displaced banner opened in Spanish and
+            // finished in English, in the same sentence. See #14 for the rest
+            // of the strings that still bypass the table.
+            return _directorHeartbeatName
+                ? (t('The device') + ' "' + _directorHeartbeatName + '"')
+                : t('Another device');
         }
 
         // ── Director lease (#6) ─────────────────────────────────────────────
