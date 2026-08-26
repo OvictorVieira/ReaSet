@@ -638,6 +638,47 @@
             box-shadow: inset 3px 0 0 0 var(--color-brand);
         }
 
+        /* ── Playback blocks ────────────────────────────────────────────────
+           Songs that run into each other are one performance block; a song
+           that stops or waits ends it. The gap is the whole feature: it lets a
+           performer see, without reading a single end-state icon, where the
+           show is going to pause.
+
+           Applied to the top-level list item, never to the inner .song-row.
+           Sections live inside that same item, so a margin here cannot open a
+           gap between Verse and Chorus — which is the one place the spacing
+           would be actively misleading.
+
+           :not(:first-child) because the first block start is the top of the
+           list; leading whitespace there is just a smaller list. */
+        .song-container.block-start:not(:first-child) {
+            margin-top: 14px;
+        }
+
+        /* Grid view gets the class but no spacing. Its reading order wraps
+           across columns, so a top margin on one card shifts that card inside
+           its row and communicates nothing about where the show pauses — it
+           just looks broken. The class is still emitted there so the grouping
+           is inspectable and a future grid-aware treatment has a hook. */
+
+        /* A hairline, not a rule: it should register while scanning and vanish
+           while reading. Inherits currentColor's alpha rather than a fixed
+           grey so it survives every theme, including light ones. */
+        .song-container.block-start:not(:first-child)::before {
+            content: '';
+            display: block;
+            position: absolute;
+            left: 12%;
+            right: 12%;
+            top: -8px;
+            height: 1px;
+            background: currentColor;
+            opacity: 0.12;
+            pointer-events: none;
+        }
+
+        .song-container { position: relative; }
+
         /* Progress fill */
         .card-bg-fill {
             position: absolute;
@@ -8531,7 +8572,8 @@
                     // Feature 8: nosong dimming; Feature 12: custom class
                     var extraClass = (r.nosong ? " nosong" : "") + (r.className ? " " + r.className : "");
 
-                    li.className = "grid-card" + (r.skipped ? " skipped" : "") + classAdds + extraClass;
+                    li.className = "grid-card" + (isBlockStart(i) ? " block-start" : "")
+                        + (r.skipped ? " skipped" : "") + classAdds + extraClass;
                     if (reapColor) li.setAttribute("style", buildColorVarsFromHex(reapColor));
 
                     // Feature 8: nosong items show no index number
@@ -8573,7 +8615,10 @@
 
                     // --- Song container ---
                     var li = document.createElement("li");
-                    li.className = "song-container";
+                    // On the CONTAINER, not the row: sections render inside this
+                    // same element, so the gap can never land between Verse and
+                    // Chorus.
+                    li.className = "song-container" + (isBlockStart(i) ? " block-start" : "");
                     li.setAttribute("data-id", r.id);
 
                     // --- Song row ---
@@ -8761,6 +8806,55 @@
             if (st !== 'auto') return st;
             var el = document.getElementById('autoStopToggle');
             return (!el || el.checked) ? 'stop' : 'continue';
+        }
+
+        // ── Visual playback blocks (#8) ─────────────────────────────────────
+        //
+        // No persisted Block entity. A block boundary is not a thing the user
+        // creates, it is what the existing end-states already mean: songs that
+        // run on are one block, and a song that stops or waits ends it. Deriving
+        // it keeps the picture automatically true — change a song from Continue
+        // to Stop and the gap appears, with nothing to keep in step.
+        //
+        // SKIPPED SONGS.
+        //
+        // Grouping is computed over songs that will actually PLAY, in both
+        // Hide-Skips modes. A skipped song never runs, so it can neither open a
+        // block nor close one — its own end-state is irrelevant because it is
+        // never reached. Deriving from displayList[i-1] instead would let a
+        // hidden row punch a gap into a block that plays straight through it.
+        //
+        // Skipped rows that ARE visible have to sit somewhere, and they travel
+        // with the block they precede: the gap goes on the first row of the run
+        // leading into a block, not on the playing song itself. So a skipped
+        // row is never stranded alone in the gap between two blocks, and
+        // turning Hide Skips on or off moves no boundary — it only hides rows
+        // from a grouping that was already computed without them.
+        function _blockPrevPlayable(index) {
+            for (var i = index - 1; i >= 0; i--) {
+                if (!displayList[i].skipped) return displayList[i];
+            }
+            return null;
+        }
+
+        // Does the song at idx — which is known to be playable — open a block?
+        function _playableStartsBlock(idx) {
+            var prev = _blockPrevPlayable(idx);
+            if (!prev) return true;   // first song that will play = first block
+            return effectiveSongEnd(prev) !== 'continue';
+        }
+
+        function isBlockStart(index) {
+            if (!displayList[index]) return false;
+            // Only the first row of a run can carry the gap; the rest of the
+            // run is the skipped rows trailing behind it.
+            if (index > 0 && displayList[index - 1].skipped) return false;
+            var nextIdx = -1;
+            for (var i = index; i < displayList.length; i++) {
+                if (!displayList[i].skipped) { nextIdx = i; break; }
+            }
+            if (nextIdx === -1) return false;   // only skipped rows from here on
+            return _playableStartsBlock(nextIdx);
         }
 
         function setSongEnd(id, state, seconds) {
