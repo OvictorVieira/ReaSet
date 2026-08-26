@@ -581,6 +581,19 @@ local function sync_tick()
     if f then
         f:write('{"v":1,"b64":"' .. table.concat(parts) .. '"}')
         f:close()
+        -- Publish the revision that is now ON DISK, as opposed to the one the
+        -- Director merely announced.
+        --
+        -- Remote devices poll a revision number to decide whether the shared
+        -- file is worth fetching. Polling the Director's own setlistRev makes
+        -- them fetch during the window between the push and this write — the
+        -- fetch returns the PREVIOUS payload, which is correctly rejected as
+        -- old, and the poll then retries, every cycle, until the write lands.
+        -- Worse, if this script is not running at all, that retry never ends.
+        --
+        -- This key only ever changes after a successful write, so "the file you
+        -- would fetch is at revision N" is exactly what it says.
+        reaper.SetExtState(SEC, "setlistFileRev", rev_str, false)
     end
     s_syncLastCount = rev_str     -- mark handled either way — a permissions
                                    -- error won't be retried every tick
