@@ -10450,6 +10450,13 @@
         }
 
         function playRegion(start, id) {
+            // Semantic gate, not just a CSS one. Player rows are
+            // pointer-events:none, so this should be unreachable — but without
+            // it a Player would still record a selection and paint a cued row
+            // for a cursor move that the command gate silently refused, which
+            // is precisely the "looks like it worked" failure the read-only
+            // guarantee exists to avoid.
+            if (!canControlTransport()) { RSDiag.blocked('playRegion', 'role-cannot-control-transport'); return; }
             // Coordinates from the caller are a fallback only: a row rendered
             // before the last region refresh can carry a stale start.
             var region = _findRegionById(id) || { id: id, start: start, end: start };
@@ -10505,6 +10512,7 @@
         }
 
         function cueRegion(start, id) {
+            if (!canControlTransport()) { RSDiag.blocked('cueRegion', 'role-cannot-control-transport'); return; }
             var region = _findRegionById(id) || { id: id, start: start, end: start };
             // Next / Previous and the MIDI navigation actions land here. They
             // stop first — existing product behaviour, unchanged — but the
@@ -10526,6 +10534,7 @@
         // cancelled BEFORE the command goes out, so a callback that was already
         // eligible cannot win the race against it.
         function smartStop() {
+            if (!canControlTransport()) { RSDiag.blocked('smartStop', 'role-cannot-control-transport'); return; }
             RSDiag.log('USER_STOP', {
                 queued: queuedRegion ? queuedRegion.id : '-',
                 pendingCue: window._pendingCuePos
@@ -10591,6 +10600,7 @@
         // comes next" is still true. The cued song is kept too — #4 requires
         // Pause to leave an explicit selection alone.
         function pauseTransport() {
+            if (!canControlTransport()) { RSDiag.blocked('pauseTransport', 'role-cannot-control-transport'); return; }
             RSDiag.log('USER_PAUSE', { queued: queuedRegion ? queuedRegion.id : '-' });
             beginManualTransportIntent('pause');
             window._pendingCuePos = null;
@@ -10598,6 +10608,7 @@
             wwr_req(1008, "user-pause");
         }
         function togglePlay() {
+            if (!canControlTransport()) { RSDiag.blocked('togglePlay', 'role-cannot-control-transport'); return; }
             if (isPlaying) { pauseTransport(); return; }
 
             // An explicit Play outranks whatever the last manual command armed:
