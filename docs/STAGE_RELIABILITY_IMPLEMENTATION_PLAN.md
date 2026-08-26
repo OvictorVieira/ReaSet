@@ -740,3 +740,148 @@ against a mutation of the source that reintroduces the behaviour it forbids.
 Two devices, one REAPER. §13 changes *who may do what* and *how a role is
 chosen*; neither can be proven in this repository, because `wwr_req` is injected
 by REAPER's own web server. See `docs/STAGE_TEST_MATRIX.md` §C.
+
+---
+
+## 14. Session clock: the Director owns it
+
+Reported from the stage: the phone read **6:02:21** while the Mac read **1:48**,
+same show, same REAPER.
+
+### What it had been measuring
+
+Not "how long the project has been open". Wall-clock since **the first playback
+on that device**, written to that browser's own `localStorage`, and it never
+expired — it survived reloads, quitting the browser, and changing REAPER
+projects. Three separate reasons the two numbers could not agree:
+
+1. **Per-device by construction.** Each browser wrote its own
+   `reaset_session_start`. There was no shared value, so two devices agreed only
+   by coincidence.
+2. **It started on that device's first Play**, not the show's. A phone used for
+   soundcheck at 14:00 and a Mac first played at 19:30 were measuring two
+   different things, both correctly.
+3. **Nothing ever cleared it.** The only reset was a 600ms long-press. The 6h
+   was a leftover start timestamp from an earlier session, still counting.
+
+The same value drove `#live-show-time`, so Live View inherited the discrepancy.
+
+### Why the wire carries ELAPSED and not a start timestamp
+
+The obvious synced design — publish `sessionStart` as epoch milliseconds, let
+each device compute `Date.now() - start` — **is wrong**, and wrong in exactly
+the way this codebase already went out of its way to avoid once.
+
+A phone and a Mac do not agree on `Date.now()`. Phones drift and resync against
+the carrier; a laptop that slept holds a stale clock for a while after waking.
+Publishing an absolute start renders that disagreement *directly on screen* as
+an offset — so the two devices would still differ, only now the difference would
+look like a bug in ReaSet rather than in the clocks.
+
+So the Director publishes **elapsed seconds**, on every heartbeat:
+
+```
+SET/EXTSTATE/ReaSet/sessionElapsed/<integer seconds>      // -1 = no session
+```
+
+and a follower anchors it against its **own** clock the instant it arrives:
+
+```
+displayed = publishedElapsed + (now − whenIReceivedIt)
+```
+
+Only local differences are ever taken. Foreign clock skew cancels out completely
+and cannot reach the screen. This is the same rule `_dcBeatIsProofOfLife`
+follows for the heartbeat: **judge by what changed locally, never by comparing a
+foreign clock to ours.**
+
+The anchor is refreshed **only when the value changes**. The Director publishes
+every `DIRECTOR_BEAT_MS` (4s) and the probe polls at 2s, so every value is seen
+more than once; re-anchoring on a repeat would restart the extrapolation each
+time and drag the displayed time visibly backwards.
+
+`sessionElapsed` is published as a **separate request**, not as another segment
+on the heartbeat write. `_dcWriteLease` bypasses the publish gate, and it may
+keep doing so for exactly the `ReaSet/director*` keys and nothing else —
+widening it to carry the clock would trade a real invariant for one saved HTTP
+request.
+
+### Why it expires on idle, not on age
+
+A start timestamp that never expires is how six hours accumulated. But "reset
+after N hours" is wrong too: a long rehearsal is a real session, and zeroing it
+mid-way is the failure the persistence exists to prevent.
+
+What separates two sessions is a **gap** — nobody played anything for hours — so
+that is what is measured. The stored record is `{s: start, t: lastPlayback, p:
+projectKey}`, and a gap of more than `SESSION_IDLE_RESET_MS` (4h) since the last
+observed playback discards it on load. A six-hour rehearsal with playback
+throughout keeps counting; a laptop that played at 14:00 and is reopened at
+20:00 starts over. `t` is refreshed while playing, throttled to one
+`localStorage` write a minute — the clock ticks every second and a write per
+second for the length of a show is not a thing to do on a phone.
+
+The legacy bare-integer format is read as `{s: v, t: v}` — last seen *at* the
+start — so anything old enough to be the reported bug expires on the very first
+load after this change.
+
+A different REAPER project is a different show: `_initProjectStorage` clears the
+clock when `g_projectKey` changes, alongside every other project-scoped store.
+
+### Handover does not restart the show
+
+A device that was following a Director which then went away — or that took over
+from it — already holds the show's elapsed time in its anchor, so on promotion
+it adopts that as a local start rather than counting from its own first
+playback. Without this, the Mac closing its laptop would reset everyone's clock
+to whenever the phone happened to press Play.
+
+Whichever session began **earlier** wins: a device that has been in the room
+since soundcheck knows more about when this started than a Director that joined
+an hour in. The arithmetic is entirely local — the anchor is already expressed
+as "this many seconds, at *this* instant on *my* clock".
+
+### Reset is Director-only
+
+A follower clearing its local value would watch the Director's next published
+tick overwrite it half a second later: a button that silently does nothing. The
+long-press refuses on a follower, `#tb-session-grp.is-readonly` drops the
+pointer cursor so it does not look pressable, and the `title` says which clock
+is on screen. On the Director the reset publishes the `-1` sentinel immediately
+rather than waiting for the next beat, so it reaches every device within one
+poll.
+
+### Fallback
+
+A follower shows its **own** clock whenever no Director is live —
+`_dcForeignActive()`, the same proof-of-life the lease uses. So a device that
+loses contact mid-show keeps counting instead of freezing, and a device running
+solo has a clock at all. `_sessionDisplaySec()` is the single place that decides,
+which is what stops `#tb-session` and Live View's `#live-show-time` from ever
+disagreeing.
+
+One visible consequence, accepted: a freshly-booted follower shows its own clock
+for the few seconds proof-of-life takes, then switches to the Director's. It is
+self-correcting and honest — the alternative is showing `0:00` while pretending
+to know something it has not established yet.
+
+### Locked by tests
+
+`test_session_clock_never_puts_a_timestamp_on_the_wire`,
+`test_session_clock_reanchors_only_on_change`,
+`test_session_clock_reset_is_director_only`, and
+`test_session_clock_behaviour` — the last **executes** the real restore, observe,
+display and promotion code under Node against a stubbed clock and
+`localStorage`, covering ten cases including the reported bug, a six-hour
+rehearsal that must NOT expire, the legacy format, the skew immunity property,
+and both handover directions. Each check was verified to fail against a mutation
+reintroducing what it forbids — an absolute timestamp on the wire, re-anchoring
+on duplicates, a follower that may reset, expiry on age instead of idle, a
+remote value treated as absolute, a missing local fallback, a legacy record
+given a free pass, a promotion that restarts the clock, one that clobbers an
+older session, and one that does its arithmetic against the foreign clock.
+
+### Still requires a real-device test
+
+The skew case is the one that separates this implementation from the naive one,
+and it cannot be run here. See `docs/STAGE_TEST_MATRIX.md` §S.

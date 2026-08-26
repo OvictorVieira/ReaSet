@@ -733,3 +733,196 @@ def test_stand_down_drops_to_controller_not_read_only(script_body: str) -> None:
         "a displaced Director no longer drops to Controller — check it has not "
         "been sent back to a read-only role"
     )
+
+
+# ── Session clock ────────────────────────────────────────────────────────────
+# The bug: a phone read 6:02:21 next to a Mac reading 1:48 on the same show.
+# The clock was per-device localStorage that never expired, so both were
+# correct and neither was useful. It is now the Director's, published as
+# ELAPSED SECONDS and anchored locally on arrival.
+
+def test_session_clock_never_puts_a_timestamp_on_the_wire(script_body: str) -> None:
+    """The naive synced design is the one that had to be avoided.
+
+    Publishing sessionStart as epoch ms and letting each device compute
+    Date.now() - start renders the two devices' CLOCK SKEW directly on screen:
+    phones drift and resync against the carrier, a slept laptop wakes stale.
+    The wire carries elapsed seconds instead, and a follower anchors it against
+    its own clock — so only local differences are ever taken.
+
+    Same rule _dcBeatIsProofOfLife follows: judge by what changed locally,
+    never by comparing a foreign clock to ours.
+    """
+    body = strip_comments(script_body)
+
+    publish = strip_comments(extract_function(body, "_sessionPublish"))
+    assert "sessionElapsed" in publish, "the published key is no longer the elapsed one"
+    assert re.search(r"Date\.now\(\)\s*-\s*_sessionStart", publish), (
+        "_sessionPublish() no longer publishes a locally-computed DELTA"
+    )
+    assert not re.search(r"/\s*'\s*\+\s*_sessionStart\b", publish), (
+        "_sessionPublish() puts a raw start timestamp on the wire — every "
+        "reader would then subtract it from ITS OWN clock, and the skew "
+        "between the two devices becomes the displayed error"
+    )
+
+    display = strip_comments(extract_function(body, "_sessionDisplaySec"))
+    assert re.search(r"Date\.now\(\)\s*-\s*_sessionRemoteAt", display), (
+        "the remote branch no longer anchors against the LOCAL arrival instant"
+    )
+    for foreign in ("_sessionRemoteSec -", "- _sessionRemoteSec"):
+        assert foreign not in display, (
+            "a foreign clock value is being subtracted from a local one"
+        )
+
+
+def test_session_clock_reanchors_only_on_change(script_body: str) -> None:
+    """The Director beats every 4s; the probe polls at 2s.
+
+    Every published value is therefore seen more than once. Re-anchoring on a
+    repeat would restart the extrapolation each time and drag the displayed
+    time visibly backwards.
+    """
+    observe = strip_comments(extract_function(strip_comments(script_body), "_sessionObserveRemote"))
+    assert re.search(r"if\s*\(\s*v\s*===\s*_sessionRemoteSec\s*\)\s*return", observe), (
+        "_sessionObserveRemote() re-anchors on an unchanged value — the clock "
+        "will stutter backwards on every duplicate poll"
+    )
+
+
+def test_session_clock_reset_is_director_only(script_body: str) -> None:
+    """A follower clearing its local value would watch the Director's next
+    published tick overwrite it half a second later: a button that silently
+    does nothing."""
+    reset = strip_comments(extract_function(strip_comments(script_body), "resetSessionClock"))
+    assert re.search(r"""REASET_MODE\s*!==\s*['"]director['"]\s*\)\s*return""", reset), (
+        "resetSessionClock() no longer refuses on a follower"
+    )
+
+
+@requires_node
+def test_session_clock_behaviour(script_body: str) -> None:
+    """Runs the real restore / observe / display code under Node.
+
+    Covers the reported bug directly (case 2) and the skew property that
+    distinguishes a correct implementation from the naive one (case 5).
+    """
+    fns = "\n".join(
+        extract_function(script_body, fn)
+        for fn in ("_sessionObserveRemote", "_sessionDisplaySec",
+                   "_sessionAdoptOnPromotion", "_sessionWrite")
+    )
+    restore = script_body[
+        script_body.index("(function _sessionRestore() {") :
+        script_body.index("function _sessionWrite()")
+    ]
+
+    harness = textwrap.dedent(
+        """
+        var NOW = 1000000000000;
+        Date.now = function () { return NOW; };
+
+        var SESSION_IDLE_RESET_MS = 4 * 60 * 60 * 1000;
+        var SESSION_KEY = 'reaset_session_start';
+        var _sessionStart = null, _sessionSeen = 0, _sessionPk = null;
+        var _sessionRemoteSec = null, _sessionRemoteAt = 0;
+        var REASET_MODE = 'controller';
+        var _sessionSeenWritten = 0, g_projectKey = 'pa';
+        var STORED = null, FOREIGN = false;
+        var localStorage = {
+            getItem: function (k) { return STORED; },
+            removeItem: function (k) { STORED = null; },
+            setItem: function (k, v) { STORED = v; }
+        };
+        function _dcForeignActive() { return FOREIGN; }
+
+        __FNS__
+
+        function restore() { __RESTORE__ }
+
+        function reset(stored, mode, foreign) {
+            STORED = stored; REASET_MODE = mode; FOREIGN = foreign;
+            _sessionStart = null; _sessionSeen = 0; _sessionPk = null;
+            _sessionRemoteSec = null; _sessionRemoteAt = 0;
+            restore();
+        }
+        var out = [];
+
+        // 1. a session from ten minutes ago survives a reload
+        reset(JSON.stringify({s: NOW - 600000, t: NOW - 60000, p: 'pa'}), 'director', false);
+        out.push(['fresh-session-survives', Math.round(_sessionDisplaySec())]);
+
+        // 2. THE REPORTED BUG: a start six hours old whose last playback was
+        //    six hours ago is a different session and must not be restored.
+        reset(JSON.stringify({s: NOW - 21720000, t: NOW - 21720000, p: 'pa'}), 'director', false);
+        out.push(['stale-session-expires', Math.round(_sessionDisplaySec()), STORED === null]);
+
+        // 3. a SIX HOUR rehearsal that is still being played must keep counting
+        reset(JSON.stringify({s: NOW - 21720000, t: NOW - 30000, p: 'pa'}), 'director', false);
+        out.push(['long-active-rehearsal-survives', Math.round(_sessionDisplaySec())]);
+
+        // 4. the legacy bare-integer format, six hours old, expires
+        reset(String(NOW - 21720000), 'director', false);
+        out.push(['legacy-format-expires', Math.round(_sessionDisplaySec())]);
+
+        // 5. SKEW: the follower's own clock is 8 minutes ahead of the
+        //    Director's, and the displayed time must not show that at all.
+        reset(null, 'controller', true);
+        _sessionObserveRemote('300');          // Director says 5:00
+        NOW += 4000;                            // four seconds pass locally
+        out.push(['skew-immune', Math.round(_sessionDisplaySec())]);
+
+        // 6. a repeated value must not drag the clock backwards
+        _sessionObserveRemote('300');
+        out.push(['duplicate-does-not-rewind', Math.round(_sessionDisplaySec())]);
+
+        // 7. the Director's reset sentinel reaches the follower as 0:00
+        _sessionObserveRemote('-1');
+        out.push(['reset-sentinel', Math.round(_sessionDisplaySec())]);
+
+        // 8. no live Director: the follower falls back to its own clock
+        //    instead of freezing
+        reset(JSON.stringify({s: NOW - 120000, t: NOW - 5000, p: 'pa'}), 'controller', false);
+        _sessionObserveRemote('9999');
+        out.push(['no-director-falls-back-local', Math.round(_sessionDisplaySec())]);
+
+        // 9. HANDOVER: a follower two minutes into its own clock, watching a
+        //    Director at 50:00, gets promoted. It must adopt the show's time,
+        //    not restart from its own first playback.
+        reset(JSON.stringify({s: NOW - 120000, t: NOW - 5000, p: 'pa'}), 'controller', true);
+        _sessionObserveRemote('3000');
+        NOW += 2000;
+        REASET_MODE = 'director';
+        _sessionAdoptOnPromotion();
+        out.push(['handover-adopts-show-time', Math.round(_sessionDisplaySec())]);
+
+        // 10. ...but a device that has been in the room LONGER keeps its own.
+        reset(JSON.stringify({s: NOW - 7200000, t: NOW - 5000, p: 'pa'}), 'controller', true);
+        _sessionObserveRemote('60');
+        REASET_MODE = 'director';
+        _sessionAdoptOnPromotion();
+        out.push(['handover-keeps-older-session', Math.round(_sessionDisplaySec())]);
+
+        console.log(JSON.stringify(out));
+        """
+    ).replace("__FNS__", fns).replace("__RESTORE__", restore.strip().removeprefix("(function _sessionRestore() {").rsplit("})();", 1)[0])
+
+    got = dict((row[0], row[1]) for row in json.loads(run_node(harness)))
+    expected = {
+        "fresh-session-survives": 600,
+        "stale-session-expires": 0,
+        "long-active-rehearsal-survives": 21720,
+        "legacy-format-expires": 0,
+        # 300 published + 4s of LOCAL time. The follower's own clock being
+        # minutes off the Director's cannot enter this number.
+        "skew-immune": 304,
+        "duplicate-does-not-rewind": 304,
+        "reset-sentinel": 0,
+        "no-director-falls-back-local": 120,
+        # 3000 published + 2s local. Its own 122s clock is discarded because
+        # the show demonstrably started earlier than this device did.
+        "handover-adopts-show-time": 3002,
+        # Two hours in the room beats a Director that joined a minute ago.
+        "handover-keeps-older-session": 7200,
+    }
+    assert got == expected, f"\ngot      {got}\nexpected {expected}"

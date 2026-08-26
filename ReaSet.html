@@ -458,6 +458,10 @@
         .tb-dim { color: var(--text-subdued); font-weight: 600; }
         .tb-sess { color: #64D2FF; font-weight: 700; }
         #tb-session-grp { cursor: pointer; user-select: none; -webkit-user-select: none; }
+        /* Only the Director may reset the clock, so only the Director's looks
+           pressable — a long-press that does nothing is worse than one that is
+           visibly not offered. */
+        #tb-session-grp.is-readonly { cursor: default; }
         #tb-session-grp.resetting .tb-sess { color: var(--color-brand); }
 
         /* Four values plus the badge's word do not fit a phone — measured 51px
@@ -4510,7 +4514,7 @@
                 <span class="tb-grp" title="Show progress / total">
                     <span class="tb-strong" id="show-timer-display">0:00</span><span class="tb-dim" id="total-time">/0:00</span></span>
                 <span class="tb-sep">·</span>
-                <span class="tb-grp" id="tb-session-grp" title="Session time since first playback — long-press to reset">
+                <span class="tb-grp" id="tb-session-grp" title="Session time">
                     <span class="tb-ico">&#9201;</span><span class="tb-sess" id="tb-session">0:00</span></span>
                 <!-- Mode badge — click to reopen the mode selector and switch. -->
                 <div id="mode-badge" onclick="openModeSelector(false)" title="Click para cambiar de modo">
@@ -5794,7 +5798,8 @@
                          ";GET/EXTSTATE/ReaSet/directorPinHash" +
                          ";GET/EXTSTATE/ReaSet/directorHeartbeatId;GET/EXTSTATE/ReaSet/directorHeartbeatTs" +
                          ";GET/EXTSTATE/ReaSet/directorHeartbeatName" +
-                         ";GET/EXTSTATE/ReaSet/directorClaimId";
+                         ";GET/EXTSTATE/ReaSet/directorClaimId" +
+                         ";GET/EXTSTATE/ReaSet/sessionElapsed";
         wwr_req(_diagProbe);
         wwr_req_recur(_diagProbe, 2000);
         wwr_start();
@@ -5830,6 +5835,7 @@
             ["Active songs", "Canciones activas"],
             ["Show progress / total", "Progreso del show / total"],
             ["Session time since first playback — long-press to reset", "Tiempo de sesión desde la primera reproducción — mantené presionado para reiniciar"],
+            ["Session time, from the Director", "Tiempo de sesión, del Director"],
             ["DIRECTOR", "DIRECTOR"],
             ["Elapsed show time", "Tiempo transcurrido del show"],
             ["Total setlist duration", "Duración total del setlist"],
@@ -6103,6 +6109,10 @@
                     if (typeof _refreshEditModeBtn === 'function') _refreshEditModeBtn();
                     // title= attributes are not walked, so they need re-stating.
                     if (typeof _applyViewFullscreen === 'function') _applyViewFullscreen();
+                    // Re-derived from t() rather than left to the DOM walk: the
+                    // walk keys on the ENGLISH string, so a title already
+                    // rendered in Spanish is not found and never switches back.
+                    if (typeof _refreshSessionClockTitle === 'function') _refreshSessionClockTitle();
                 } catch (e) { /* a view not built yet must not block the switch */ }
             }
             _i18nWalk();
@@ -7203,6 +7213,12 @@
                               ';SET/EXTSTATE/ReaSet/directorHeartbeatTs/' + Date.now() +
                               ';SET/EXTSTATE/ReaSet/directorHeartbeatName/' + encodeURIComponent(_deviceName()),
                               'director-heartbeat');
+                // Deliberately a SEPARATE request rather than another segment
+                // on the lease write. _dcWriteLease bypasses the publish gate,
+                // and it may keep doing so for exactly the ReaSet/director*
+                // keys and nothing else — widening it to carry the clock would
+                // trade a real invariant for one saved HTTP request.
+                _sessionPublish();
             };
             beat();
             _dcHeartbeatTimer = setInterval(beat, DIRECTOR_BEAT_MS);
@@ -7342,6 +7358,7 @@
                                           reason: won ? 'no-director-present' : 'lost-auto-claim' });
                 if (!won) return;   // another device got there first — stay Controller
                 REASET_MODE = 'director';
+                _sessionAdoptOnPromotion();
                 applyModeUI();      // lease held → the heartbeat starts here
                 // Same retry _applyChosenMode() does: the library migration is
                 // Director-gated and ran, and dropped its push, while this
@@ -7420,6 +7437,7 @@
         function _initProjectStorage(newKey) {
             // Called on first load and whenever the REAPER project changes.
             // Reloads all project-specific storage under the new namespace.
+            _sessionOnProjectChange(newKey);
             g_projectKey = newKey;
             try { g_songOverrides = JSON.parse(localStorage.getItem(_overridesKey()) || '{}'); }
             catch(e) { g_songOverrides = {}; }
@@ -8241,8 +8259,9 @@
             // so the queue dropped the push silently. Becoming Director has to
             // retry: that is exactly the private-window case, where there is no
             // saved mode to recover.
-            if (mode === 'director' && typeof _librarySyncWithProject === 'function') {
-                _librarySyncWithProject();
+            if (mode === 'director') {
+                _sessionAdoptOnPromotion();
+                if (typeof _librarySyncWithProject === 'function') _librarySyncWithProject();
             }
             document.getElementById('mode-select-overlay').classList.remove('open', 'forced');
             applyModeUI();
@@ -8278,6 +8297,7 @@
             // device was ever a Player. Outside the chain above because it
             // applies to any Director, whatever its lease state.
             if (REASET_MODE === 'director') _syncStopPlayerPolling();
+            _refreshSessionClockTitle();
         }
 
         // Boot: force the picker only on a genuinely fresh device (no stored
@@ -8555,6 +8575,13 @@
                         }
                         if (tok[1] === "ReaSet" && tok[2] === "directorHeartbeatId") {
                             _directorHeartbeatId = tok.slice(3).join('\t');
+                        }
+                        // The Director's session clock, as ELAPSED SECONDS. It
+                        // is anchored against this device's own clock on
+                        // arrival — see the session-clock note for why a start
+                        // timestamp would be the wrong thing to put on the wire.
+                        if (tok[1] === "ReaSet" && tok[2] === "sessionElapsed") {
+                            _sessionObserveRemote(tok[3]);
                         }
                         // The lease claim, read back so a claimant can find out
                         // whether its write is the one that survived.
@@ -11102,34 +11129,213 @@
         }
 
         // ── Session clock ───────────────────────────────────────────────
-        // Wall-clock from the FIRST playback, and it keeps running through
-        // stops and pauses — the point is "how long have we been at this",
-        // for a rehearsal with breaks. Persisted as a start timestamp rather
-        // than a counter, so an accidental refresh mid-rehearsal doesn't zero
-        // the very thing it exists to measure.
-        var _sessionStart = (function () {
-            try {
-                var v = parseInt(localStorage.getItem('reaset_session_start'), 10);
-                return (v && v > 0) ? v : null;
-            } catch (e) { return null; }
+        // Wall-clock from the FIRST playback, running through stops and pauses
+        // — the question it answers is "how long have we been at this", for a
+        // rehearsal with breaks.
+        //
+        // THE DIRECTOR OWNS IT, exactly as it owns the setlist. It is the only
+        // device that decides what time it is; everyone else displays that
+        // number. Before this the clock was per-device localStorage, so a phone
+        // that had soundchecked at 14:00 read 6:02 next to a Mac reading 1:48 —
+        // both correct, both measuring different things, neither useful.
+        //
+        // ── Why the wire format is ELAPSED and not a start timestamp ────────
+        // The obvious design — publish sessionStart as epoch ms, let each
+        // device compute Date.now() - start — IS WRONG, and wrong in the exact
+        // way this file already went out of its way to avoid once.
+        //
+        // A phone and a Mac do not agree on Date.now(). Phones drift and resync
+        // against the carrier; a laptop that slept holds a stale clock for a
+        // while after waking. Publishing an absolute start renders that
+        // disagreement directly on screen as an offset — so the two devices
+        // would still differ, only now it would look like a bug in ReaSet
+        // rather than in the clocks.
+        //
+        // So the Director publishes ELAPSED SECONDS, and a follower anchors it
+        // against its OWN clock the moment it arrives:
+        //
+        //     displayed = publishedElapsed + (now - whenIReceivedIt)
+        //
+        // Only local differences are ever taken. Foreign clock skew cancels
+        // out completely and cannot appear on screen. This is the same rule
+        // _dcBeatIsProofOfLife follows for the heartbeat — judge by what
+        // CHANGED locally, never by comparing a foreign clock to ours.
+        //
+        // ── Why it expires on idle, not on age ─────────────────────────────
+        // A start timestamp that never expires is how six hours accumulated.
+        // But "reset after N hours" is wrong too: a long rehearsal is a real
+        // session and zeroing it mid-way is the failure the persistence exists
+        // to prevent. What actually separates two sessions is a GAP — nobody
+        // played anything for hours — so that is what is measured. A six-hour
+        // rehearsal with playback throughout keeps counting; a laptop that
+        // played at 14:00 and is reopened at 20:00 starts over.
+        var SESSION_IDLE_RESET_MS = 4 * 60 * 60 * 1000;
+        var SESSION_SEEN_WRITE_MS = 60 * 1000;   // localStorage write throttle
+        var SESSION_KEY = 'reaset_session_start';
+
+        var _sessionStart = null;    // epoch ms of first playback, THIS device
+        var _sessionSeen  = 0;       // epoch ms of the last playback observed
+        var _sessionPk    = null;    // project this clock belongs to
+        var _sessionSeenWritten = 0;
+
+        // The Director's published value, and the LOCAL instant it landed.
+        // Never the Director's own clock — see the note above.
+        var _sessionRemoteSec = null;
+        var _sessionRemoteAt  = 0;
+
+        (function _sessionRestore() {
+            var raw;
+            try { raw = localStorage.getItem(SESSION_KEY); } catch (e) { return; }
+            if (!raw) return;
+            var st = null;
+            if (raw.charAt(0) === '{') {
+                try { st = JSON.parse(raw); } catch (e) { st = null; }
+            } else {
+                // Legacy format: a bare start timestamp with no idle record.
+                // Treated as last seen AT the start, so anything old enough to
+                // be the reported bug expires on this very load.
+                var v = parseInt(raw, 10);
+                if (v > 0) st = { s: v, t: v, p: null };
+            }
+            if (!st || !(st.s > 0)) return;
+            if (Date.now() - (st.t || st.s) > SESSION_IDLE_RESET_MS) {
+                try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+                return;
+            }
+            _sessionStart = st.s;
+            _sessionSeen  = st.t || st.s;
+            _sessionPk    = st.p || null;
         })();
 
-        function _sessionBegin() {
-            if (_sessionStart) return;
-            _sessionStart = Date.now();
-            try { localStorage.setItem('reaset_session_start', String(_sessionStart)); } catch (e) {}
+        function _sessionWrite() {
+            try {
+                localStorage.setItem(SESSION_KEY, JSON.stringify({
+                    s: _sessionStart, t: _sessionSeen, p: _sessionPk || g_projectKey || null
+                }));
+            } catch (e) { /* private mode — the clock still runs for this session */ }
         }
 
+        function _sessionBegin() {
+            _sessionSeen = Date.now();
+            if (_sessionStart) { _sessionTouch(); return; }
+            _sessionStart = _sessionSeen;
+            _sessionPk = g_projectKey || null;
+            _sessionSeenWritten = _sessionSeen;
+            _sessionWrite();
+            _sessionPublish();
+        }
+
+        // Keeps the idle record current WHILE playing, so a long rehearsal is
+        // never mistaken for an abandoned one. Throttled: the clock ticks every
+        // second and a localStorage write per second, for the length of a show,
+        // is not a thing to do on a phone.
+        function _sessionTouch() {
+            if (!_sessionStart) return;
+            var now = Date.now();
+            _sessionSeen = now;
+            if (now - _sessionSeenWritten < SESSION_SEEN_WRITE_MS) return;
+            _sessionSeenWritten = now;
+            _sessionWrite();
+        }
+
+        // A different REAPER project is a different show. Called from
+        // _initProjectStorage, which is also where every other project-scoped
+        // store is reloaded.
+        function _sessionOnProjectChange(newKey) {
+            if (_sessionPk && newKey && _sessionPk !== newKey) {
+                _sessionStart = null; _sessionSeen = 0;
+                try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+            }
+            _sessionPk = newKey || null;
+            if (_sessionStart) _sessionWrite();
+        }
+
+        // -1 is the wire sentinel for "no session running": nothing has played
+        // yet, or the Director just reset. Distinct from 0, which is a session
+        // that started this very second, and from an absent key, which is a
+        // Director that has never published at all.
+        function _sessionPublish() {
+            if (REASET_MODE !== 'director') return;
+            wwr_req('SET/EXTSTATE/ReaSet/sessionElapsed/' +
+                    (_sessionStart ? Math.floor((Date.now() - _sessionStart) / 1000) : -1),
+                    'session-clock');
+        }
+
+        // The anchor is refreshed only when the VALUE CHANGES. The Director
+        // publishes every DIRECTOR_BEAT_MS and the probe polls at 2s, so every
+        // value is seen more than once; re-anchoring on a repeat would drag the
+        // displayed time backwards on each duplicate.
+        function _sessionObserveRemote(raw) {
+            var v = parseInt(raw, 10);
+            if (isNaN(v)) return;
+            if (v === _sessionRemoteSec) return;
+            _sessionRemoteSec = v;
+            _sessionRemoteAt  = Date.now();
+        }
+
+        // One place decides which clock is on screen, so #tb-session and Live
+        // View's #live-show-time can never disagree.
+        //
+        // A follower falls back to its own clock when no Director is live —
+        // _dcForeignActive() is the same proof-of-life the lease uses — so a
+        // device that loses contact mid-show keeps counting instead of
+        // freezing, and a device running solo still has a clock at all.
+        function _sessionDisplaySec() {
+            if (REASET_MODE !== 'director' && _dcForeignActive() && _sessionRemoteAt) {
+                if (_sessionRemoteSec < 0) return 0;
+                return _sessionRemoteSec + (Date.now() - _sessionRemoteAt) / 1000;
+            }
+            return _sessionStart ? (Date.now() - _sessionStart) / 1000 : 0;
+        }
+
+        // Becoming Director must not restart the show clock. A device that was
+        // following a Director which then went away — or that took over from
+        // it — already holds the show's elapsed time in its anchor, so it
+        // adopts that as a local start instead of counting from its own first
+        // playback. Without this, the Mac closing its laptop resets everyone's
+        // clock to whenever the phone happened to press Play.
+        //
+        // Arithmetic is entirely local: the anchor is already expressed as
+        // "this many seconds at THIS instant on MY clock".
+        function _sessionAdoptOnPromotion() {
+            if (_sessionRemoteSec === null || _sessionRemoteSec < 0 || !_sessionRemoteAt) return;
+            var start = Date.now() - ((_sessionRemoteSec * 1000) + (Date.now() - _sessionRemoteAt));
+            // Keep whichever session began EARLIER. A device that has been in
+            // the room since soundcheck knows more about when this started than
+            // a Director that joined an hour in.
+            if (_sessionStart && _sessionStart <= start) return;
+            _sessionStart = start;
+            _sessionSeen = Date.now();
+            _sessionSeenWritten = _sessionSeen;
+            _sessionWrite();
+        }
+
+        // Director-only, because the Director owns the clock: a follower that
+        // cleared its local value would watch the next published tick overwrite
+        // it half a second later, which is a silently broken button. The title
+        // attribute says which it is, refreshed by applyModeUI().
         function resetSessionClock() {
-            _sessionStart = null;
-            try { localStorage.removeItem('reaset_session_start'); } catch (e) {}
+            if (REASET_MODE !== 'director') return;
+            _sessionStart = null; _sessionSeen = 0; _sessionSeenWritten = 0;
+            try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+            _sessionPublish();   // immediately, not on the next beat
             _tickSessionClock();
             var g = document.getElementById('tb-session-grp');
             if (g) { g.classList.add('resetting'); setTimeout(function () { g.classList.remove('resetting'); }, 450); }
         }
 
+        function _refreshSessionClockTitle() {
+            var g = document.getElementById('tb-session-grp');
+            if (!g) return;
+            g.title = (REASET_MODE === 'director')
+                ? t('Session time since first playback — long-press to reset')
+                : t('Session time, from the Director');
+            g.classList.toggle('is-readonly', REASET_MODE !== 'director');
+        }
+
         function _tickSessionClock() {
-            var txt = _sessionStart ? _fmtClock((Date.now() - _sessionStart) / 1000) : '0:00';
+            if (_sessionStart && isPlaying) _sessionTouch();
+            var txt = _fmtClock(_sessionDisplaySec());
             var el = document.getElementById('tb-session');
             if (el) el.innerText = txt;
             var lv = document.getElementById('live-show-time');

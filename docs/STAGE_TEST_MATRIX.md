@@ -150,6 +150,16 @@ network path and a localStorage origin, and will pass tests that a phone fails.
 | **S15** | Background / foreground the phone browser. | UI recovers current state. **No phantom transport action.** | | |
 | **S16** | Lock the phone briefly, unlock. | Reconnects safely. No stale seek. | | |
 | **S17** | Disconnect only the phone's Wi-Fi during playback. | REAPER keeps playing. On reconnect the phone adopts REAPER's current state; **no backward jump**. | | |
+| **S18** | Mac (Director) and phone (Controller), same show. Compare the session clocks. | Identical to within a second, with no manual reset on either. | | |
+| **S19** | **Set the phone's system clock 8 minutes off the Mac's**, then repeat S18. | Still identical. **This is the case that distinguishes a correct implementation from the naive one** — if the clocks differ by ~8 minutes, an absolute timestamp is being put on the wire somewhere. | | |
+| **S20** | Open a third device mid-show. | Adopts the running time within a few seconds; does not start from 0:00. | | |
+| **S21** | Pull the phone's Wi-Fi mid-show. | Its clock keeps counting rather than freezing, and re-syncs to the Director's on reconnect. | | |
+| **S22** | Long-press the clock on the **Director**. | Zeroes on every device within one poll (~2s). | | |
+| **S23** | Long-press the clock on a **Controller**. | Nothing happens, and the cursor never suggested it would. | | |
+| **S24** | Close the Director's laptop; another device takes the lease. | The show clock continues — it must NOT restart from the new Director's first Play. | | |
+| **S25** | Play something, quit the browser, reopen **more than 4h later**. | Clock starts from 0:00, not from hours ago. This is the reported bug. | | |
+| **S26** | Play something, quit the browser, reopen **within a few minutes**. | Clock resumes where it was — a refresh mid-rehearsal must not zero it. | | |
+| **S27** | Open a different REAPER project. | Clock starts from 0:00 rather than inheriting the previous project's time. | | |
 
 ### Controller-role scenarios
 
