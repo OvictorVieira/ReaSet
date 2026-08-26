@@ -66,6 +66,35 @@ def extract_function(source: str, name: str) -> str:
     raise AssertionError(f"unbalanced braces while extracting {name}()")
 
 
+def _brace_block(source: str, open_at: int) -> tuple[str, int]:
+    """Slice a `{...}` starting at open_at; returns (body, index after `}`)."""
+    depth = 0
+    for i in range(open_at, len(source)):
+        if source[i] == "{":
+            depth += 1
+        elif source[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[open_at + 1 : i], i + 1
+    raise AssertionError("unbalanced braces")
+
+
+def _else_branch(source: str, header: str) -> str:
+    """Body of the `else` attached to `header`'s if-statement.
+
+    Brace-matched rather than regex-matched: the if-branch this one is paired
+    with contains its own if/else, and a non-greedy pattern happily returns
+    that inner one instead — which is how the first version of this test
+    passed while reading the wrong branch.
+    """
+    at = source.index(header)
+    _, after = _brace_block(source, source.index("{", at + len(header) - 1))
+    tail = source[after:]
+    assert tail.lstrip().startswith("else"), f"{header} has no else branch"
+    body, _ = _brace_block(tail, tail.index("{", tail.index("else")))
+    return body
+
+
 def strip_comments(js: str) -> str:
     """Remove JS comments, leaving string literals intact.
 
@@ -574,4 +603,133 @@ def test_play_target_has_no_first_song_fallback(script_body: str) -> None:
     assert re.search(r"\bfunction\s+resolvePlayTarget\s*\(", script_body), (
         "resolvePlayTarget() is gone — Play's target must come from one place: "
         "explicit selection, then cursor-region, then the cursor"
+    )
+
+
+# ── Two roles, and no dialog on the way in ───────────────────────────────────
+# The read-only "Player" role was retired: both surviving roles drive REAPER,
+# and the line between them is EDITING. These lock the two properties that are
+# easy to reintroduce by accident and expensive to notice on a stage — a device
+# that can author before it knows it is the Director, and a modal in front of a
+# musician who just opened a phone thirty seconds before downbeat.
+
+def test_player_role_is_gone(script_body: str) -> None:
+    """No live code path may resolve to the retired role.
+
+    The one permitted mention is the localStorage MIGRATION, which exists
+    precisely so a device that stored 'player' before the change comes back as
+    a Controller instead of booting into a role nothing renders any more.
+    """
+    body = strip_comments(script_body)
+    mentions = re.findall(r"""['"]player['"]""", body)
+    assert len(mentions) == 1, (
+        f"expected exactly one 'player' literal (the localStorage migration), "
+        f"found {len(mentions)} — the retired read-only role must not be "
+        f"reachable from any live branch"
+    )
+    assert re.search(
+        r"""_storedMode\s*===\s*['"]player['"]\s*\)\s*\{\s*_storedMode\s*=\s*['"]controller['"]""",
+        body,
+    ), "the surviving 'player' literal is not the migration — check what it does"
+
+    html = REASET_HTML.read_text(encoding="utf-8")
+    assert "reaset-player" not in html, (
+        "body.reaset-player rules survive but nothing adds that class — dead "
+        "CSS that reads as a third role still existing"
+    )
+    assert "REASET_PLAYER_BLOCKED_KEYS" not in body, (
+        "the read-only keyboard gate is still here; Space/Enter/arrows are "
+        "transport, and both roles may drive transport"
+    )
+
+
+def test_default_mode_cannot_author(script_body: str) -> None:
+    """The pre-resolution default must fail closed on EDITING, not transport.
+
+    A device opens before it knows whether anyone is directing. Moving the
+    playhead in that window is undone with one tap; publishing a setlist from a
+    device that turns out not to be the Director is not — it overwrites the
+    real one on every other device. So the default is the role that cannot
+    author, and canEditSetlist()/canPublishSetlist() must both be Director-only.
+    """
+    body = strip_comments(script_body)
+    default = re.search(r"""var\s+REASET_MODE\s*=\s*['"]([a-z]+)['"]""", body)
+    assert default, "REASET_MODE's declaration is gone"
+    assert default.group(1) == "controller", (
+        f"REASET_MODE defaults to {default.group(1)!r} — it must default to the "
+        f"role that cannot publish, so a race before the mode resolves can "
+        f"never mutate the shared setlist"
+    )
+    for fn in ("canEditSetlist", "canPublishSetlist"):
+        gate = strip_comments(extract_function(body, fn))
+        assert re.search(r"""REASET_MODE\s*===\s*['"]director['"]""", gate), (
+            f"{fn}() no longer requires Director"
+        )
+        assert "controller" not in gate, (
+            f"{fn}() admits a Controller — a Controller drives the show, it "
+            f"does not change it"
+        )
+
+
+def test_fresh_device_resolves_its_role_instead_of_asking(script_body: str) -> None:
+    """No stored choice must NOT open the modal.
+
+    The boot path used to call openModeSelector(true) — a forced three-option
+    dialog about a distributed lease protocol, shown to whoever opened the app
+    last. It now applies the Controller UI immediately and schedules
+    _dcAutoResolveRole(), which reads the room: a live foreign heartbeat means
+    somebody is already directing, its absence means somebody has to.
+    """
+    body = strip_comments(script_body)
+    fresh = _else_branch(body, "if (REASET_MODE_STORED)")
+    assert "openModeSelector" not in fresh, (
+        "a fresh device is forced into the mode picker again — it must enter "
+        "without being asked"
+    )
+    assert "_dcAutoResolveRole" in fresh, (
+        "the fresh-device branch no longer schedules the role resolver"
+    )
+
+    resolver = strip_comments(extract_function(body, "_dcAutoResolveRole"))
+    assert "_dcForeignActive()" in resolver, (
+        "the resolver claims Director without checking for a live one"
+    )
+    assert "requestDirectorLease" in resolver, (
+        "the resolver must go through the lease — nothing becomes Director on "
+        "optimism, automatic or not"
+    )
+    assert "_directorPinHash" in resolver, (
+        "a configured Director PIN must block an AUTOMATIC claim: the PIN "
+        "exists to make directing deliberate, and auto-claiming satisfies it "
+        "without anyone typing it"
+    )
+    assert "localStorage" not in resolver, (
+        "an auto-resolved role must not persist — every boot re-reads the "
+        "room, which is what lets the next device pick up a lease its Director "
+        "dropped instead of a room full of Controllers with nothing to follow"
+    )
+    assert "_roleChosenExplicitly" in resolver, (
+        "the resolver can overwrite a choice the user made during its claim "
+        "window"
+    )
+    assert "DIRECTOR_TTL_MS" in resolver, (
+        "the resolver claims on the short window. A foreign heartbeat id whose "
+        "timestamp has not been seen to CHANGE yet is a live Director OR a "
+        "corpse, and telling them apart takes a full beat interval observed "
+        "across the probe — longer than a deliberate claim needs, because this "
+        "one fires on every boot of every device"
+    )
+
+
+def test_stand_down_drops_to_controller_not_read_only(script_body: str) -> None:
+    """Losing the lease costs the SETLIST, not the transport.
+
+    _dcStandDown() used to set REASET_MODE = 'player', so a Director whose
+    Wi-Fi blinked mid-show came back unable to start the next song. It is still
+    in the band; what it lost is the right to decide what that song is.
+    """
+    body = strip_comments(extract_function(strip_comments(script_body), "_dcStandDown"))
+    assert re.search(r"""REASET_MODE\s*=\s*['"]controller['"]""", body), (
+        "a displaced Director no longer drops to Controller — check it has not "
+        "been sent back to a read-only role"
     )

@@ -520,10 +520,17 @@ thing standing between a role and a write.
    REAPER could receive from this page passes through one function.
 2. **Capability check inside each mutator** (`canEditSetlist()` /
    `canPublishSetlist()` / `canControlTransport()`).
-3. **CSS** (`body.reaset-player`, `body.reaset-controller`) — so a control that
-   would do nothing does not *look* like it worked.
+3. **CSS** (`body.reaset-controller`) — so a control that would do nothing does
+   not *look* like it worked.
 
-| Action | Director | Controller | Player |
+> **Superseded on the Player column.** The read-only *Player* role was retired
+> after this audit; see §13. Both surviving roles drive transport, and the line
+> between them is authoring. The Player column is kept below because it records
+> what the audit measured, and because the migration path depends on it: a
+> device that stored `'player'` comes back as a Controller, gaining exactly the
+> ✅s in the Controller column and nothing else.
+
+| Action | Director | Controller | ~~Player~~ (retired) |
 |---|---|---|---|
 | Play / Pause / Stop | ✅ | ✅ | ❌ |
 | Cue song while stopped / paused | ✅ | ✅ | ❌ |
@@ -538,21 +545,21 @@ thing standing between a role and a write.
 | Publish shared setlist (`SET/EXTSTATE ReaSet/setlist*`) | ✅ | ❌ | ❌ |
 | Arm Auto-Stop / NativeLoop in `Reaset.lua` | ✅ | ❌ | ❌ |
 | Set the Director PIN | ✅ | ❌ | ❌ |
-| Claim / take over the Director lease | ✅ | ✅ (explicit) | ✅ (explicit) |
+| Claim / take over the Director lease | ✅ | ✅ (explicit, or automatic when nobody is directing — §13) | ✅ (explicit) |
 | Edit mode (drag handles) | ✅ | ❌ | ❌ |
 | Lyrics / chords / Canvas / Live View | ✅ | ✅ | ✅ |
 | Local display prefs (theme, fonts, Auto-Scroll, Hide Skips, Grid) | ✅ | ✅ | ✅ |
 | Smooth Seek, Init Song MIDI, Stop Hold | ✅ | ✅ (local to this device's own seeks / Play / Stop button) | ❌ |
 | Queue Mode switch | ✅ (governs the EDIT-mode audition jump only) | ❌ | ❌ |
-| SYNC (restart polling) | ✅ | ✅ | ✅ |
+| RECONNECT (restart polling) | ✅ | ✅ | ✅ |
 
 ### Command classes
 
-| Class | Shape | Director | Controller | Player |
-|---|---|---|---|---|
-| `read` | every `;`-segment starts `GET/` | ✅ | ✅ | ✅ |
-| `transport` | action ids `1007` / `1008` / `1016`, and `SET/POS/…` | ✅ | ✅ | ❌ |
-| `publish` | everything else — `SET/EXTSTATE`, `SET/EXTSTATEPERSIST`, `SET/REPEAT`, `SET/PROJEXTSTATE`, unrecognised shapes | ✅ | ❌ | ❌ |
+| Class | Shape | Director | Controller |
+|---|---|---|---|
+| `read` | every `;`-segment starts `GET/` | ✅ | ✅ |
+| `transport` | action ids `1007` / `1008` / `1016`, and `SET/POS/…` | ✅ | ✅ |
+| `publish` | everything else — `SET/EXTSTATE`, `SET/EXTSTATEPERSIST`, `SET/REPEAT`, `SET/PROJEXTSTATE`, unrecognised shapes | ✅ | ❌ |
 
 The transport set is a **whitelist**, not a pattern. "Any bare number is an
 action id" would let a Controller send any REAPER action at all, which defeats
@@ -620,3 +627,116 @@ persisted precisely so a Director that refreshes is still recognised as the
 same Director, and the stage scenario is two devices, not two tabs. Noted here
 because it makes two tabs a *bad way to test* #6 — see the test matrix, which
 requires physical devices for exactly this reason.
+
+---
+
+## 13. Role model, revised: two roles and no question on the way in
+
+Added after the epic's implementation, on the project owner's decision. It
+supersedes the three-role model §11 audited.
+
+### What changed
+
+**The read-only *Player* role is retired.** Two roles remain:
+
+| | Director | Controller |
+|---|---|---|
+| Setlist: order, chains, loops, skips, end-states, overrides | ✅ owns it | ❌ follows |
+| Publishes to the other devices | ✅ | ❌ |
+| Play / Pause / Stop / cue / queue | ✅ | ✅ |
+| How many per session | exactly one | any number |
+
+The line between them is **editing, not transport**. Every device in the room is
+there to play the show; a phone on a mic stand that can display the setlist but
+cannot start it is a worse instrument than the spacebar it replaced. Anyone who
+opens ReaSet can move REAPER — only the Director can change what REAPER plays.
+
+**The mode picker no longer opens on the way in.** A device with no stored
+choice used to be held behind a forced three-option modal asking a musician a
+question about a distributed lease protocol, thirty seconds before downbeat.
+The answer is one the code can derive, so it does: the page opens as a
+Controller — usable immediately, transport live, following whatever the
+Director has published — and `_dcAutoResolveRole()` then reads the room. A live
+foreign heartbeat means somebody is already directing; its absence means
+somebody has to.
+
+The picker still exists and is still reachable from the mode badge. It is now
+what it should always have been: the way to *change* a role, not a tollgate.
+
+### Why the automatic claim waits longer than a deliberate one
+
+`_dcBeatIsProofOfLife` judges a foreign Director alive by **whether its
+timestamp changed**, never by comparing a foreign clock to ours (see §6 — two
+devices' clocks disagree, and the heartbeat must not care). The cost is that a
+foreign heartbeat id read once is *ambiguous*: a Director beating normally whose
+timestamp has simply not been seen to change yet, or a corpse left in ExtState
+by a laptop that closed without releasing the lease. Distinguishing them takes
+one full `DIRECTOR_BEAT_MS` observed across the 2s probe — **longer** than the
+`DIRECTOR_CLAIM_MS` window a deliberate claim uses.
+
+A deliberate claim can live with that gap: a human pressed the button, and
+`_dcWatchConflict` resolves a double-claim by id tiebreak within a couple of
+seconds. An automatic claim cannot, because it fires on **every boot of every
+device** — the same odds that are acceptable once are, repeated, a phone that
+walks in during the second song and takes the show off the Mac. So when a
+foreign heartbeat id is present but unproven, the resolver waits a full
+`DIRECTOR_TTL_MS` and looks again. Nothing is lost by waiting: the device is
+already a working Controller with live transport; the only thing it cannot do
+meanwhile is edit.
+
+### Two things the automatic path deliberately refuses
+
+**A configured Director PIN blocks it.** The PIN exists to make directing a
+deliberate act, and an automatic claim would satisfy it without anyone typing
+it. `_directorPinHash === null` (probe reply not yet landed) is treated as
+*unknown*, not as "no PIN" — claiming on a value that has not been read is
+exactly the blind claim the PIN prevents — so the resolver defers once and
+decides on evidence.
+
+**An automatic role is never persisted.** It is a reading of the room right
+now, not a decision, so every boot takes the reading again. That is what makes
+it self-healing: close the Director's laptop and the next device to reload
+picks the lease up, instead of a room full of Controllers with nothing to
+follow. Only an explicit pick — the selector, or the badge — is stored, and
+`_roleChosenExplicitly` guards the resolver so a choice made during its claim
+window always wins.
+
+### Consequences elsewhere
+
+- **`REASET_MODE` now defaults to `'controller'`**, not `'player'`. It still
+  fails closed on the property that matters: a race before the mode resolves
+  can move the playhead but can never mutate the shared setlist. A stray seek
+  is undone with one tap; a setlist overwritten by a device that turned out not
+  to be the Director is not.
+- **`_dcStandDown()` drops to Controller.** A displaced Director loses the
+  *setlist*, not the transport. The musician holding it is still in the band and
+  still has to be able to start the next song.
+- **`localStorage['reaset_mode'] === 'player'` is migrated to `'controller'`**
+  on read, so devices carrying the retired role come back usable rather than
+  booting into a role nothing renders.
+- **The `body.reaset-player` stylesheet is gone** — ~140 lines of dimmed
+  transport and inert rows that nothing could match any more.
+- **The read-only keyboard gate is gone.** Space / Enter / KeyO / arrows are all
+  transport, and both roles may drive transport.
+- **`director-only` rows are no longer hidden from a Controller.** The three
+  that carry it without `authoring-only` — Smooth Seek, MIDI Init, Stop Hold —
+  all tune how *this device* issues *its own* transport (verified:
+  `setSmoothSeek` and `setStopMode` write only localStorage, and
+  `initSongMidiToggle` is read solely by `midiInitPreroll`). A Controller that
+  may press Stop is entitled to say whether its own Stop button takes a tap or a
+  hold. The rows that publish — Queue Mode, Auto-Stop — carry `authoring-only`
+  as well, and that is what hides them.
+
+### Locked by tests
+
+`tests/test_reaset_html.py`: `test_player_role_is_gone`,
+`test_default_mode_cannot_author`,
+`test_fresh_device_resolves_its_role_instead_of_asking`,
+`test_stand_down_drops_to_controller_not_read_only`. Each was verified to fail
+against a mutation of the source that reintroduces the behaviour it forbids.
+
+### Still requires a real-device test
+
+Two devices, one REAPER. §13 changes *who may do what* and *how a role is
+chosen*; neither can be proven in this repository, because `wwr_req` is injected
+by REAPER's own web server. See `docs/STAGE_TEST_MATRIX.md` §C.

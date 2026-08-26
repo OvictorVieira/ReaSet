@@ -165,7 +165,13 @@ network path and a localStorage origin, and will pass tests that a phone fails.
 | **C08** | Director changes the active setlist. | Controller follows automatically (S01 path). | | |
 | **C09** | Two Controllers open at once. | Both may control transport (documented policy). Neither becomes a Director. | | |
 | **C10** | Refresh the Controller. | Stays Controller; reconnects; follows the current active setlist. | | |
-| **C11** | Player device: attempt any transport action. | Nothing reaches REAPER. | | |
+| **C11** | *(retired with the Player role — see plan §13)* | — | | |
+| **C12** | Fresh device (localStorage cleared), no Director anywhere: open ReaSet. | No modal. Opens as Controller with live transport, then becomes Director within ~6s. Badge reads DIRECTOR. | | |
+| **C13** | Fresh device, a Director already beating on another device: open ReaSet. | No modal. Stays Controller. The incumbent keeps its lease and shows no conflict banner. | | |
+| **C14** | Same as C13, but kill the incumbent (force-quit the browser, do not close cleanly), wait 15s, then reload the phone. | The phone becomes Director — the corpse in ExtState must not block it forever. | | |
+| **C15** | Set a Director PIN, then open a fresh device with no Director running. | Stays Controller. It must NOT auto-claim past the PIN. Choosing Director from the badge prompts for it. | | |
+| **C16** | Device that stored the retired `'player'` mode (set `localStorage.reaset_mode='player'`, reload). | Opens as Controller: transport works, setlist is read-only, badge reads CONTROLLER. | | |
+| **C17** | Director device: pull its Wi-Fi so another device takes over, then restore. | Displaced device drops to Controller — transport still works, editing does not. Banner says it can no longer edit. | | |
 
 ---
 
@@ -185,7 +191,7 @@ network path and a localStorage origin, and will pass tests that a phone fails.
 | **V10** | iPhone, narrow viewport | Gaps aid scanning; no broken hitboxes; no excessive scrolling | | |
 | **V11** | Grid view | Layout not broken by the block rule | | |
 | **V12** | Each theme (dark / light / custom) | Gap and any divider read correctly in all | | |
-| **V13** | Player and Controller read views | Render correctly | | |
+| **V13** | Controller read views | Render correctly | | |
 
 ### Visual regression checklist
 
@@ -204,7 +210,7 @@ network path and a localStorage origin, and will pass tests that a phone fails.
 Run **after** the critical tests pass. Minimum rehearsal simulation:
 
 1. Load the real show project.
-2. Open the Director on the Mac and a Controller (or Player) on the phone.
+2. Open the Director on the Mac and a Controller on the phone.
 3. Run the full show setlist end to end.
 4. Perform at least ten manual pauses, stops and manual block starts.
 5. Background and foreground the phone at least five times; lock and unlock it.
