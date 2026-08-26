@@ -616,6 +616,28 @@
             border-color: rgba(255, 159, 10, 0.35);
         }
 
+        /* Three states that mean genuinely different things and must never be
+           read for one another on a dark stage:
+             .active   REAPER is playing this right now      (observed)
+             .cued     the user picked this; Play starts here (intent, idle)
+             .queued   the user picked this as next          (intent, playing)
+           .cued gets the brand colour and a left edge because it is the one
+           the performer is about to act on — it answers "what happens if I
+           hit Play", which is the question being asked while stopped. */
+        .song-row.cued {
+            border-color: var(--color-brand);
+            box-shadow: inset 3px 0 0 0 var(--color-brand);
+        }
+
+        .grid-card.cued {
+            border-color: var(--color-brand);
+            box-shadow: inset 0 3px 0 0 var(--color-brand);
+        }
+
+        .section-row.cued {
+            box-shadow: inset 3px 0 0 0 var(--color-brand);
+        }
+
         /* Progress fill */
         .card-bg-fill {
             position: absolute;
@@ -8586,6 +8608,10 @@
             }
 
             listEl.scrollTop = scrollPos;
+            // The list was just rebuilt from scratch, so every imperative class
+            // on it is gone. Selected / queued are STATE, so they are repainted
+            // from that state rather than being expected to survive.
+            if (typeof _paintIntent === 'function') _paintIntent();
             g_totalDur = totalDur; g_activeCount = activeCount;
             document.getElementById('tb-count').innerText = activeCount;
             document.getElementById('total-time').innerText = '/' + formatTotalTime(totalDur);
@@ -9164,9 +9190,8 @@
                         }
 
                         if (queuedRegion) {
-                            wwr_req("SET/POS/" + queuedRegion.start, "queued-at-section-end"); queuedRegion = null;
-                            var qEls = document.querySelectorAll('.queued');
-                            for (var q = 0; q < qEls.length; q++) qEls[q].classList.remove('queued');
+                            wwr_req("SET/POS/" + queuedRegion.start, "queued-at-section-end");
+                            clearQueuedRegion('consumed-at-section-end');
                             return;
                         }
                     }
@@ -9217,9 +9242,8 @@
                     _reaperNativeLoopOff();
                     if (activeRegion.loop) { wwr_req("SET/POS/" + activeRegion.start, "song-loop"); return; }
                     if (queuedRegion) {
-                        wwr_req("SET/POS/" + queuedRegion.start, "queued-at-region-end"); queuedRegion = null;
-                        var qEls = document.querySelectorAll('.queued');
-                        for (var q = 0; q < qEls.length; q++) qEls[q].classList.remove('queued');
+                        wwr_req("SET/POS/" + queuedRegion.start, "queued-at-region-end");
+                        clearQueuedRegion('consumed-at-region-end');
                         return;
                     }
                     // Per-song overrides: stopAfter / delayAfter
@@ -9495,60 +9519,169 @@
             return false;
         }
 
-        function playRegion(start, id) {
-            var queueMode = document.getElementById('queueModeToggle').checked;
-            if (!isPlaying || !queueMode) {
-                // Guard against stale transport responses: when the user clicks a song, the
-                // position request (and Play when needed) dispatches immediately. A pending transport response
-                // (still showing the OLD position near the previous song's end) may arrive
-                // milliseconds later, trigger autoStop, and dispatch a STOP that arrives at
-                // REAPER after the user's command — disrupting the new selection.
-                // Setting this flag for 500ms tells the autoStop block to skip its STOP if
-                // the user just explicitly selected a song.
-                window._playRegionLocked   = Date.now() + 500;
-                // The user decided: a cue left pending by an earlier auto-stop no
-                // longer applies and would move the cursor off their choice.
-                window._pendingCuePos = null;
-                // The pre-roll lands a few ms BEFORE the song start, which with
-                // contiguous regions is inside the previous one. Record the intent
-                // so the display does not briefly resolve the wrong song; the
-                // TRANSPORT handler clears it once the real start is crossed.
-                window._playIntent = { id: id, start: start };
-                seekManualTransport(midiInitPreroll(start), true); queuedRegion = null;
-                var all = document.querySelectorAll('.queued');
-                for (var i = 0; i < all.length; i++) all[i].classList.remove('queued');
-            } else {
-                queuedRegion = null;
-                var isSub = false;
-                for (var j = 0; j < displayList.length; j++) {
-                    if (displayList[j].id == id) { queuedRegion = displayList[j]; break; }
+        // ── Explicit user intent, kept apart from observed transport state ──────
+        //
+        //   currentPos      what REAPER reported — up to a poll interval old
+        //   activeRegion    the region containing currentPos          (derived)
+        //   selectedRegion  the song the user tapped while idle       (intent)
+        //   queuedRegion    the song the user tapped while playing    (intent)
+        //
+        // currentPos is EVIDENCE. selectedRegion is a DECISION. A decision that
+        // REAPER has not acknowledged yet is still a decision, and for the 33ms
+        // to ~110ms it takes to come back it is the only correct answer to
+        // "what does Play start". The old code answered that question from
+        // currentPos alone, which is a value that — by construction — describes
+        // the moment BEFORE the user acted.
+        var selectedRegion = null;   // { id, start, end, at } or null
+
+        function _findRegionById(id) {
+            for (var i = 0; i < displayList.length; i++) {
+                if (displayList[i].id == id) return displayList[i];
+            }
+            for (var prop in g_subRegionMap) {
+                if (!g_subRegionMap.hasOwnProperty(prop)) continue;
+                var subs = g_subRegionMap[prop];
+                for (var j = 0; j < subs.length; j++) {
+                    if (subs[j].id == id) return subs[j];
                 }
-                if (!queuedRegion) {
-                    for (var prop in g_subRegionMap) {
-                        for (var xs = 0; xs < g_subRegionMap[prop].length; xs++) {
-                            if (g_subRegionMap[prop][xs].id == id) {
-                                queuedRegion = g_subRegionMap[prop][xs];
-                                isSub = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-                var all2 = document.querySelectorAll('.queued');
-                for (var k = 0; k < all2.length; k++) all2[k].classList.remove('queued');
-                var rowId = isSub ? "subrow-" + id : "row-" + id;
-                var row = document.getElementById(rowId);
-                if (row) row.classList.add('queued');
+            }
+            return null;
+        }
+
+        function _rowElFor(id) {
+            return document.getElementById('row-' + id) ||
+                   document.getElementById('subrow-' + id);
+        }
+
+        // Intent classes are painted from state, never accumulated on the DOM.
+        // renderSetlist() rebuilds the list with innerHTML, which silently
+        // erases any class added imperatively — that is why the old .queued
+        // highlight vanished whenever a region poll happened to repaint.
+        function _paintIntent() {
+            var stale = document.querySelectorAll('.cued, .queued');
+            for (var i = 0; i < stale.length; i++) {
+                stale[i].classList.remove('cued');
+                stale[i].classList.remove('queued');
+            }
+            if (selectedRegion) {
+                var c = _rowElFor(selectedRegion.id);
+                if (c) c.classList.add('cued');
+            }
+            if (queuedRegion) {
+                var q = _rowElFor(queuedRegion.id);
+                if (q) q.classList.add('queued');
             }
         }
-        function cueRegion(start, id) {
-            // Set the same lock as playRegion so autoStop's pending 100ms setTimeout
-            // (from a stale transport response) cannot override our cued position
-            // on top of our cued position.
+
+        function clearSelectedRegion(reason) {
+            if (!selectedRegion) return;
+            RSDiag.log('CLEAR_SELECT', { song: selectedRegion.id, reason: reason || '?' });
+            selectedRegion = null;
+            _paintIntent();
+        }
+
+        function _setQueuedRegion(region, reason) {
+            queuedRegion = region;
+            RSDiag.log('QUEUE_SET', { song: region.id, start: _fmtPos(region.start), reason: reason || '?' });
+            _paintIntent();
+        }
+
+        function clearQueuedRegion(reason) {
+            if (!queuedRegion) return;
+            RSDiag.log('QUEUE_CLEAR', { song: queuedRegion.id, reason: reason || '?' });
+            queuedRegion = null;
+            _paintIntent();
+        }
+
+        function _fmtPos(v) { return (typeof v === 'number') ? v.toFixed(3) : String(v); }
+
+        // Tap while stopped or paused: record the choice, move the cursor, and
+        // stop there. No Play, ever.
+        function selectRegionForCue(region, reason) {
+            selectedRegion = { id: region.id, start: region.start, end: region.end, at: Date.now() };
+            RSDiag.log('USER_SELECT', { song: region.id, start: _fmtPos(region.start), reason: reason || 'tap' });
+            // The cue lands on the EXACT region start, with no MIDI-init
+            // pre-roll. Pre-roll exists so plugins receive MIDI before the song
+            // is audible — it belongs to the moment playback starts, not to the
+            // moment a song is chosen. Applying it here would make tapping a
+            // song audibly initialise plugins, which #3 rules out.
+            wwr_req('SET/POS/' + region.start, 'user-cue');
+            // The user decided where the cursor goes: a cue left pending by an
+            // earlier auto-stop no longer applies and would move it off their
+            // choice as soon as TRANSPORT reports playState 0.
+            window._pendingCuePos = null;
+            // A TRANSPORT reply still in flight describes the position BEFORE
+            // this seek. The auto-stop block would happily issue a STOP off the
+            // back of it, landing at REAPER after the user's command.
             window._playRegionLocked = Date.now() + 500;
+            _paintIntent();
+            flashRow(region.id);
+        }
+
+        // What Play should start, in the order #3 requires:
+        //   1. the explicit selection — authoritative by construction
+        //   2. the region actually containing the cursor
+        //   3. nothing: play from wherever REAPER's cursor already is
+        //
+        // There is deliberately no fourth case. The old displayList[0] fallback
+        // was not a default, it was a race: it fired precisely when currentPos
+        // had not yet caught up with a seek the user had just made — the one
+        // moment when the user's intent was clearest and the cursor least
+        // trustworthy — and it started song 1 instead.
+        function resolvePlayTarget() {
+            if (selectedRegion) return { region: selectedRegion, via: 'selected-region' };
+            for (var i = 0; i < displayList.length; i++) {
+                var r = displayList[i];
+                if (currentPos >= r.start && currentPos < r.end) {
+                    return { region: r, via: 'cursor-region' };
+                }
+            }
+            return { region: null, via: 'cursor-freeform' };
+        }
+
+        function playRegion(start, id) {
+            // Coordinates from the caller are a fallback only: a row rendered
+            // before the last region refresh can carry a stale start.
+            var region = _findRegionById(id) || { id: id, start: start, end: start };
+
+            if (!isPlaying) {
+                // STOPPED or PAUSED: a tap is a cue and nothing else.
+                selectRegionForCue(region, 'tap-while-idle');
+                return;
+            }
+
+            var queueMode = document.getElementById('queueModeToggle').checked;
+            if (!queueMode) {
+                // PLAYING with Queue Mode off still seeks immediately. That is
+                // the behaviour #9 replaces; it is left exactly as it was here
+                // so this commit changes one thing only.
+                window._playRegionLocked = Date.now() + 500;
+                window._pendingCuePos    = null;
+                window._playIntent       = { id: id, start: region.start };
+                seekManualTransport(midiInitPreroll(region.start), true);
+                clearQueuedRegion('replaced-by-immediate-seek');
+                return;
+            }
+
+            _setQueuedRegion(region, 'tap-while-playing');
+        }
+
+        function cueRegion(start, id) {
+            var region = _findRegionById(id) || { id: id, start: start, end: start };
+            // Next / Previous and the MIDI navigation actions land here. They
+            // stop first — existing product behaviour, unchanged — but the
+            // target is now recorded as an explicit selection, so the Play that
+            // usually follows is deterministic instead of depending on whether
+            // the SET/POS reply has come back yet.
+            selectedRegion = { id: region.id, start: region.start, end: region.end, at: Date.now() };
+            RSDiag.log('USER_SELECT', { song: region.id, start: _fmtPos(region.start), reason: 'cue-nav' });
+            window._playRegionLocked = Date.now() + 500;
+            window._pendingCuePos    = null;
             // One compound request: REAPER executes in order within it, so stop
             // and reposition can no longer arrive the wrong way round.
-            wwr_req("1016;SET/POS/" + start, "user-cue"); flashRow(id);
+            wwr_req("1016;SET/POS/" + region.start, "user-cue-nav");
+            _paintIntent();
+            flashRow(region.id);
         }
         function smartStop() {
             var activeIdx = -1;
@@ -9559,13 +9692,39 @@
             wwr_req(1016, "user-stop"); if (target !== null) setTimeout(function () { wwr_req("SET/POS/" + target, "stop-rewind"); }, 150);
         }
         function togglePlay() {
-            if (isPlaying) { wwr_req(1008, "user-pause"); }
-            else {
-                var activeIdx = -1;
-                for (var i = 0; i < displayList.length; i++) { var r = displayList[i]; if (currentPos >= r.start && currentPos < r.end) { activeIdx = i; break; } }
-                if (activeIdx === -1 && displayList.length > 0) playRegion(displayList[0].start, displayList[0].id);
-                else wwr_req(1007, "user-play");
+            if (isPlaying) { wwr_req(1008, "user-pause"); return; }
+
+            var target = resolvePlayTarget();
+            RSDiag.log('USER_PLAY', {
+                target: target.region ? target.region.id : '-',
+                via: target.via
+            });
+
+            if (target.via === 'selected-region') {
+                // ONE compound request. REAPER executes a request's segments in
+                // order, so the position lands before the play — and, crucially,
+                // this request never reads currentPos. That is what makes the
+                // race in #3 unreachable rather than merely unlikely: a
+                // TRANSPORT reply still in flight has nothing left to corrupt.
+                //
+                // The pre-roll belongs here, not on the cue: playback is what
+                // needs plugins to have seen MIDI a few ms early.
+                window._playIntent       = { id: target.region.id, start: target.region.start };
+                window._playRegionLocked = Date.now() + 500;
+                window._pendingCuePos    = null;
+                wwr_req('SET/POS/' + midiInitPreroll(target.region.start) + ';1007',
+                        'user-play-selected');
+            } else {
+                // The cursor is already where playback should begin — inside a
+                // region, or wherever the user last left it. Play from there and
+                // do NOT seek to the region start: pause mid-song then Play must
+                // resume, not rewind to the top of the song.
+                wwr_req(1007, 'user-play-' + target.via);
             }
+
+            // The selection has been acted on. Leaving it set would make the
+            // NEXT Play re-seek to it, which is exactly how pause/resume breaks.
+            clearSelectedRegion('consumed-by-play');
         }
         // ── Topbar counters ─────────────────────────────────────────────
         var g_totalDur = 0, g_activeCount = 0;
