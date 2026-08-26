@@ -5518,6 +5518,7 @@
                          ";GET/EXTSTATE/ReaSet/lyricsTrack;GET/EXTSTATE/ReaSet/chordsTrack" +
                          ";GET/EXTSTATE/ReaSet/lyricsTrackMatches;GET/EXTSTATE/ReaSet/chordsTrackMatches" +
                          ";GET/EXTSTATE/ReaSet/tick;GET/EXTSTATE/ReaSet/error" +
+                         ";GET/EXTSTATE/ReaSet/setlistRev;GET/EXTSTATE/ReaSet/setlistFileRev" +
                          ";GET/EXTSTATE/ReaSet/directorPinHash" +
                          ";GET/EXTSTATE/ReaSet/directorHeartbeatId;GET/EXTSTATE/ReaSet/directorHeartbeatTs" +
                          ";GET/EXTSTATE/ReaSet/directorHeartbeatName";
@@ -5719,6 +5720,7 @@
             ["White", "Blanco"],
             ["Green", "Verde"],
             ["Blue", "Azul"],
+            ["Setlist changed", "Setlist cambiado"],
             ["Amber", "Ámbar"],
             ["Teal", "Verde azulado"]
         ];
@@ -6170,14 +6172,64 @@
         }
 
         var _syncLastAppliedRev = 0;   // highest shared revision this instance has applied (Player)
-        var _syncLocalRev       = 0;   // this Director's own push counter
         var _syncPushTimer      = null;
+        var _syncRemoteRev      = 0;   // revision Reaset.lua last reported (cheap ExtState poll)
+        // True only while a received payload is being applied. saveCurrentState()
+        // is the one choke point every edit funnels through, and applying a
+        // payload legitimately calls it — but a Director doing an explicit Pull
+        // would then re-broadcast, under a NEW revision, the very thing it just
+        // received. One flag is cheaper than teaching the choke point about
+        // provenance.
+        var _syncApplying       = false;
+
+        // The Director's push counter has to be MONOTONIC ACROSS RELOADS.
+        // It used to reset to 0 on every refresh, so a Director that refreshed
+        // mid-show pushed rev=1 at Players that had already applied rev=18 —
+        // and _syncApplyPayload's `rev <= lastApplied` test threw away every
+        // push until the counter climbed back past 18. Silent, and worst
+        // exactly when someone had just reloaded to fix something.
+        //
+        // Persisted locally AND reconciled on boot against what Reaset.lua last
+        // saw (see the setlistRev probe), because localStorage can be cleared
+        // while the project's shared state cannot.
+        var _syncLocalRev = (function () {
+            try { return parseInt(localStorage.getItem('reaset_sync_rev'), 10) || 0; }
+            catch (e) { return 0; }
+        })();
+        function _syncBumpRev() {
+            _syncLocalRev++;
+            try { localStorage.setItem('reaset_sync_rev', String(_syncLocalRev)); } catch (e) {}
+            return _syncLocalRev;
+        }
+        // True once Reaset.lua has been seen publishing setlistFileRev, i.e.
+        // it is new enough to confirm its own writes.
+        var _syncFileRevSeen = false;
+
+        // The revision that is actually FETCHABLE. Drives the decision to pull.
+        function _syncObserveRemoteRev(rev) {
+            rev = parseInt(rev, 10);
+            if (!rev || rev < 0) return;
+            _syncRemoteRev = rev;
+            _syncObserveDirectorRev(rev);
+        }
+
+        // A revision the project has already seen, whoever produced it. This
+        // device's own counter must never sit below it, or its next push would
+        // be discarded by everyone as old.
+        function _syncObserveDirectorRev(rev) {
+            rev = parseInt(rev, 10);
+            if (!rev || rev < 0) return;
+            if (rev > _syncLocalRev) {
+                _syncLocalRev = rev;
+                try { localStorage.setItem('reaset_sync_rev', String(_syncLocalRev)); } catch (e) {}
+            }
+        }
 
         function _syncBuildPayload() {
             return {
                 v: 1,
                 fp: g_projectKey,
-                rev: ++_syncLocalRev,
+                rev: _syncBumpRev(),
                 ts: Date.now(),
                 instanceId: _syncInstanceId(),
                 currentSetlistName: currentSetlistName,
@@ -6224,6 +6276,9 @@
         // not the actual enforcement.
         function _syncPushNow() {
             if (REASET_MODE !== 'director' || !g_projectKey) return;
+            // A debounced push still pending would fire seconds later with a
+            // higher revision and re-send the same state for nothing.
+            if (_syncPushTimer) { clearTimeout(_syncPushTimer); _syncPushTimer = null; }
             var b64 = _b64uEncode(JSON.stringify(_syncBuildPayload()));
             var chunks = [];
             for (var i = 0; i < b64.length; i += SYNC_CHUNK_LEN) chunks.push(b64.slice(i, i + SYNC_CHUNK_LEN));
@@ -6239,7 +6294,8 @@
             // most pushes: toggling a skip flag moves the payload by three
             // characters, the count stays identical, and the shared file was never
             // rewritten — Players kept showing the old setlist.
-            wwr_req('SET/EXTSTATE/ReaSet/setlistRev/' + _syncLocalRev);
+            wwr_req('SET/EXTSTATE/ReaSet/setlistRev/' + _syncLocalRev, 'sync-push');
+            RSDiag.log('SYNC_PUSH', { rev: _syncLocalRev, set: currentSetlistName, chunks: chunks.length });
         }
 
         // Debounced entry point — every setlist edit (skip/loop/chain, reorder,
@@ -6248,6 +6304,9 @@
         // ~1s after the last change instead of one push per keystroke.
         function _syncPushSoon() {
             if (REASET_MODE !== 'director') return;
+            // Applying a received payload must not turn into a re-broadcast of
+            // what was just received.
+            if (_syncApplying) return;
             if (_syncPushTimer) clearTimeout(_syncPushTimer);
             _syncPushTimer = setTimeout(_syncPushNow, 1000);
         }
@@ -6377,14 +6436,27 @@
         // REAPER project. `manual` marks an explicit Pull click (Director-only —
         // confirms before overwriting local edits) as opposed to a Player's
         // silent background poll (nothing local to protect: Players never edit).
+        // Backoff after a failed fetch. The revision poll is deliberately
+        // frequent, and a Director's ExtState write succeeds even when
+        // Reaset.lua is not running at all — in which case the announced
+        // revision keeps rising while the file it names never appears. Without
+        // this, that reads as a fetch every 750ms, forever, on a device whose
+        // whole problem is that the bridge is down.
+        var _syncPullBackoffUntil = 0;
+        var SYNC_PULL_BACKOFF_MS  = 5000;
+
         function _syncPullNow(manual) {
+            if (!manual && Date.now() < _syncPullBackoffUntil) return;
             fetch(SYNC_FILE + '?t=' + Date.now(), { cache: 'no-store' })
                 .then(function (res) { if (!res.ok) throw new Error('sin setlist compartido aún'); return res.json(); })
                 .then(function (envelope) {
+                    _syncPullBackoffUntil = 0;
                     if (!envelope || typeof envelope.b64 !== 'string') throw new Error('archivo de sincronización inválido');
                     _syncApplyPayload(JSON.parse(_b64uDecode(envelope.b64)), manual);
                 })
                 .catch(function (err) {
+                    _syncPullBackoffUntil = Date.now() + SYNC_PULL_BACKOFF_MS;
+                    RSDiag.log('SYNC_PULL_FAIL', { err: err.message });
                     // A missing shared file just means no Director has pushed
                     // one; only an explicit Pull click deserves to be told.
                     if (manual) showAppAlert('No se pudo leer el setlist compartido: ' + err.message, 'Pull');
@@ -6393,8 +6465,30 @@
 
         function _syncApplyPayload(payload, manual) {
             if (!payload || payload.v !== 1 || !payload.setlist) return;
-            if (g_projectKey && payload.fp && payload.fp !== g_projectKey) {
+            // WAIT FOR THE PROJECT FINGERPRINT.
+            //
+            // Applying before g_projectKey is known was the refresh bug: a
+            // Player's poll starts the moment applyModeUI() runs, so a payload
+            // could land, set currentSetlistName correctly — and then the first
+            // REGION_LIST_END call _initProjectStorage(), which re-reads
+            // currentSetlistName from localStorage and overwrote it with the
+            // stale local name. The Director's choice lost a race with a value
+            // from the last time this device was used.
+            //
+            // It also meant the fingerprint check below was skipped entirely in
+            // that window, so another project's payload could be applied.
+            if (!g_projectKey) {
+                RSDiag.log('SYNC_DEFER', { rev: payload.rev, reason: 'project-not-identified-yet' });
+                return;
+            }
+            if (payload.fp && payload.fp !== g_projectKey) {
+                RSDiag.log('SYNC_REJECT', { rev: payload.rev, fp: payload.fp, reason: 'other-project' });
                 if (manual) showAppAlert('El setlist compartido pertenece a otro proyecto de REAPER — no se aplicó.', 'Pull');
+                return;
+            }
+            // A Director must not apply its own broadcast back onto itself.
+            if (payload.instanceId && payload.instanceId === _syncInstanceId() && !manual) {
+                _syncLastAppliedRev = payload.rev;
                 return;
             }
             if (!manual && payload.rev <= _syncLastAppliedRev) return; // nothing new since last poll
@@ -6421,9 +6515,33 @@
                     if (reordered.indexOf(displayList[m]) === -1) reordered.push(displayList[m]);
                 }
                 displayList = reordered;
+
+                var prevName = currentSetlistName;
                 if (payload.currentSetlistName) currentSetlistName = payload.currentSetlistName;
-                saveCurrentState();
-                lastRenderChecksum = ''; renderSetlist(); updatePlaybackUI();
+
+                // Applying is a WRITE to local state, so it goes through the
+                // same choke point every edit does — but flagged, so the choke
+                // point does not re-broadcast what just arrived.
+                _syncApplying = true;
+                try { saveCurrentState(); } finally { _syncApplying = false; }
+
+                // The dropdown is the only place a musician can read which set
+                // they are on. It was never refreshed here, so the rows changed
+                // underneath a label that still said the old name — which looks
+                // exactly like the bug this whole issue is about.
+                updateSetlistDropdown();
+
+                lastRenderChecksum = ''; renderSetlist();
+                // updatePlaybackUI() is deliberately NOT called. It runs on
+                // every TRANSPORT tick anyway (~33ms), and it is the function
+                // that issues automatic transport commands — #5 requires that
+                // a sync arriving, or resuming after a dropout, never moves
+                // REAPER by itself.
+
+                RSDiag.log('SYNC_APPLY', {
+                    rev: payload.rev, set: currentSetlistName, songs: payload.setlist.length
+                });
+                if (prevName !== currentSetlistName) _setlistChangeToast(currentSetlistName);
             };
 
             if (manual && REASET_MODE === 'director') {
@@ -6439,14 +6557,64 @@
             }
         }
 
-        // Players have nothing local worth protecting — they never edit — so
-        // they poll silently in the background instead of needing a button.
+        // Non-blocking, self-dismissing. A musician mid-song cannot be asked to
+        // acknowledge a modal, and the change has already happened — this only
+        // explains why the list under their thumb just moved.
+        function _setlistChangeToast(name) {
+            var el = document.getElementById('reaset-setlist-toast');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'reaset-setlist-toast';
+                el.style.cssText = BANNER_CSS + 'background:#166534;';
+                _bannerHost().appendChild(el);
+            }
+            el.textContent = t('Setlist changed') + ': ' + name;
+            el.style.display = '';
+            _bannerMeasure();
+            clearTimeout(el._hideTimer);
+            el._hideTimer = setTimeout(function () {
+                el.style.display = 'none';
+                _bannerMeasure();
+            }, 2500);
+        }
+
+        // Players and Controllers follow the Director; they have nothing local
+        // worth protecting, so they poll silently instead of needing a button.
         // Directors pull only via the explicit manual button (see the sidebar).
+        //
+        // TWO LOOPS, ON PURPOSE.
+        //
+        // The old design fetched the whole shared file every 4 seconds. That is
+        // both too slow for a stage (a musician can be four seconds into the
+        // wrong song) and needlessly heavy (the full setlist crosses the wire
+        // whether or not anything changed).
+        //
+        // Instead: a tiny ExtState value carries the revision and is polled
+        // often, and the file is fetched only when that number moves. The
+        // revision reply is a few bytes; the fetch happens once per actual
+        // change. Faster AND cheaper than what it replaces, which is why it can
+        // afford to run at ~750ms and still meet the <=1s target in #5.
+        //
+        // The slow full pull stays as a safety net: if the ExtState path is
+        // ever missed (a dropped reply, a Director that pushed while this
+        // device was asleep) the file is still reconciled, just later.
+        var SYNC_REV_POLL_MS  = 750;
+        var SYNC_FULL_POLL_MS = 15000;
         var _syncPlayerPollTimer = null;
+        var _syncRevPollTimer    = null;
         function _syncStartPlayerPolling() {
             if (_syncPlayerPollTimer) return;
             _syncPullNow(false);
-            _syncPlayerPollTimer = setInterval(function () { _syncPullNow(false); }, 4000);
+            wwr_req_recur('GET/EXTSTATE/ReaSet/setlistFileRev;GET/EXTSTATE/ReaSet/setlistRev', SYNC_REV_POLL_MS);
+            _syncRevPollTimer = setInterval(function () {
+                // Re-check every tick rather than remembering "already tried":
+                // Reaset.lua writes the file from its own defer loop, so the
+                // revision can be visible a frame before the file it names.
+                // Retrying until the payload actually applies is what closes
+                // that window, and costs nothing when there is nothing new.
+                if (_syncRemoteRev > _syncLastAppliedRev) _syncPullNow(false);
+            }, SYNC_REV_POLL_MS);
+            _syncPlayerPollTimer = setInterval(function () { _syncPullNow(false); }, SYNC_FULL_POLL_MS);
         }
 
         // ── Director PIN (optional deterrent, not a security boundary) ──────────
@@ -6623,6 +6791,18 @@
             // when the list is opened.
             _libReconciled = false;
             _librarySyncWithProject();
+
+            // The project is only NOW identified, so any payload that arrived
+            // before this point was deferred rather than applied (see
+            // _syncApplyPayload). The name just read out of localStorage is
+            // this device's memory of its own last session; the Director's
+            // current choice outranks it. Reset the applied-revision watermark
+            // and pull, so the shared state wins deterministically instead of
+            // depending on which of the two happened to land last.
+            if (REASET_MODE !== 'director') {
+                _syncLastAppliedRev = 0;
+                _syncPullNow(false);
+            }
         }
 
         // --- Per-song overrides (stop, delay, description, color) ---
@@ -7560,6 +7740,24 @@
                         // used to show it as a "⬡ NL" lamp, which therefore stayed lit
                         // on a crashed script; the ReaSet/tick heartbeat below is what
                         // actually detects that, and reports it in the panel status.
+                        // Shared-setlist revision. A few bytes, polled often, and
+                        // the only thing that decides whether the (much larger)
+                        // shared file is worth fetching at all.
+                        // setlistFileRev is written by Reaset.lua AFTER the
+                        // shared file is on disk; setlistRev is what the
+                        // Director announced. Prefer the former — fetching on
+                        // the announcement means fetching the previous payload
+                        // during the window before the write lands. Fall back to
+                        // the announcement so a newer browser against an older
+                        // Reaset.lua still syncs, just with that small window.
+                        if (tok[1] === "ReaSet" && tok[2] === "setlistFileRev") {
+                            _syncFileRevSeen = true;
+                            _syncObserveRemoteRev(tok[3]);
+                        }
+                        if (tok[1] === "ReaSet" && tok[2] === "setlistRev") {
+                            if (!_syncFileRevSeen) _syncObserveRemoteRev(tok[3]);
+                            else _syncObserveDirectorRev(tok[3]);
+                        }
                         if (tok[1] === "ReaSet" && tok[2] === "autoStopArmed") {
                             // Reaset.lua confirms it told REAPER where to stop.
                             // While this is 1, we do NOT send our own stop: the
@@ -11117,9 +11315,34 @@
                 "Delete"
             );
         }
+        // ROOT CAUSE OF #5 LIVED HERE.
+        //
+        // Every other setlist edit — reorder, skip, loop, chain, import, delete
+        // — funnels through saveCurrentState(), which is what schedules the
+        // push to other devices. Choosing a different named setlist did not.
+        // It wrote currentSetlistName, wrote localStorage, and rebuilt the list
+        // locally, so the Director's screen changed and nobody else's did.
+        //
+        // The switch reached the wire only indirectly, if syncRegions() happened
+        // to reach its own saveCurrentState() — and then a second behind a 1s
+        // debounce. On stage that reads as "the phone is showing the wrong
+        // setlist", which is exactly what was reported.
         function changeSetlist() {
-            currentSetlistName = document.getElementById("setlistSelect").value;
-            localStorage.setItem(CURRENT_KEY, currentSetlistName); displayList = []; initialized = false; syncRegions();
+            var next = document.getElementById("setlistSelect").value;
+            if (!next || next === currentSetlistName) return;
+            RSDiag.log('SETLIST_CHANGE', { from: currentSetlistName, to: next });
+            currentSetlistName = next;
+            localStorage.setItem(CURRENT_KEY, currentSetlistName);
+            displayList = []; initialized = false;
+            // Rebuilds displayList for the new set (and calls saveCurrentState,
+            // which schedules the debounced push).
+            syncRegions();
+            // Then publish immediately rather than waiting out that debounce.
+            // The debounce exists to coalesce a burst of edits; a set switch is
+            // a single deliberate act, and the one edit where a second of lag
+            // is the difference between the band seeing the right list and the
+            // wrong one. _syncPushNow() cancels the pending timer itself.
+            _syncPushNow();
         }
         function exportSetlists() {
             var dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(setlists, null, 2));
@@ -11145,6 +11368,10 @@
                                 setlists = data; if (!setlists[currentSetlistName]) currentSetlistName = "Default";
                                 localStorage.setItem(STORAGE_KEY, JSON.stringify(setlists)); localStorage.setItem(CURRENT_KEY, currentSetlistName);
                                 updateSetlistDropdown(); displayList = []; initialized = false; syncRegions();
+                                // Same omission as changeSetlist had: an import
+                                // can change the active set, and other devices
+                                // have to hear about it.
+                                _syncPushNow();
                                 showAppAlert(t("Import successful."), t("Done ✓"));
                             },
                             "Import"
