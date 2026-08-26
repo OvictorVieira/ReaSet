@@ -508,3 +508,65 @@ claim in #3–#9 therefore ends in **READY FOR MANUAL REAPER TEST**, with the
 procedure in `docs/STAGE_TEST_MATRIX.md`. Static checks that *do* run in this
 repo: `python -m pytest tests/test_reaboot_package.py -q` (packaging contract)
 plus JS syntax validation of the single-file build.
+
+---
+
+## 11. Role permission matrix (as built, #7)
+
+Enforced in three layers, outermost first. The CSS layer is never the only
+thing standing between a role and a write.
+
+1. **Command classifier** (`_commandClass` → `wwr_req` gate). Every command
+   REAPER could receive from this page passes through one function.
+2. **Capability check inside each mutator** (`canEditSetlist()` /
+   `canPublishSetlist()` / `canControlTransport()`).
+3. **CSS** (`body.reaset-player`, `body.reaset-controller`) — so a control that
+   would do nothing does not *look* like it worked.
+
+| Action | Director | Controller | Player |
+|---|---|---|---|
+| Play / Pause / Stop | ✅ | ✅ | ❌ |
+| Cue song while stopped / paused | ✅ | ✅ | ❌ |
+| Queue song while playing | ✅ | ✅ | ❌ |
+| Next / Previous (song and section) | ✅ | ✅ | ❌ |
+| MIDI-mapped transport | ✅ | ✅ | ❌ |
+| Reorder setlist | ✅ | ❌ | ❌ |
+| Skip / Loop / Chain / end-state authoring | ✅ | ❌ (state visible, inert) | ❌ (state visible, inert) |
+| Per-song overrides (`⋮` menu) | ✅ | ❌ | ❌ |
+| Create / delete / import / export setlists | ✅ | ❌ | ❌ |
+| Switch active named setlist | ✅ | follow only | follow only |
+| Publish shared setlist (`SET/EXTSTATE ReaSet/setlist*`) | ✅ | ❌ | ❌ |
+| Arm Auto-Stop / NativeLoop in `Reaset.lua` | ✅ | ❌ | ❌ |
+| Set the Director PIN | ✅ | ❌ | ❌ |
+| Claim / take over the Director lease | ✅ | ✅ (explicit) | ✅ (explicit) |
+| Edit mode (drag handles) | ✅ | ❌ | ❌ |
+| Lyrics / chords / Canvas / Live View | ✅ | ✅ | ✅ |
+| Local display prefs (theme, fonts, Auto-Scroll, Hide Skips, Grid) | ✅ | ✅ | ✅ |
+| Smooth Seek, Init Song MIDI, Stop Hold | ✅ | ✅ (local to this device's own seeks / Play / Stop button) | ❌ |
+| Queue Mode switch | ✅ (governs the EDIT-mode audition jump only) | ❌ | ❌ |
+| SYNC (restart polling) | ✅ | ✅ | ✅ |
+
+### Command classes
+
+| Class | Shape | Director | Controller | Player |
+|---|---|---|---|---|
+| `read` | every `;`-segment starts `GET/` | ✅ | ✅ | ✅ |
+| `transport` | action ids `1007` / `1008` / `1016`, and `SET/POS/…` | ✅ | ✅ | ❌ |
+| `publish` | everything else — `SET/EXTSTATE`, `SET/EXTSTATEPERSIST`, `SET/REPEAT`, `SET/PROJEXTSTATE`, unrecognised shapes | ✅ | ❌ | ❌ |
+
+The transport set is a **whitelist**, not a pattern. "Any bare number is an
+action id" would let a Controller send any REAPER action at all, which defeats
+the point of the role. Anything unrecognised is `publish`, so a command added
+later is Director-only until somebody classifies it deliberately.
+
+The one deliberate exception is the Director lease (`_dcWriteLease`), which
+writes `SET/EXTSTATE ReaSet/director*` outside the gate. It has to: the claim
+happens *before* a device is a Director, so gating it would deadlock
+arbitration permanently in favour of whoever was already there. It can write
+those keys and nothing else.
+
+> **Not a security boundary.** REAPER's Web Interface has no authentication
+> unless configured separately, so anyone on the network can drive REAPER
+> directly regardless of what ReaSet allows. This is an operational safety
+> boundary that stops a musician from editing the show by accident, and it is
+> not intended to resist an attacker.

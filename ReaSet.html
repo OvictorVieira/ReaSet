@@ -3815,6 +3815,7 @@
         }
         #mode-badge.show { display: inline-flex; }
         #mode-badge.is-director { color: var(--color-brand); border-color: rgba(30,215,96,0.42); }
+        #mode-badge.is-controller { color: #FFD60A;         border-color: rgba(255,214,10,0.42); }
         #mode-badge.is-player   { color: #64D2FF;           border-color: rgba(100,210,255,0.42); }
         #mode-badge .mb-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
         #mode-badge .mb-sync {
@@ -3964,6 +3965,53 @@
            silently do nothing when clicked. */
         body.reaset-player #syncPushBtn { display: none; }
         body.reaset-player #directorPinBtn { display: none; }
+
+        /* ── Controller / Performer ──────────────────────────────────────
+           Transport yes, authoring no. The difference from Player is exactly
+           the difference between "can move REAPER" and "can change the show",
+           and it is enforced twice before this file is reached: at wwr_req's
+           command classifier, and by canEditSetlist() inside every mutator.
+           This layer only stops a control that will do nothing from LOOKING
+           like it worked.
+
+           Song rows, section rows, the footer transport and the Live/Canvas
+           transport widgets are deliberately NOT disabled here — tapping a
+           song to cue or queue it is the whole point of the role. */
+
+        /* Structural editing: dead at any width, so hidden rather than dimmed
+           and still eating a phone row. Same reasoning as Player mode. */
+        body.reaset-controller .drag-handle,
+        body.reaset-controller .song-dotmenu-btn,
+        body.reaset-controller .sub-dotmenu-btn,
+        body.reaset-controller #editModeBtn,
+        body.reaset-controller #syncPushBtn,
+        body.reaset-controller #directorPinBtn,
+        body.reaset-controller .authoring-only { display: none; }
+        /* The setlist dropdown STAYS visible: a Controller has to be able to
+           read which set is active. It is read-only for them, which
+           changeSetlist() enforces rather than the CSS. */
+        body.reaset-controller #setlistSelect { pointer-events: none; opacity: 0.85; }
+
+        /* Chain / loop / skip are authoring controls whose STATE is exactly
+           what a performer needs to read — does this run into the next song,
+           does it loop, is it being dropped tonight. Same treatment Player
+           mode gives them: inert, collapsed to a badge, and rendered only
+           when the flag is on, because an off-state toggle tells a performer
+           nothing its absence doesn't already say. */
+        body.reaset-controller .sa-author {
+            pointer-events: none;
+            cursor: default;
+            width: auto;
+            height: 22px;
+            padding: 0 7px;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        body.reaset-controller .sa-author:not(.chain-on):not(.loop-on) { display: none; }
+        /* The section row's Stop button is transport, not authoring, and stays
+           fully live — which is why it carries its own class rather than being
+           told apart from an off-state loop toggle by looking identical. */
+        body.reaset-controller .sa-transport { pointer-events: auto; }
 
         /* ── Sidebar options a Player has no use for ─────────────────────
            Marked in the markup with `director-only` rather than matched by
@@ -4419,9 +4467,9 @@
         <!-- SETLIST ROW -->
         <div class="app-setlist-row">
             <select id="setlistSelect" class="n-select" onchange="changeSetlist()" onmousedown="_libraryRefreshOnOpen()" onfocus="_libraryRefreshOnOpen()"></select>
-            <button class="n-btn-new" onclick="createSetlist()" title="New">+</button>
+            <button class="n-btn-new authoring-only" onclick="createSetlist()" title="New">+</button>
             <button class="n-btn-new" id="editModeBtn" onclick="toggleEditMode()" title="Edit mode"><span class="emb-icon">&#9998;</span><span class="emb-label" id="editModeLabel">SHOW</span></button>
-            <div class="dotmenu-wrap" id="dotMenuWrap" style="position:relative">
+            <div class="dotmenu-wrap authoring-only" id="dotMenuWrap" style="position:relative">
                 <button class="n-dotmenu-btn" onclick="toggleDotMenu(event)" title="Options">···</button>
                 <div class="dotmenu-dropdown" id="dotMenuDropdown">
                     <button class="dotmenu-item" onclick="exportSetlists();closeDotMenu()">
@@ -4503,7 +4551,10 @@
                 <button class="help-btn" style="margin-left:auto" onclick="showHelp('scroll')">?</button>
             </div>
 
-            <div class="toggle-row director-only">
+            <!-- authoring-only as well as director-only: Queue Mode now governs
+                 the EDIT-mode audition jump only (see playRegion), and a
+                 Controller cannot enter EDIT mode. -->
+            <div class="toggle-row director-only authoring-only">
                 <label class="n-switch"><input type="checkbox" id="queueModeToggle">
                     <div class="n-track">
                         <div class="n-thumb"></div>
@@ -4523,7 +4574,9 @@
                 <button class="help-btn" style="margin-left:auto" onclick="showHelp('smoothseek')">?</button>
             </div>
 
-            <div class="toggle-row director-only">
+            <!-- authoring-only as well: Auto-Stop publishes the arming keys
+                 Reaset.lua reads, which is a Director write. -->
+            <div class="toggle-row director-only authoring-only">
                 <label class="n-switch"><input type="checkbox" id="autoStopToggle" checked onchange="lastRenderChecksum='';syncRegions()">
                     <div class="n-track">
                         <div class="n-thumb"></div>
@@ -4892,7 +4945,8 @@
     <div id="mode-select-overlay" onclick="if(event.target===this)closeModeSelector()">
         <div class="mode-select-card">
             <div class="mode-select-title">¿Cómo vas a usar ReaSet en este dispositivo?</div>
-            <div class="mode-select-sub">Director controla la reproducción. Músico solo la muestra en vivo —
+            <div class="mode-select-sub">Solo puede haber un Director por sesión. Controller maneja el
+                transporte sin poder editar el setlist. Músico solo muestra el show en vivo —
                 no puede mover REAPER ni por accidente.</div>
             <div class="mode-select-options">
                 <div class="mode-opt-btn mode-director" onclick="chooseMode('director')">
@@ -4901,6 +4955,14 @@
                         <div class="mode-opt-label">Director</div>
                         <div class="mode-opt-desc">Control total: transporte, cola, loops, secciones, MIDI.
                             Este dispositivo maneja el show.</div>
+                    </span>
+                </div>
+                <div class="mode-opt-btn mode-controller" onclick="chooseMode('controller')">
+                    <span class="mode-opt-icon">🥁</span>
+                    <span>
+                        <div class="mode-opt-label">Controller</div>
+                        <div class="mode-opt-desc">Solo transporte: Play, Pausa, Stop, cue y cola.
+                            Sigue el setlist del Director y no puede editarlo. Para el teléfono en el escenario.</div>
                     </span>
                 </div>
                 <div class="mode-opt-btn mode-player" onclick="chooseMode('player')">
@@ -5300,23 +5362,60 @@
         var REASET_MODE_STORED = false;   // true = a real prior choice, not just the safe default
         try {
             var _storedMode = localStorage.getItem('reaset_mode');
-            if (_storedMode === 'director' || _storedMode === 'player') { REASET_MODE = _storedMode; REASET_MODE_STORED = true; }
+            if (_storedMode === 'director' || _storedMode === 'controller' || _storedMode === 'player') {
+                REASET_MODE = _storedMode; REASET_MODE_STORED = true;
+            }
         } catch (e) { /* localStorage unavailable (private mode, etc.) — stay 'player' */ }
 
-        // A command is a WRITE unless it is one or more ';'-joined segments that
-        // ALL start with "GET/" (wwr_req_recur's polling strings, and the one
-        // wwr_req("GET/EXTSTATE/XR_Lyrics/text") lyrics-panel refresh, both take
-        // this shape). Bare numeric action IDs (1007, 1016, 1008, ...) and any
-        // "SET/..." string are writes. Anything of an unrecognised shape is
-        // treated as a write too — fail closed, not open.
-        function _isWriteCommand(cmd) {
-            if (typeof cmd !== 'string') return true;
-            var segs = cmd.split(';');
+        // Commands fall into three classes, because there are three roles.
+        //
+        //   'read'       one or more ';'-joined segments that ALL start with
+        //                "GET/" — wwr_req_recur's polling strings and the
+        //                lyrics-panel refresh both take this shape.
+        //   'transport'  moves REAPER's playhead and nothing else: the three
+        //                transport action ids, and SET/POS seeks.
+        //   'publish'    everything else. SET/EXTSTATE (shared setlist chunks,
+        //                auto-stop arming, native loop, the Director PIN),
+        //                SET/PROJEXTSTATE, and any shape not recognised here.
+        //
+        // The transport set is a WHITELIST, not a pattern. "Any bare number is
+        // an action id" would let a Controller send any REAPER action at all,
+        // which is precisely the hole #7 warns about — the point of the role is
+        // that it can drive the show without being able to change it.
+        // Unrecognised shapes land in 'publish', so a new command added later
+        // is Director-only until someone deliberately classifies it.
+        var TRANSPORT_ACTION_IDS = { '1007': 1, '1008': 1, '1016': 1 };
+
+        function _commandClass(cmd) {
+            if (typeof cmd !== 'string' && typeof cmd !== 'number') return 'publish';
+            var segs = String(cmd).split(';');
+            var sawWrite = false;
+            var allTransport = true;
             for (var i = 0; i < segs.length; i++) {
-                if (segs[i].indexOf('GET/') !== 0) return true;
+                var seg = segs[i];
+                if (seg.indexOf('GET/') === 0) continue;
+                sawWrite = true;
+                if (TRANSPORT_ACTION_IDS[seg] === 1) continue;
+                if (seg.indexOf('SET/POS/') === 0) continue;
+                allTransport = false;
             }
-            return false;
+            if (!sawWrite) return 'read';
+            return allTransport ? 'transport' : 'publish';
         }
+
+        // Kept as the old name and shape: several call sites and comments still
+        // reason in terms of "is this a write".
+        function _isWriteCommand(cmd) { return _commandClass(cmd) !== 'read'; }
+
+        // ── Role capabilities ───────────────────────────────────────────────
+        // One place that answers what a role may do, so a permission question
+        // is never re-derived from REASET_MODE at a call site — that is how a
+        // hidden button ends up being the only thing stopping a write.
+        function canControlTransport() {
+            return REASET_MODE === 'director' || REASET_MODE === 'controller';
+        }
+        function canEditSetlist()    { return REASET_MODE === 'director'; }
+        function canPublishSetlist() { return REASET_MODE === 'director'; }
 
         // wwr_req_recur is never gated: every call site in this file polls
         // (TRANSPORT/REGION/MARKER/GET/...) — confirmed read-only by construction,
@@ -5490,11 +5589,16 @@
         // (#10 Part B). Call sites that don't pass one still work; they just
         // show up as reason=? in the log.
         window.wwr_req = function (cmd, reason) {
-            var isWrite = _isWriteCommand(cmd);
-            if (REASET_MODE === 'player' && isWrite) {
-                RSDiag.blocked(cmd, 'player-mode-readonly');
+            var cls = _commandClass(cmd);
+            if (cls === 'transport' && !canControlTransport()) {
+                RSDiag.blocked(cmd, 'role-cannot-control-transport');
                 return;
             }
+            if (cls === 'publish' && !canPublishSetlist()) {
+                RSDiag.blocked(cmd, 'role-cannot-publish');
+                return;
+            }
+            var isWrite = (cls !== 'read');
             // Only writes are traced. The GET/ polls run at 10-33ms and would
             // bury the timeline in noise for no diagnostic value — what they
             // observe is already logged by the TRANSPORT handler.
@@ -5721,11 +5825,13 @@
             ["White", "Blanco"],
             ["Green", "Verde"],
             ["Blue", "Azul"],
+            ["CONTROLLER", "CONTROLLER"],
             ["Setlist changed", "Setlist cambiado"],
             ["also claimed Director — this device is keeping control",
              "también reclamó Director — este dispositivo mantiene el control"],
             ["is already controlling this REAPER session.", "ya está controlando esta sesión de REAPER."],
-            ["Only one Director is allowed at a time.", "Solo se permite un Director a la vez."],
+            ["Only one Director is allowed at a time. Cancel to open as Controller or Player instead.",
+             "Solo se permite un Director a la vez. Cancelá para entrar como Controller o Músico."],
             ["Take over as Director? The other device becomes read-only.",
              "¿Tomar el control como Director? El otro dispositivo pasa a solo lectura."],
             ["Another device claimed Director first — opening read-only.",
@@ -6983,6 +7089,7 @@
         }
 
         function setSongOverride(id, key, value) {
+            if (!canEditSetlist()) { RSDiag.blocked('setSongOverride', 'role-cannot-edit-setlist'); return; }
             if (!g_songOverrides[id]) g_songOverrides[id] = {};
             g_songOverrides[id][key] = value;
             saveSongOverrides();
@@ -7709,7 +7816,7 @@
                     RSDiag.log('LEASE_BLOCKED', { incumbent: _directorHeartbeatId });
                     if (!window.confirm('\u26A0 ' + _dcForeignLabel() + ' ' +
                         t('is already controlling this REAPER session.') + '\n\n' +
-                        t('Only one Director is allowed at a time.') + '\n\n' +
+                        t('Only one Director is allowed at a time. Cancel to open as Controller or Player instead.') + '\n\n' +
                         t('Take over as Director? The other device becomes read-only.'))) {
                         return; // stay on the selector; Player remains available
                     }
@@ -7746,12 +7853,22 @@
         }
         function applyModeUI() {
             var badge = document.getElementById('mode-badge');
-            document.body.classList.toggle('reaset-player', REASET_MODE === 'player');
+            document.body.classList.toggle('reaset-player',     REASET_MODE === 'player');
+            document.body.classList.toggle('reaset-controller', REASET_MODE === 'controller');
             badge.classList.add('show');
-            badge.classList.toggle('is-director', REASET_MODE === 'director');
-            badge.classList.toggle('is-player',   REASET_MODE === 'player');
-            document.getElementById('mode-badge-label').textContent = (REASET_MODE === 'director') ? t('DIRECTOR') : t('PLAYER');
-            if (REASET_MODE === 'player') { _syncStartPlayerPolling(); _dcStopHeartbeat(); }
+            badge.classList.toggle('is-director',   REASET_MODE === 'director');
+            badge.classList.toggle('is-controller', REASET_MODE === 'controller');
+            badge.classList.toggle('is-player',     REASET_MODE === 'player');
+            document.getElementById('mode-badge-label').textContent =
+                (REASET_MODE === 'director')   ? t('DIRECTOR') :
+                (REASET_MODE === 'controller') ? t('CONTROLLER') : t('PLAYER');
+            // Edit mode is structural authoring, so it cannot survive a
+            // downgrade — a device that was mid-edit when it lost the lease
+            // must not keep drag handles live.
+            if (!canEditSetlist() && REASET_EDITING) toggleEditMode();
+            // A Controller follows the Director's structural state exactly as a
+            // Player does; the difference between them is transport, not sync.
+            if (REASET_MODE !== 'director') { _syncStartPlayerPolling(); _dcStopHeartbeat(); }
             // 'pending' must not beat. A Director reconnecting after someone
             // else took over would otherwise announce itself as live before
             // finding out it has been displaced, and the incumbent would see a
@@ -8154,6 +8271,10 @@
         // loopMax = 0 means infinite (cancelled via "off" or stop).
         function _reaperNativeLoopOn(start, end, loopMax, subId) {
             if (!window.REASET_NATIVE_LOOP) return;
+            // Same reasoning as auto-stop arming: these are publish writes and
+            // the Director owns them. A Controller that armed a native loop
+            // would be handing REAPER's Repeat a second opinion.
+            if (!canPublishSetlist()) return;
             wwr_req("SET/EXTSTATEPERSIST/ReaSet/loopStart/" + start.toFixed(5));
             wwr_req("SET/EXTSTATEPERSIST/ReaSet/loopEnd/"   + end.toFixed(5));
             // Always send 0 (infinite) — JS counts crossings and sends 'off' when done.
@@ -8171,6 +8292,7 @@
         function _reaperNativeLoopOff() {
             if (!window.REASET_NATIVE_LOOP) return;
             if (!window._nativeLoopSubId) return;
+            if (!canPublishSetlist()) { window._nativeLoopSubId = null; return; }
             wwr_req("SET/REPEAT/0");                               // synchronous: same HTTP batch as next SET/POS
             wwr_req("SET/EXTSTATEPERSIST/ReaSet/nativeLoop/off");  // async: Lua cleans up region + loop points
             window._nativeLoopSubId = null;
@@ -9038,9 +9160,9 @@
                         + '</div>'
                         + '<span id="loop-counter-' + r.id + '" class="loop-counter-badge"></span>'
                         + '<div class="song-actions">'
-                        + '  <button class="' + chainClass + '" title="' + _endVis.title + '" onclick="event.stopPropagation(); cycleSongEnd(\'' + r.id + '\')">' + chainIcon + '</button>'
-                        + '  <button class="' + loopClass + '" onclick="event.stopPropagation(); toggleLoop(\'' + r.id + '\')">' + loopIcon + '</button>'
-                        + '  <button class="' + skipClass + '" onclick="event.stopPropagation(); toggleSkip(\'' + r.id + '\')">' + skipIcon + '</button>'
+                        + '  <button class="sa-author ' + chainClass + '" title="' + _endVis.title + '" onclick="event.stopPropagation(); cycleSongEnd(\'' + r.id + '\')">' + chainIcon + '</button>'
+                        + '  <button class="sa-author ' + loopClass + '" onclick="event.stopPropagation(); toggleLoop(\'' + r.id + '\')">' + loopIcon + '</button>'
+                        + '  <button class="sa-author ' + skipClass + '" onclick="event.stopPropagation(); toggleSkip(\'' + r.id + '\')">' + skipIcon + '</button>'
                         + '</div>'
                         + '<span class="song-duration" id="dur-' + r.id + '" data-length="' + formatTime(r.duration) + '">' + formatTime(r.duration) + delayHtml + '</span>';
 
@@ -9089,9 +9211,9 @@
                         var actionsHtml = sub.markerType === 'stop' ? '' :
                             '<span id="loop-counter-sub-' + sub.id + '" class="loop-counter-badge"></span>'
                             + '<div class="section-actions" onclick="event.stopPropagation()">'
-                            + '  <button class="sa-btn" onclick="smartStop()">&#9632;</button>'
-                            + '  <button class="' + scloop + '" onclick="toggleSubLoop(\'' + sub.id + '\')">&#8635;</button>'
-                            + '  <button class="' + scskip + '" onclick="toggleSubSkip(\'' + sub.id + '\')">&#10005;</button>'
+                            + '  <button class="sa-btn sa-transport" onclick="smartStop()">&#9632;</button>'
+                            + '  <button class="sa-author ' + scloop + '" onclick="toggleSubLoop(\'' + sub.id + '\')">&#8635;</button>'
+                            + '  <button class="sa-author ' + scskip + '" onclick="toggleSubSkip(\'' + sub.id + '\')">&#10005;</button>'
                             + '</div>';
 
                         slHtml += '<div class="section-row' + subClassAdds + '" id="subrow-' + sub.id + '"'
@@ -9131,6 +9253,7 @@
         // --- 7. ACTIONS ---
         // F9: Reorder by number prompt (global regions only)
         function reorderPrompt(id) {
+            if (!canEditSetlist()) { RSDiag.blocked('reorderPrompt', 'role-cannot-edit-setlist'); return; }
             var item, i;
             for (i = 0; i < displayList.length; i++) { if (displayList[i].id == id) { item = displayList[i]; break; } }
             if (!item) return;
@@ -9188,6 +9311,7 @@
         }
 
         function setSongEnd(id, state, seconds) {
+            if (!canEditSetlist()) { RSDiag.blocked('setSongEnd', 'role-cannot-edit-setlist'); return; }
             var song = null;
             for (var i = 0; i < displayList.length; i++) if (displayList[i].id == id) { song = displayList[i]; break; }
             if (!song) return;
@@ -9206,6 +9330,7 @@
         // from the ⋮ panel only; tapping a song that is on 'wait' returns it
         // to 'auto' rather than silently discarding the seconds elsewhere.
         function cycleSongEnd(id) {
+            if (!canEditSetlist()) { RSDiag.blocked('cycleSongEnd', 'role-cannot-edit-setlist'); return; }
             var song = null;
             for (var i = 0; i < displayList.length; i++) if (displayList[i].id == id) { song = displayList[i]; break; }
             if (!song) return;
@@ -9252,6 +9377,7 @@
             if (l) l.textContent = REASET_EDITING ? t('EDIT') : t('SHOW');
         }
         function toggleEditMode() {
+            if (!canEditSetlist()) { RSDiag.blocked('toggleEditMode', 'role-cannot-edit-setlist'); return; }
             REASET_EDITING = !REASET_EDITING;
             document.body.classList.toggle('reaset-editing', REASET_EDITING);
             _refreshEditModeBtn();
@@ -9259,15 +9385,18 @@
         }
 
         function toggleChain(id) {
+            if (!canEditSetlist()) { RSDiag.blocked('toggleChain', 'role-cannot-edit-setlist'); return; }
             for (var i = 0; i < displayList.length; i++) { if (displayList[i].id == id) { displayList[i].chain = !displayList[i].chain; break; } }
             saveCurrentState(); lastRenderChecksum = ""; syncRegions();
         }
         function toggleLoop(id) {
+            if (!canEditSetlist()) { RSDiag.blocked('toggleLoop', 'role-cannot-edit-setlist'); return; }
             for (var i = 0; i < displayList.length; i++) { if (displayList[i].id == id) { displayList[i].loop = !displayList[i].loop; break; } }
             saveCurrentState(); lastRenderChecksum = ""; syncRegions();
         }
         function toggleCurrentLoop(e) {
             if (e) e.stopPropagation();
+            if (!canEditSetlist()) { RSDiag.blocked('toggleCurrentLoop', 'role-cannot-edit-setlist'); return; }
             var activeIdx = -1;
             for (var i = 0; i < displayList.length; i++) {
                 var r = displayList[i];
@@ -9285,6 +9414,7 @@
             }
         }
         function toggleSubLoop(id) {
+            if (!canEditSetlist()) { RSDiag.blocked('toggleSubLoop', 'role-cannot-edit-setlist'); return; }
             if (window.subStates[id]) {
                 window.subStates[id].loop = !window.subStates[id].loop;
                 var isNowOn = window.subStates[id].loop;
@@ -9307,9 +9437,11 @@
             }
         }
         function toggleSubSkip(id) {
+            if (!canEditSetlist()) { RSDiag.blocked('toggleSubSkip', 'role-cannot-edit-setlist'); return; }
             if (window.subStates[id]) { window.subStates[id].skipped = !window.subStates[id].skipped; lastRenderChecksum = ""; syncRegions(); }
         }
         function toggleSkip(id) {
+            if (!canEditSetlist()) { RSDiag.blocked('toggleSkip', 'role-cannot-edit-setlist'); return; }
             for (var i = 0; i < displayList.length; i++) { if (displayList[i].id == id) { displayList[i].skipped = !displayList[i].skipped; break; } }
             saveCurrentState(); lastRenderChecksum = ""; syncRegions();
         }
@@ -9387,6 +9519,12 @@
                 // detecting the end and sending a stop late. Published only when
                 // something changes, not every tick.
                 (function () {
+                    // Arming is a publish write. Only the Director owns it —
+                    // two devices arming Reaset.lua would be two devices
+                    // deciding where REAPER stops. Returning here rather than
+                    // letting the gate refuse it keeps the diagnostic log about
+                    // real events.
+                    if (!canPublishSetlist()) return;
                     var wantStop = document.getElementById('autoStopToggle').checked
                                    && !activeRegion.chain && !activeRegion.loop
                                    && !getOverride(activeRegion.id).stopAfter;
@@ -11479,6 +11617,7 @@
             }
         }
         function createSetlist() {
+            if (!canEditSetlist()) { RSDiag.blocked('createSetlist', 'role-cannot-edit-setlist'); return; }
             var name = prompt("New setlist name:");
             if (name && !setlists[name]) {
                 setlists[name] = displayList.map(function (r) { return { id: r.id, chain: r.chain, skipped: r.skipped, loop: r.loop }; });
@@ -11522,6 +11661,7 @@
 
         // --- SETLIST FILE I/O ---
         function deleteSetlist() {
+            if (!canEditSetlist()) { RSDiag.blocked('deleteSetlist', 'role-cannot-edit-setlist'); return; }
             if (currentSetlistName === "Default") {
                 showAppAlert(t("The Default setlist cannot be deleted."));
                 return;
@@ -11554,6 +11694,14 @@
         // debounce. On stage that reads as "the phone is showing the wrong
         // setlist", which is exactly what was reported.
         function changeSetlist() {
+            // Only the Director chooses the active set; everyone else follows
+            // it. Put the dropdown back so it keeps showing the truth rather
+            // than the selection that was refused.
+            if (!canEditSetlist()) {
+                RSDiag.blocked('changeSetlist', 'role-cannot-edit-setlist');
+                updateSetlistDropdown();
+                return;
+            }
             var next = document.getElementById("setlistSelect").value;
             if (!next || next === currentSetlistName) return;
             RSDiag.log('SETLIST_CHANGE', { from: currentSetlistName, to: next });
@@ -11571,6 +11719,7 @@
             _syncPushNow();
         }
         function exportSetlists() {
+            if (!canEditSetlist()) { RSDiag.blocked('exportSetlists', 'role-cannot-edit-setlist'); return; }
             var dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(setlists, null, 2));
             var downloadAnchorNode = document.createElement('a');
             downloadAnchorNode.setAttribute("href", dataStr);
@@ -11581,6 +11730,7 @@
         }
         function triggerImport() { document.getElementById('importInput').click(); }
         function importSetlists(input) {
+            if (!canEditSetlist()) { RSDiag.blocked('importSetlists', 'role-cannot-edit-setlist'); return; }
             var file = input.files[0]; if (!file) return;
             var reader = new FileReader();
             reader.onload = function (e) {
@@ -11617,6 +11767,16 @@
             onStart: function () { isDragging = true; document.body.style.overflow = 'hidden'; },
             onEnd: function (evt) {
                 isDragging = false; document.body.style.overflow = '';
+                // Belt and braces. The drag handle is display:none for every
+                // role but Director, so this should be unreachable — but a
+                // reorder is the one edit that would be published as a
+                // structural change without any further confirmation, and a
+                // hidden handle is a CSS fact, not a permission.
+                if (!canEditSetlist()) {
+                    RSDiag.blocked('reorder', 'role-cannot-edit-setlist');
+                    lastRenderChecksum = ''; renderSetlist();
+                    return;
+                }
                 var items = document.querySelectorAll("#setlist .song-container");
                 var newOrder = []; var sortedDisplay = [];
                 for (var i = 0; i < items.length; i++) {
