@@ -253,6 +253,36 @@ def test_block_grouping(script_body, name, auto_stop, overrides, songs, expected
     assert run_node(harness).strip("\n") == expected
 
 
+# (prevTs, nextTs, is_proof_of_life, why)
+BEAT_CASES = [
+    ("", "1700000000000", False, "first sighting of a value could be a corpse in ExtState"),
+    ("1700000000000", "1700000000000", False, "unchanged: a dead Director's value never moves"),
+    ("1700000000000", "1700000004000", True, "watched it move: another Director is beating"),
+    ("", "", False, "key unset: nothing to see"),
+]
+
+
+@requires_node
+@pytest.mark.parametrize("prev,nxt,expected,why", BEAT_CASES, ids=[c[3] for c in BEAT_CASES])
+def test_heartbeat_proof_of_life(script_body, prev, nxt, expected, why):
+    """Locks the fix for the boot demotion found on a real REAPER.
+
+    Nothing clears directorHeartbeat* when a browser closes, so ExtState keeps
+    the last Director's value forever. The observation site used to treat the
+    FIRST value it ever saw as a change, which put every boot inside a 12s
+    window where a session dead for hours read as live — and the only device in
+    the room demoted itself to Player before it could claim the lease.
+
+    As a banner that was cosmetic. As the input to a lease decision it made the
+    tool unusable, which is why the rule is a pure function now.
+    """
+    harness = (
+        extract_function(script_body, "_dcBeatIsProofOfLife")
+        + "\nconsole.log(_dcBeatIsProofOfLife(%s, %s));" % (json.dumps(prev), json.dumps(nxt))
+    )
+    assert run_node(harness).strip() == ("true" if expected else "false"), why
+
+
 def test_play_target_has_no_first_song_fallback(script_body: str) -> None:
     """Locks the #3 fix.
 

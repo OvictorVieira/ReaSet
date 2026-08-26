@@ -6965,6 +6965,41 @@
             return _wwrReqReal.call(window, cmd);
         }
 
+        // Does an observed heartbeat timestamp count as proof that another
+        // Director is alive? Pure on purpose: this is the rule that broke, so it
+        // is the rule that gets a test (tests/test_reaset_html.py).
+        //
+        //   prevTs === ''   nothing seen yet — the next value is a FIRST sighting
+        //                   and could be a corpse left in ExtState. Not proof.
+        //   nextTs === prev no change. Not proof.
+        //   otherwise       we watched it move. Proof.
+        function _dcBeatIsProofOfLife(prevTs, nextTs) {
+            return prevTs !== '' && nextTs !== prevTs;
+        }
+
+        // Release the lease keys, but only if they are OURS. Nothing else clears
+        // them, so without this every Director that ever ran leaves a heartbeat
+        // behind that the next boot has to reason around.
+        //
+        // Best-effort by nature: this is an async HTTP write and an unloading
+        // page may not flush it, and a device that loses Wi-Fi never gets here at
+        // all. It shortens how long a corpse sits in ExtState; it is not what
+        // makes the detection correct — _dcBeatIsProofOfLife is.
+        var _dcReleased = false;
+        function _dcReleaseLease(reason) {
+            if (_dcReleased) return;
+            if (_directorHeartbeatId !== _syncInstanceId()) return; // not ours to clear
+            _dcReleased = true;
+            RSDiag.log('LEASE_RELEASE', { reason: reason || '?' });
+            _dcWriteLease('SET/EXTSTATE/ReaSet/directorHeartbeatId/' +
+                          ';SET/EXTSTATE/ReaSet/directorHeartbeatTs/', 'director-release');
+        }
+        // pagehide fires where beforeunload does not (iOS Safari); both are
+        // registered because neither is reliable alone, and _dcReleased makes the
+        // double call harmless.
+        window.addEventListener('pagehide', function () { _dcReleaseLease('pagehide'); });
+        window.addEventListener('beforeunload', function () { _dcReleaseLease('beforeunload'); });
+
         function _dcForeignActive() {
             return !!_directorHeartbeatId && _directorHeartbeatId !== _syncInstanceId() &&
                    (Date.now() - _dcLastChangeAt) < DIRECTOR_TTL_MS;
@@ -7007,6 +7042,7 @@
             };
             beat();
             _dcHeartbeatTimer = setInterval(beat, DIRECTOR_BEAT_MS);
+            _dcReleased = false;   // holding it again: it is ours to release later
         }
         function _dcStopHeartbeat() {
             if (_dcHeartbeatTimer) { clearInterval(_dcHeartbeatTimer); _dcHeartbeatTimer = null; }
@@ -7027,6 +7063,7 @@
             RSDiag.log('LEASE_STAND_DOWN', { reason: reason });
             _directorLease = 'lost';
             _dcStopHeartbeat();
+            _dcReleaseLease('stand-down');
             REASET_MODE = 'player';
             applyModeUI();
             _setDisplacedBanner(true);
@@ -8248,7 +8285,27 @@
                             // devices' clocks can differ, but "did it change since
                             // last time we looked" needs no clock agreement at all.
                             var _dhbTs = tok.slice(3).join('\t');
-                            if (_dhbTs !== _dcLastSeenTs) { _dcLastSeenTs = _dhbTs; _dcLastChangeAt = Date.now(); }
+                            if (_dhbTs !== _dcLastSeenTs) {
+                                var _dhbLive = _dcBeatIsProofOfLife(_dcLastSeenTs, _dhbTs);
+                                _dcLastSeenTs = _dhbTs;
+                                // THE FIRST VALUE WE EVER SEE PROVES NOTHING.
+                                //
+                                // ExtState keeps the last Director's heartbeat
+                                // forever — nothing clears it when a browser is
+                                // closed — so a session that died hours ago reads
+                                // exactly like one beating right now. Counting that
+                                // first sighting as a change meant every boot
+                                // started inside a 12s window where a dead Director
+                                // looked alive. As a banner that was cosmetic; as
+                                // the input to a lease decision it demoted the only
+                                // device in the room to Player.
+                                //
+                                // Proof of life is a value we watched CHANGE, which
+                                // takes two polls. A real Director beats every 4s
+                                // against a 2s probe, so it is still detected well
+                                // inside the claim's settle window.
+                                if (_dhbLive) _dcLastChangeAt = Date.now();
+                            }
                         }
                         if (tok[1] === "ReaSet" && tok[2] === "directorHeartbeatName") {
                             var _dhbNameRaw = tok.slice(3).join('\t');
