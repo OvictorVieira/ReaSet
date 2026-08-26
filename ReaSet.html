@@ -5299,10 +5299,185 @@
         // wwr_req_recur is never gated: every call site in this file polls
         // (TRANSPORT/REGION/MARKER/GET/...) — confirmed read-only by construction,
         // and Player mode needs that live status feed just as much as Director does.
+        // ── Transport diagnostics (?diag=transport) ─────────────────────────
+        // Off by default and cheap when off: every call site is a plain
+        // function call that returns on the first line, so the 33ms TRANSPORT
+        // poll pays one comparison per tick and nothing else.
+        //
+        // This exists because the bugs it was built for are ORDERING bugs. A
+        // stale reply that arrives 40ms after a user command is invisible in a
+        // screen recording and invisible in the UI — the only way to prove what
+        // happened is a timeline that carries both the intent and the observed
+        // state on every line. So each entry stamps the whole relevant state,
+        // not just the event: reading one line must be enough to know what
+        // ReaSet believed at that instant.
+        //
+        // Enable with ?diag=transport (or ?diag=all), or persistently with
+        // localStorage['reaset_diag']='transport'. Read it with RSDiag.dump()
+        // in the console, or RSDiag.save() for a file to attach to a bug report.
+        var RSDiag = (function () {
+            var on = false;
+            try {
+                var q = (window.location.search || '').toLowerCase();
+                on = /[?&]diag=(transport|all)\b/.test(q);
+                if (!on && localStorage.getItem('reaset_diag')) on = true;
+            } catch (e) { /* no location/localStorage — stay off */ }
+
+            // Ring buffer, not an array that grows: a rehearsal-length soak
+            // test is one of the things this has to survive (#10), and an
+            // unbounded log is itself a source of the slowdown being measured.
+            var CAP = 800;
+            var buf = new Array(CAP);
+            var n   = 0;
+
+            // Filled in by whoever owns the transport state. Kept as a hook so
+            // this block has no dependency on variables declared 4000 lines
+            // below it, and so it degrades to "{}" instead of throwing if a
+            // future refactor renames one of them.
+            var snapshot = function () { return {}; };
+
+            function stamp(ts) {
+                var d = new Date(ts);
+                function p(v, w) { v = String(v); while (v.length < w) v = '0' + v; return v; }
+                return p(d.getHours(), 2) + ':' + p(d.getMinutes(), 2) + ':' +
+                       p(d.getSeconds(), 2) + '.' + p(d.getMilliseconds(), 3);
+            }
+
+            function fmt(rec) {
+                var out = stamp(rec.t) + ' ' + rec.ev;
+                for (var k in rec.f) {
+                    if (!rec.f.hasOwnProperty(k)) continue;
+                    var v = rec.f[k];
+                    if (v === undefined || v === null || v === '') continue;
+                    out += ' ' + k + '=' + v;
+                }
+                return out;
+            }
+
+            function push(ev, fields) {
+                var rec = { t: Date.now(), ev: ev, f: fields || {} };
+                buf[n % CAP] = rec;
+                n++;
+                // Console too: a race that hard-locks the page still leaves its
+                // last lines visible, which a ring buffer in memory would not.
+                if (window.console && console.log) console.log('[RSDiag] ' + fmt(rec));
+                return rec;
+            }
+
+            // Merges the live state snapshot under the event's own fields, so
+            // an explicit field always wins over the ambient one.
+            function withState(fields) {
+                var s;
+                try { s = snapshot() || {}; } catch (e) { s = {}; }
+                var out = {};
+                for (var a in s) if (s.hasOwnProperty(a)) out[a] = s[a];
+                for (var b in fields) if (fields.hasOwnProperty(b)) out[b] = fields[b];
+                return out;
+            }
+
+            var lastKeyed = {};
+
+            return {
+                get enabled() { return on; },
+
+                // Register the state provider. Called once, late, by the
+                // transport code that actually owns these variables.
+                provide: function (fn) { snapshot = fn; },
+
+                // A discrete event worth a line every time it happens:
+                // USER_SELECT, USER_PLAY, USER_STOP, SYNC_APPLY, LEASE_DENY…
+                log: function (ev, fields) {
+                    if (!on) return;
+                    push(ev, withState(fields));
+                },
+
+                // For anything that repeats at poll rate. Logs only when the
+                // fields actually change, keyed by `key`. This is what keeps
+                // TRANSPORT (33ms) from producing 30 lines a second.
+                logChange: function (key, ev, fields) {
+                    if (!on) return;
+                    var sig = JSON.stringify(fields);
+                    if (lastKeyed[key] === sig) return;
+                    lastKeyed[key] = sig;
+                    push(ev, withState(fields));
+                },
+
+                // Outbound command trace. `reason` is the whole point: two
+                // identical SET/POS lines mean nothing, "reason=user-cue" and
+                // "reason=auto-chain" 40ms apart explain the bug.
+                cmd: function (command, reason, fields) {
+                    if (!on) return;
+                    var f = withState(fields);
+                    f.cmd = command;
+                    f.reason = reason || '?';
+                    push('SEND', f);
+                },
+
+                // An automatic transport write that a guard refused. The
+                // absence of a command is as diagnostic as its presence.
+                blocked: function (what, reason, fields) {
+                    if (!on) return;
+                    var f = withState(fields);
+                    f.blocked = what;
+                    f.reason = reason || '?';
+                    push('IGNORE', f);
+                },
+
+                lines: function () {
+                    var out = [];
+                    var start = (n > CAP) ? n - CAP : 0;
+                    for (var i = start; i < n; i++) {
+                        var r = buf[i % CAP];
+                        if (r) out.push(fmt(r));
+                    }
+                    return out;
+                },
+
+                dump: function () {
+                    var l = this.lines();
+                    if (window.console && console.log) console.log(l.join('\n'));
+                    return l.length;
+                },
+
+                // Downloadable snapshot for a bug report (see the template in
+                // docs/STAGE_TEST_MATRIX.md).
+                save: function () {
+                    var head = [
+                        '# ReaSet transport diagnostics',
+                        '# userAgent: ' + (navigator.userAgent || '?'),
+                        '# href: ' + (window.location ? window.location.href : '?'),
+                        '# saved: ' + new Date().toISOString(),
+                        ''
+                    ].join('\n');
+                    var blob = head + this.lines().join('\n') + '\n';
+                    var a = document.createElement('a');
+                    a.href = 'data:text/plain;charset=utf-8,' + encodeURIComponent(blob);
+                    a.download = 'reaset-diag-' + Date.now() + '.txt';
+                    document.body.appendChild(a); a.click(); a.remove();
+                },
+
+                clear: function () { n = 0; lastKeyed = {}; }
+            };
+        })();
+        window.RSDiag = RSDiag;
+
         var _wwrReqReal = window.wwr_req;
-        window.wwr_req = function (cmd) {
-            if (REASET_MODE === 'player' && _isWriteCommand(cmd)) return;
-            return _wwrReqReal.apply(this, arguments);
+        // The second argument is a DIAGNOSTIC REASON, not part of REAPER's
+        // protocol: wwr_req only ever reads its first argument, so passing it
+        // is free at runtime and it is what makes the command trace readable
+        // (#10 Part B). Call sites that don't pass one still work; they just
+        // show up as reason=? in the log.
+        window.wwr_req = function (cmd, reason) {
+            var isWrite = _isWriteCommand(cmd);
+            if (REASET_MODE === 'player' && isWrite) {
+                RSDiag.blocked(cmd, 'player-mode-readonly');
+                return;
+            }
+            // Only writes are traced. The GET/ polls run at 10-33ms and would
+            // bury the timeline in noise for no diagnostic value — what they
+            // observe is already logged by the TRANSPORT handler.
+            if (isWrite) RSDiag.cmd(cmd, reason);
+            return _wwrReqReal.call(this, cmd);
         };
 
         // Batched recur like X-Raym: lyrics+chords+regions each on their own poll
@@ -5663,6 +5838,23 @@
 
         // True while automatic (non-user) transport commands must be held back.
         function _suppressAutoTransport() { return Date.now() < _resyncGuardUntil; }
+
+        // Ambient state stamped onto every diagnostic line (#10 Part A). Read
+        // defensively: this runs from the moment the page loads, before some of
+        // these variables have been assigned, and a diagnostic must never be
+        // the thing that throws.
+        RSDiag.provide(function () {
+            var f = {
+                mode: (typeof REASET_MODE !== 'undefined') ? REASET_MODE : '?',
+                playing: (typeof isPlaying !== 'undefined') ? (isPlaying ? 1 : 0) : '?',
+                pos: (typeof currentPos === 'number') ? currentPos.toFixed(3) : '?'
+            };
+            try { f.set = currentSetlistName; } catch (e) { /* not yet declared */ }
+            try { if (_syncLocalRev)       f.rev     = _syncLocalRev; } catch (e) {}
+            try { if (_syncLastAppliedRev) f.appRev  = _syncLastAppliedRev; } catch (e) {}
+            if (_suppressAutoTransport()) f.resyncGuard = 1;
+            return f;
+        });
 
         // Called when the reply stream resumes after an interruption. Clears the
         // edge-detector / dedup flags so nothing fires off a pre-outage position,
@@ -7178,13 +7370,22 @@
                             }
                         }
                         _lastTransportTs = _now;
+                        // State-change only: at 33ms this would otherwise emit
+                        // 30 lines a second. Position is rounded to 100ms so a
+                        // rolling transport logs ~10 lines/s instead of 30,
+                        // which is still fine enough to order events against a
+                        // command round-trip (~70-110ms).
+                        RSDiag.logChange('transport', 'TRANSPORT', {
+                            playing: nowPlaying ? 1 : 0,
+                            pos: currentPos.toFixed(1)
+                        });
                         // A pending cue from an auto-stop: only now do we know REAPER
                         // really stopped, so this SET/POS moves the cursor without
                         // dragging playback along with it.
                         if (!nowPlaying && window._pendingCuePos != null) {
                             var _cue = window._pendingCuePos;
                             window._pendingCuePos = null;
-                            wwr_req("SET/POS/" + _cue);
+                            wwr_req("SET/POS/" + _cue, "pending-cue-after-autostop");
                         }
                         // First playback of the session starts the session clock,
                         // which then runs through every later stop and pause.
@@ -7891,7 +8092,7 @@
                 for (var k in mainMap) { if (mainMap.hasOwnProperty(k)) newItems.push(mainMap[k]); }
                 newItems.sort(function (a, b) { return a.start - b.start; });
                 for (var n = 0; n < newItems.length; n++) { newItems[n].chain = false; newItems[n].skipped = !!newItems[n].defaultSkip; newItems[n].loop = false; displayList.push(newItems[n]); }
-                if (displayList.length > 0 && !isPlaying) wwr_req("SET/POS/" + displayList[0].start);
+                if (displayList.length > 0 && !isPlaying) wwr_req("SET/POS/" + displayList[0].start, "setlist-init-cursor");
                 initialized = true;
             } else {
                 var activeIDs = {};
@@ -8631,7 +8832,7 @@
                     // Reconnect guard: don't auto-seek off a skipped region on a
                     // stale post-outage tick; adopt REAPER's position for now and
                     // let it fire on the next proven-fresh tick.
-                    if (nxt) { if (!_suppressAutoTransport()) wwr_req("SET/POS/" + nxt.start); return; }
+                    if (nxt) { if (!_suppressAutoTransport()) wwr_req("SET/POS/" + nxt.start, "skip-song"); else RSDiag.blocked("SET/POS", "resync-guard"); return; }
                 }
                 // Tell Reaset.lua where to stop BEFORE it matters, instead of
                 // detecting the end and sending a stop late. Published only when
@@ -8693,7 +8894,7 @@
                         if (currentPos >= sub.start && currentPos < sub.end) { activeSub = sub; break; }
                     }
                     if (activeSub && activeSub.skipped) {
-                        wwr_req("SET/POS/" + activeSub.end);
+                        wwr_req("SET/POS/" + activeSub.end, "skip-section");
                         return;
                     }
                     for (var s2 = 0; s2 < subs.length; s2++) {
@@ -8761,14 +8962,14 @@
                                 // cannot fire a conflicting jump back into the loop region.
                                 _reaperNativeLoopOff();
                                 var nxtSong = findNextValidSong(activeIdx);
-                                if (nxtSong) { wwr_req("SET/POS/" + nxtSong.start); return; }
-                                wwr_req(1016); return; // stop if no next song
+                                if (nxtSong) { wwr_req("SET/POS/" + nxtSong.start, "marker-song-end"); return; }
+                                wwr_req(1016, "marker-song-end-no-next"); return; // stop if no next song
                             } else if (spm.type === 'STOP') {
                                 // Feature 4: stop playback
                                 _reaperNativeLoopOff();
-                                wwr_req(1016);
+                                wwr_req(1016, "marker-stop");
                                 var nxtAfterStop = findNextValidSong(activeIdx);
-                                if (nxtAfterStop) { setTimeout(function() { wwr_req("SET/POS/" + nxtAfterStop.start); }, 100); }
+                                if (nxtAfterStop) { setTimeout(function() { wwr_req("SET/POS/" + nxtAfterStop.start, "marker-stop-cue-next"); }, 100); }
                                 return;
                             }
                         }
@@ -8917,7 +9118,7 @@
                                         var lc = (stLoop.loopCount || 0) + 1; // increment for this loop
                                         if (lc < activeSub.loopMax) {
                                             stLoop.loopCount = lc;
-                                            wwr_req("SET/POS/" + activeSub.start); return;
+                                            wwr_req("SET/POS/" + activeSub.start, "section-loop-n"); return;
                                         } else {
                                             // Played loopMax times — mark exhausted and fall through.
                                             // loop stays true so the button remains active and
@@ -8935,12 +9136,12 @@
                             // +LOOPFULL — loop takes absolute priority; queued region waits
                             else if (activeSub.loopFull) {
                                 if (window._nativeLoopSubId === activeSub.id) { return; } // Lua handling
-                                wwr_req("SET/POS/" + activeSub.start); return;
+                                wwr_req("SET/POS/" + activeSub.start, "section-loopfull"); return;
                             }
                             // +LOOP — respect queued region; loop only if nothing queued
                             else if (!queuedRegion) {
                                 if (window._nativeLoopSubId === activeSub.id) { return; } // Lua handling
-                                wwr_req("SET/POS/" + activeSub.start); return;
+                                wwr_req("SET/POS/" + activeSub.start, "section-loop"); return;
                             }
                             // (if queuedRegion exists and not loopFull, fall through to queued)
                         }
@@ -8949,7 +9150,7 @@
                         if (activeSub.pause) {
                             if (window._lastPauseTriggerPos !== activeSub.end) {
                                 window._lastPauseTriggerPos = activeSub.end;
-                                wwr_req(1008); // REAPER: toggle pause
+                                wwr_req(1008, "marker-pause"); // REAPER: toggle pause
                                 return;
                             }
                         }
@@ -8958,12 +9159,12 @@
                         if (activeSub.transitionPos !== undefined) {
                             if (window._lastTransitionTriggerPos !== activeSub.end) {
                                 window._lastTransitionTriggerPos = activeSub.end;
-                                wwr_req("SET/POS/" + activeSub.transitionPos); return;
+                                wwr_req("SET/POS/" + activeSub.transitionPos, "section-transition"); return;
                             }
                         }
 
                         if (queuedRegion) {
-                            wwr_req("SET/POS/" + queuedRegion.start); queuedRegion = null;
+                            wwr_req("SET/POS/" + queuedRegion.start, "queued-at-section-end"); queuedRegion = null;
                             var qEls = document.querySelectorAll('.queued');
                             for (var q = 0; q < qEls.length; q++) qEls[q].classList.remove('queued');
                             return;
@@ -9014,9 +9215,9 @@
                     // in the same HTTP batch as the SET/POS below — preventing REAPER's
                     // Repeat from firing a conflicting jump before Lua cleanup runs.
                     _reaperNativeLoopOff();
-                    if (activeRegion.loop) { wwr_req("SET/POS/" + activeRegion.start); return; }
+                    if (activeRegion.loop) { wwr_req("SET/POS/" + activeRegion.start, "song-loop"); return; }
                     if (queuedRegion) {
-                        wwr_req("SET/POS/" + queuedRegion.start); queuedRegion = null;
+                        wwr_req("SET/POS/" + queuedRegion.start, "queued-at-region-end"); queuedRegion = null;
                         var qEls = document.querySelectorAll('.queued');
                         for (var q = 0; q < qEls.length; q++) qEls[q].classList.remove('queued');
                         return;
@@ -9026,7 +9227,7 @@
                     if (_rov.stopAfter) {
                         window._endOfRegionLocked = Date.now() + 400;
                         var _nrs = findNextValidSong(activeIdx);
-                        wwr_req(1016);
+                        wwr_req(1016, "song-stop-after");
                         // Same reason as the auto-stop branch: the reposition waits
                         // for the transport to confirm it stopped.
                         if (_nrs) window._pendingCuePos = _nrs.start;
@@ -9036,11 +9237,11 @@
                         var _nrd = findNextValidSong(activeIdx);
                         if (_nrd) {
                             window._endOfRegionLocked = Date.now() + 400; // lock before async — same guard as autoStop/shouldPlayNext
-                            wwr_req(1016);
+                            wwr_req(1016, "song-delay-after");
                             (function(nxt, delaySec) {
                                 setTimeout(function() {
-                                    wwr_req("SET/POS/" + nxt.start);
-                                    setTimeout(function() { wwr_req(1007); }, 80);
+                                    wwr_req("SET/POS/" + nxt.start, "delay-after-resume");
+                                    setTimeout(function() { wwr_req(1007, "delay-after-resume"); }, 80);
                                 }, delaySec * 1000);
                             })(_nrd, _rov.delayAfter);
                             return;
@@ -9053,7 +9254,7 @@
                             // Lock for 400ms: prevents the dedup reset (timeRem > 0.5 in region B)
                             // from allowing a second end-of-A trigger when A.end === B.start.
                             window._endOfRegionLocked = Date.now() + 400;
-                            wwr_req("SET/POS/" + nextR.start);
+                            wwr_req("SET/POS/" + nextR.start, "auto-chain");
                             return;
                         }
                     }
@@ -9086,7 +9287,7 @@
                             if (nextR2) window._pendingCuePos = nextR2.start;
                             return;
                         }
-                        wwr_req(1016);
+                        wwr_req(1016, "auto-stop-fallback");
                         if (nextR2) window._pendingCuePos = nextR2.start;
                         return;
                     }
@@ -9282,13 +9483,13 @@
             var wasPlaying = isPlaying;
             if (!wasPlaying && startWhenStopped) {
                 // Compound requests execute in order in REAPER's web interface.
-                wwr_req("SET/POS/" + start + ";1007");
+                wwr_req("SET/POS/" + start + ";1007", "user-seek-and-play");
                 return true;
             }
 
-            wwr_req("SET/POS/" + start);
+            wwr_req("SET/POS/" + start, "user-seek");
             if (wasPlaying && !smoothSeekEnabled) {
-                wwr_req(1007);
+                wwr_req(1007, "user-seek-hard");
                 return true;
             }
             return false;
@@ -9347,7 +9548,7 @@
             window._playRegionLocked = Date.now() + 500;
             // One compound request: REAPER executes in order within it, so stop
             // and reposition can no longer arrive the wrong way round.
-            wwr_req("1016;SET/POS/" + start); flashRow(id);
+            wwr_req("1016;SET/POS/" + start, "user-cue"); flashRow(id);
         }
         function smartStop() {
             var activeIdx = -1;
@@ -9355,15 +9556,15 @@
             var target = null;
             if (activeIdx !== -1) target = displayList[activeIdx].start;
             else if (displayList.length > 0) target = displayList[0].start;
-            wwr_req(1016); if (target !== null) setTimeout(function () { wwr_req("SET/POS/" + target); }, 150);
+            wwr_req(1016, "user-stop"); if (target !== null) setTimeout(function () { wwr_req("SET/POS/" + target, "stop-rewind"); }, 150);
         }
         function togglePlay() {
-            if (isPlaying) { wwr_req(1008); }
+            if (isPlaying) { wwr_req(1008, "user-pause"); }
             else {
                 var activeIdx = -1;
                 for (var i = 0; i < displayList.length; i++) { var r = displayList[i]; if (currentPos >= r.start && currentPos < r.end) { activeIdx = i; break; } }
                 if (activeIdx === -1 && displayList.length > 0) playRegion(displayList[0].start, displayList[0].id);
-                else wwr_req(1007);
+                else wwr_req(1007, "user-play");
             }
         }
         // ── Topbar counters ─────────────────────────────────────────────
@@ -10682,8 +10883,8 @@
 
         // ── Action dispatcher ──────────────────────────────────────
         var MIDI_ACTIONS = {
-            'play':         function() { wwr_req(1007); },
-            'stop':         function() { wwr_req(1016); },
+            'play':         function() { wwr_req(1007, "midi-play"); },
+            'stop':         function() { wwr_req(1016, "midi-stop"); },
             'play_pause':   function() { togglePlay(); },
             'next_song':    function() { midiNextSong(); },
             'prev_song':    function() { midiPrevSong(); },
