@@ -574,12 +574,33 @@ local function sync_tick()
         parts[#parts + 1] = chunk
     end
 
+    local payload = table.concat(parts)
+
+    -- INTEGRITY: refuse an assembly stitched from two generations.
+    --
+    -- The empty-chunk retry above catches a chunk that has not ARRIVED yet.
+    -- It cannot catch a chunk that arrived for the PREVIOUS push and was never
+    -- overwritten by this one — a shorter payload leaves the old tail in
+    -- place, and a dropped request in the middle of a longer one leaves an old
+    -- chunk between two new ones. Both assemble into a non-empty base64 string
+    -- that decodes to garbage, so every follower fails at JSON.parse at once,
+    -- with nothing in the failure to say why.
+    --
+    -- The browser publishes the payload's total length with the count. If what
+    -- was reassembled is not that length, it is not that payload: leave
+    -- s_syncLastCount alone so the next tick retries once the missing writes
+    -- land, and leave the previous good file on disk in the meantime. An older
+    -- ReaSet.html that sends no length still works — there is simply nothing to
+    -- check against.
+    local want_len = tonumber(reaper.GetExtState(SEC, "setlistChunkLen"))
+    if want_len and #payload ~= want_len then return end
+
     -- Base64url's alphabet ([A-Za-z0-9_-]) can never contain a quote or
     -- backslash, so it drops straight into this JSON string with zero
     -- escaping needed.
     local f = io.open(sync_file_path(), "wb")
     if f then
-        f:write('{"v":1,"b64":"' .. table.concat(parts) .. '"}')
+        f:write('{"v":1,"b64":"' .. payload .. '"}')
         f:close()
         -- Publish the revision that is now ON DISK, as opposed to the one the
         -- Director merely announced.

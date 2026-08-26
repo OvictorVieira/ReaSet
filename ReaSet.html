@@ -6398,8 +6398,23 @@
                 // staging that isn't what actually plays next — REAPER's own
                 // transport position, which Players already get for free via
                 // TRANSPORT polling, is the real source of truth for that).
+                // The global that 'auto' resolves against. Without it a
+                // follower resolves 'auto' with ITS OWN toggle and draws a
+                // different set of playback blocks from the same setlist.
+                autoStop: !!(document.getElementById('autoStopToggle') || {}).checked,
                 setlist: displayList.map(function (r) {
-                    return { id: r.id, chain: !!r.chain, skipped: !!r.skipped, loop: !!r.loop };
+                    return {
+                        id: r.id, chain: !!r.chain, skipped: !!r.skipped, loop: !!r.loop,
+                        // The resolved end-state, because the two inputs it is
+                        // built from are NOT shared: stopAfter and delayAfter
+                        // live in g_songOverrides, which is this browser's
+                        // localStorage. A follower has no other way to know a
+                        // song is marked "always stop here", so it would group
+                        // the list wrongly and — worse — show a performer a
+                        // block boundary that does not exist.
+                        end: getSongEnd(r),
+                        wait: (getOverride(r.id).delayAfter || 0)
+                    };
                 })
             };
         }
@@ -6446,6 +6461,17 @@
             for (var c = 0; c < chunks.length; c++) {
                 wwr_req('SET/EXTSTATE/ReaSet/setlistChunk' + c + '/' + chunks[c]);
             }
+            // Total length, published with the count. The chunk bodies, the
+            // count and the revision are separate HTTP requests, and
+            // Reaset.lua's "retry while any chunk is empty" rule only covers a
+            // LATE chunk — not a STALE one. A shorter push leaves the previous
+            // generation's later chunks in place with non-empty values, and a
+            // dropped request in the middle of a longer push leaves one old
+            // chunk between two new ones. Base64 concatenated across two
+            // generations decodes to garbage and dies at JSON.parse on every
+            // follower at once, with nothing to say why. A length check costs
+            // one ExtState key and makes that assembly refuse to be written.
+            wwr_req('SET/EXTSTATE/ReaSet/setlistChunkLen/' + b64.length);
             wwr_req('SET/EXTSTATE/ReaSet/setlistChunkCount/' + chunks.length);
             // Monotonic revision, sent LAST, is what Reaset.lua triggers on. It
             // used to trigger on the chunk COUNT changing, which silently dropped
@@ -6663,6 +6689,17 @@
                         found.chain   = !!payload.setlist[j].chain;
                         found.skipped = !!payload.setlist[j].skipped;
                         found.loop    = !!payload.setlist[j].loop;
+                        // Stored on the region rather than written into
+                        // g_songOverrides: overrides are this device's
+                        // authoring data, and a follower must not end up
+                        // owning a copy of the Director's. syncedEnd is read
+                        // by getSongEnd() only when this device does not
+                        // author, so a Director's own overrides are never
+                        // shadowed by something it received.
+                        if (payload.setlist[j].end) {
+                            found.syncedEnd  = payload.setlist[j].end;
+                            found.syncedWait = payload.setlist[j].wait || 0;
+                        }
                         reordered.push(found);
                     }
                 }
@@ -6676,6 +6713,13 @@
 
                 var prevName = currentSetlistName;
                 if (payload.currentSetlistName) currentSetlistName = payload.currentSetlistName;
+                // Mirror the Director's global so 'auto' resolves the same way
+                // on both screens. Only on a follower: on a Director this
+                // toggle is the source, not a copy.
+                if (typeof payload.autoStop === 'boolean' && !canEditSetlist()) {
+                    var _asT = document.getElementById('autoStopToggle');
+                    if (_asT) _asT.checked = payload.autoStop;
+                }
 
                 // Applying is a WRITE to local state, so it goes through the
                 // same choke point every edit does — but flagged, so the choke
@@ -9194,7 +9238,11 @@
                     // The end-state now has its own button; only the delay's
                     // seconds still need a separate tag to be readable.
                     var stopHtml   = '';
-                    var delayHtml  = (rov.delayAfter > 0 && !rov.stopAfter) ? '<span class="song-delay-tag">+' + rov.delayAfter + 's</span>' : '';
+                    // Falls back to the synchronised value: on a follower the
+                    // local override is empty, and the seconds are part of what
+                    // "wait" means on stage.
+                    var _waitSecs = rov.delayAfter || (canEditSetlist() ? 0 : (r.syncedWait || 0));
+                    var delayHtml  = (_waitSecs > 0 && getSongEnd(r) === 'wait') ? '<span class="song-delay-tag">+' + _waitSecs + 's</span>' : '';
                     // Feature 3: song-level info text from marker at song start
                     var songNameHtml = rDisplayName
                         + (r.markerInfo ? '<span class="song-name-info">' + r.markerInfo + '</span>' : '')
@@ -9343,6 +9391,12 @@
         //   stop      always stop here
         //   wait      stop, hold N seconds, continue   (N comes from the menu)
         function getSongEnd(song) {
+            // On a device that does not author the setlist, the Director's
+            // resolved end-state is the truth. The two local inputs below —
+            // stopAfter and delayAfter — live in this browser's own
+            // localStorage and are meaningless on a follower: empty on a fresh
+            // device, and stale leftovers on one that used to be a Director.
+            if (!canEditSetlist() && song.syncedEnd) return song.syncedEnd;
             var ov = getOverride(song.id);
             if (ov.stopAfter) return 'stop';
             if (ov.delayAfter > 0) return 'wait';
