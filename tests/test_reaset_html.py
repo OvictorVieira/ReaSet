@@ -334,6 +334,28 @@ def test_race_harness_dependencies_still_exist(script_body: str, kind: str, name
     )
 
 
+def test_modal_buttons_use_classes_that_exist(script_body: str) -> None:
+    """showAppConfirm() REPLACES the OK button's className.
+
+    It wrote 'app-modal-btn btn-danger' — three class names the stylesheet
+    never defined — which also discarded the markup's own .m-btn, so every
+    confirm dialog rendered its OK button as an unstyled white box. Nothing
+    fails when a class is simply absent, so this is only ever caught by
+    somebody looking at the dialog.
+
+    Asserts the classes it assigns are ones the stylesheet actually declares.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    assigned = re.search(r"okBtn\.className\s*=\s*'([^']*)'\s*\+\s*\([^)]*\?\s*'([^']*)'\s*:\s*'([^']*)'",
+                         script_body)
+    assert assigned, "could not find showAppConfirm's className assignment"
+    for cls in [c for group in assigned.groups() for c in group.split() if c]:
+        assert re.search(r"\." + re.escape(cls) + r"\s*[,{]", html), (
+            f"showAppConfirm assigns .{cls} but no such rule exists in the "
+            f"stylesheet — the button will render unstyled"
+        )
+
+
 def test_play_target_has_no_first_song_fallback(script_body: str) -> None:
     """Locks the #3 fix.
 

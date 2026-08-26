@@ -470,19 +470,52 @@
             flex-shrink: 0;
         }
 
+        /* Matches the ＋ and ⋯ buttons beside it — same pill radius, same
+           surface, same hover — so the setlist row reads as one control group
+           instead of a bare form field wedged between two buttons.
+
+           appearance:none was already here, which removed the platform arrow
+           and put nothing back: the select had no affordance at all. The
+           chevron is an inline SVG so it costs no request, and it is drawn in a
+           mid grey that holds up on both the dark and light themes rather than
+           a colour that only works on one. */
         .n-select {
             flex: 1;
-            background: rgba(0, 0, 0, 0.4);
+            background: rgba(255, 255, 255, 0.07);
             color: var(--text-primary);
-            border: 1px solid rgba(255, 255, 255, 0.14);
-            border-radius: var(--radius-sm);
-            padding: 8px 12px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: var(--radius-pill);
+            padding: 8px 34px 8px 14px;
+            height: 34px;
             font-size: 13px;
             font-weight: 600;
             font-family: var(--font-ui);
             outline: none;
             min-width: 0;
+            cursor: pointer;
+            transition: all 0.18s;
             appearance: none;
+            text-overflow: ellipsis;
+            background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1.5 6 6.5 11 1.5' fill='none' stroke='%23999' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+        }
+
+        .n-select:hover {
+            background-color: var(--bg-elevated);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .n-select:focus-visible {
+            border-color: var(--color-brand);
+        }
+
+        /* The popup itself is drawn by the OS, so its list inherits nothing
+           from above — without this the options render as black-on-white in a
+           dark UI on several platforms. */
+        .n-select option {
+            background: #1c1c1e;
+            color: #fff;
         }
 
         .n-btn-new {
@@ -652,7 +685,7 @@
            :not(:first-child) because the first block start is the top of the
            list; leading whitespace there is just a smaller list. */
         .song-container.block-start:not(:first-child) {
-            margin-top: 14px;
+            margin-top: 24px;
         }
 
         /* Grid view gets the class but no spacing. Its reading order wraps
@@ -670,7 +703,7 @@
             position: absolute;
             left: 12%;
             right: 12%;
-            top: -8px;
+            top: -13px;
             height: 1px;
             background: currentColor;
             opacity: 0.12;
@@ -6804,10 +6837,19 @@
         var SYNC_FULL_POLL_MS = 15000;
         var _syncPlayerPollTimer = null;
         var _syncRevPollTimer    = null;
+        // Registered at most once for the lifetime of the page: wwr_req_recur has
+        // no unregister, so anything started here can never be taken back. It is
+        // a two-key GET and it keeps _syncLocalRev reconciled on a Director too,
+        // which is why it is safe to leave running.
+        var _syncRevRecurStarted = false;
+
         function _syncStartPlayerPolling() {
             if (_syncPlayerPollTimer) return;
             _syncPullNow(false);
-            wwr_req_recur('GET/EXTSTATE/ReaSet/setlistFileRev;GET/EXTSTATE/ReaSet/setlistRev', SYNC_REV_POLL_MS);
+            if (!_syncRevRecurStarted) {
+                _syncRevRecurStarted = true;
+                wwr_req_recur('GET/EXTSTATE/ReaSet/setlistFileRev;GET/EXTSTATE/ReaSet/setlistRev', SYNC_REV_POLL_MS);
+            }
             _syncRevPollTimer = setInterval(function () {
                 // Re-check every tick rather than remembering "already tried":
                 // Reaset.lua writes the file from its own defer loop, so the
@@ -6817,6 +6859,17 @@
                 if (_syncRemoteRev > _syncLastAppliedRev) _syncPullNow(false);
             }, SYNC_REV_POLL_MS);
             _syncPlayerPollTimer = setInterval(function () { _syncPullNow(false); }, SYNC_FULL_POLL_MS);
+        }
+
+        // A device that follows can become one that leads — that is the whole
+        // point of takeover, and it also happens on any boot that verifies its
+        // lease late. Nothing stopped the follower polling when it did, so a
+        // Director carried a Player's fetch loop underneath it for the rest of
+        // the session: pointless HTTP in front of the very commands whose
+        // latency this epic is about.
+        function _syncStopPlayerPolling() {
+            if (_syncRevPollTimer)    { clearInterval(_syncRevPollTimer);    _syncRevPollTimer = null; }
+            if (_syncPlayerPollTimer) { clearInterval(_syncPlayerPollTimer); _syncPlayerPollTimer = null; }
         }
 
         // ── Director PIN (optional deterrent, not a security boundary) ──────────
@@ -8003,6 +8056,10 @@
             // foreign heartbeat and start doubting its own lease.
             else if (_directorLease === 'lost' || _directorLease === 'pending') { _dcStopHeartbeat(); }
             else { _dcStartHeartbeat(); _setDisplacedBanner(false); }
+            // Leading, not following: drop the follower's fetch loop if this
+            // device was ever a Player. Outside the chain above because it
+            // applies to any Director, whatever its lease state.
+            if (REASET_MODE === 'director') _syncStopPlayerPolling();
         }
 
         // Boot: force the picker only on a genuinely fresh device (no stored
@@ -11863,7 +11920,12 @@
             document.getElementById('appConfirmBody').textContent = body;
             var okBtn = document.getElementById('appConfirmOk');
             okBtn.textContent = okLabel || 'Confirmar';
-            okBtn.className = 'app-modal-btn ' + (danger !== false ? 'btn-danger' : 'btn-confirm');
+            // The stylesheet calls these .m-btn / .m-btn-danger / .m-btn-confirm.
+            // This wrote 'app-modal-btn btn-danger' — three class names that
+            // exist nowhere — and since it REPLACES className rather than
+            // adding to it, the markup's own .m-btn went with them. Every
+            // confirm dialog rendered its OK button as an unstyled white box.
+            okBtn.className = 'm-btn ' + (danger !== false ? 'm-btn-danger' : 'm-btn-confirm');
             _confirmCallback = onConfirm;
             document.getElementById('appConfirmOverlay').classList.add('open');
         }
