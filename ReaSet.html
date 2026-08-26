@@ -5858,8 +5858,80 @@
         var RESYNC_GUARD_MS   = 600;   // suppress automatic transport commands this long after a gap
         var _resyncGuardUntil = 0;
 
+        // ── Manual transport precedence (#4) ────────────────────────────────
+        //
+        // This is NOT a debounce. Debouncing collapses repeats of the same
+        // event; what is needed here is precedence between two DIFFERENT
+        // sources of truth:
+        //
+        //     explicit user command  >  stale automatic callback
+        //
+        //     User STOP at T0; an old region-end timeout fires at T0+80ms
+        //       => the timeout must do nothing.
+        //     User PAUSE at T0; a queue transition becomes eligible at T0+40ms
+        //       => the transition must not seek.
+        //
+        // The automatic logic is not wrong when it fires — it is reading a
+        // currentPos that was accurate when REAPER sent it. It is simply
+        // reasoning about a moment the user has already overruled. So the guard
+        // blocks automatic transport WRITES for a bounded window and nothing
+        // else: rendering, progress, lyrics and the observed state keep
+        // updating normally, and a fresh explicit command from the user is
+        // never blocked — it supersedes the guard instead.
+        var MANUAL_GUARD_MS   = 900;   // ~2 TRANSPORT polls + one command round-trip
+        var _manualIntent     = null;  // 'pause' | 'stop' | null
+        var _manualGuardUntil = 0;
+
+        function beginManualTransportIntent(type) {
+            _manualIntent     = type;
+            _manualGuardUntil = Date.now() + MANUAL_GUARD_MS;
+            RSDiag.log('GUARD', { manual: type, forMs: MANUAL_GUARD_MS });
+        }
+        function isManualTransportGuardActive() { return Date.now() < _manualGuardUntil; }
+
+        // A new explicit command outranks the previous one. Without this, Stop
+        // followed 200ms later by Play would leave Play fighting the guard its
+        // own predecessor armed.
+        function clearManualTransportGuard(reason) {
+            if (!_manualIntent && !isManualTransportGuardActive()) return;
+            RSDiag.log('GUARD_CLEAR', { was: _manualIntent, reason: reason || '?' });
+            _manualIntent = null;
+            _manualGuardUntil = 0;
+        }
+
+        // Every setTimeout in this file that can move the transport goes
+        // through here. A timer scheduled before a manual command must not be
+        // able to outlive it — and even if it somehow survives cancellation, it
+        // re-checks the guard at fire time before doing anything.
+        var _autoTransportTimers = [];
+        function scheduleAutoTransport(fn, ms, tag) {
+            var id = setTimeout(function () {
+                var i = _autoTransportTimers.indexOf(id);
+                if (i !== -1) _autoTransportTimers.splice(i, 1);
+                if (isManualTransportGuardActive()) {
+                    RSDiag.blocked(tag, 'manual-' + _manualIntent + '-guard');
+                    return;
+                }
+                fn();
+            }, ms);
+            _autoTransportTimers.push(id);
+            return id;
+        }
+        function cancelPendingAutomaticTransport(reason) {
+            if (_autoTransportTimers.length) {
+                RSDiag.log('CANCEL_PENDING', { timers: _autoTransportTimers.length, reason: reason || '?' });
+            }
+            for (var i = 0; i < _autoTransportTimers.length; i++) clearTimeout(_autoTransportTimers[i]);
+            _autoTransportTimers = [];
+        }
+
         // True while automatic (non-user) transport commands must be held back.
-        function _suppressAutoTransport() { return Date.now() < _resyncGuardUntil; }
+        // Two independent reasons, deliberately kept separate in the log:
+        // a reconnect (the reply stream cannot be trusted yet) and a manual
+        // command (the reply stream is fine, the user has simply overruled it).
+        function _suppressAutoTransport() {
+            return Date.now() < _resyncGuardUntil || isManualTransportGuardActive();
+        }
 
         // Ambient state stamped onto every diagnostic line (#10 Part A). Read
         // defensively: this runs from the moment the page loads, before some of
@@ -7401,13 +7473,28 @@
                             playing: nowPlaying ? 1 : 0,
                             pos: currentPos.toFixed(1)
                         });
+                        // REAPER has confirmed the state a manual command asked
+                        // for. The guard is NOT lifted here — its whole job is to
+                        // outlive the confirmation, because the stale callbacks
+                        // it exists to beat arrive after it. This only records
+                        // the moment, which is what makes the log readable.
+                        if (_manualIntent && !nowPlaying) {
+                            RSDiag.log('CONFIRM', { manual: _manualIntent });
+                            _manualIntent = null;
+                        }
                         // A pending cue from an auto-stop: only now do we know REAPER
                         // really stopped, so this SET/POS moves the cursor without
                         // dragging playback along with it.
+                        //
+                        // smartStop() sets this deliberately (its rewind), and
+                        // pauseTransport() clears it, so by the time a manual
+                        // command's confirmation arrives this holds exactly what
+                        // that command intended — never a leftover from the
+                        // auto-stop the user just overruled.
                         if (!nowPlaying && window._pendingCuePos != null) {
                             var _cue = window._pendingCuePos;
                             window._pendingCuePos = null;
-                            wwr_req("SET/POS/" + _cue, "pending-cue-after-autostop");
+                            wwr_req("SET/POS/" + _cue, "pending-cue");
                         }
                         // First playback of the session starts the session clock,
                         // which then runs through every later stop and pause.
@@ -8932,7 +9019,11 @@
                         if (currentPos >= sub.start && currentPos < sub.end) { activeSub = sub; break; }
                     }
                     if (activeSub && activeSub.skipped) {
-                        wwr_req("SET/POS/" + activeSub.end, "skip-section");
+                        // Guarded like the song-level skip above: a manual Stop
+                        // or a post-reconnect tick must not be answered with an
+                        // automatic seek.
+                        if (!_suppressAutoTransport()) wwr_req("SET/POS/" + activeSub.end, "skip-section");
+                        else RSDiag.blocked("SET/POS", "auto-transport-suppressed");
                         return;
                     }
                     for (var s2 = 0; s2 < subs.length; s2++) {
@@ -9007,7 +9098,11 @@
                                 _reaperNativeLoopOff();
                                 wwr_req(1016, "marker-stop");
                                 var nxtAfterStop = findNextValidSong(activeIdx);
-                                if (nxtAfterStop) { setTimeout(function() { wwr_req("SET/POS/" + nxtAfterStop.start, "marker-stop-cue-next"); }, 100); }
+                                if (nxtAfterStop) {
+                                    scheduleAutoTransport(function () {
+                                        wwr_req("SET/POS/" + nxtAfterStop.start, "marker-stop-cue-next");
+                                    }, 100, 'marker-stop-cue-next');
+                                }
                                 return;
                             }
                         }
@@ -9295,10 +9390,12 @@
                             window._endOfRegionLocked = Date.now() + 400; // lock before async — same guard as autoStop/shouldPlayNext
                             wwr_req(1016, "song-delay-after");
                             (function(nxt, delaySec) {
-                                setTimeout(function() {
+                                scheduleAutoTransport(function () {
                                     wwr_req("SET/POS/" + nxt.start, "delay-after-resume");
-                                    setTimeout(function() { wwr_req(1007, "delay-after-resume"); }, 80);
-                                }, delaySec * 1000);
+                                    scheduleAutoTransport(function () {
+                                        wwr_req(1007, "delay-after-resume");
+                                    }, 80, 'delay-after-play');
+                                }, delaySec * 1000, 'delay-after-seek');
                             })(_nrd, _rov.delayAfter);
                             return;
                         }
@@ -9647,6 +9744,8 @@
         // Tap while stopped or paused: record the choice, move the cursor, and
         // stop there. No Play, ever.
         function selectRegionForCue(region, reason) {
+            // An explicit cue is a new user command and outranks the guard.
+            clearManualTransportGuard('user-cue');
             selectedRegion = { id: region.id, start: region.start, end: region.end, at: Date.now() };
             RSDiag.log('USER_SELECT', { song: region.id, start: _fmtPos(region.start), reason: reason || 'tap' });
             // The cue lands on the EXACT region start, with no MIDI-init
@@ -9750,6 +9849,7 @@
             // target is now recorded as an explicit selection, so the Play that
             // usually follows is deterministic instead of depending on whether
             // the SET/POS reply has come back yet.
+            clearManualTransportGuard('user-cue-nav');
             selectedRegion = { id: region.id, start: region.start, end: region.end, at: Date.now() };
             RSDiag.log('USER_SELECT', { song: region.id, start: _fmtPos(region.start), reason: 'cue-nav' });
             window._playRegionLocked = Date.now() + 500;
@@ -9760,16 +9860,88 @@
             _paintIntent();
             flashRow(region.id);
         }
+        // Manual Stop. Everything that could still move the transport is
+        // cancelled BEFORE the command goes out, so a callback that was already
+        // eligible cannot win the race against it.
         function smartStop() {
+            RSDiag.log('USER_STOP', {
+                queued: queuedRegion ? queuedRegion.id : '-',
+                pendingCue: window._pendingCuePos
+            });
+            beginManualTransportIntent('stop');
+
+            // 1. The queue is an instruction about what to play next. Stop
+            //    means there is no next until a human says so.
+            clearQueuedRegion('manual-stop');
+            // 2. A cue left pending by auto-stop fires on the first reply that
+            //    reports playState 0 — which is the reply confirming THIS stop.
+            window._pendingCuePos = null;
+            // 3. The pre-roll display clamp describes a play that is no longer
+            //    happening.
+            window._playIntent = null;
+            // 4. Timers armed by region-end / marker / delay logic.
+            cancelPendingAutomaticTransport('manual-stop');
+            // 5. Edge-detector state from the region we were leaving, so
+            //    nothing re-fires off the position REAPER reports next.
+            window._lastRegionEndTrigger     = null;
+            window._endOfRegionLocked        = 0;
+            window._lastSpecialTriggerPos    = undefined;
+            window._lastTransitionTriggerPos = undefined;
+            window._lastPauseTriggerPos      = undefined;
+
             var activeIdx = -1;
-            for (var i = 0; i < displayList.length; i++) { var r = displayList[i]; if (currentPos >= r.start && currentPos < r.end) { activeIdx = i; break; } }
-            var target = null;
-            if (activeIdx !== -1) target = displayList[activeIdx].start;
-            else if (displayList.length > 0) target = displayList[0].start;
-            wwr_req(1016, "user-stop"); if (target !== null) setTimeout(function () { wwr_req("SET/POS/" + target, "stop-rewind"); }, 150);
+            for (var i = 0; i < displayList.length; i++) {
+                var r = displayList[i];
+                if (currentPos >= r.start && currentPos < r.end) { activeIdx = i; break; }
+            }
+            // No displayList[0] fallback. It was the same race that made Play
+            // start song 1: when the cursor has not resolved to a region, "song
+            // 1" is a guess, and rewinding a show to its first song is not a
+            // guess worth making. With no active region, Stop just stops.
+            var target = (activeIdx !== -1) ? displayList[activeIdx] : null;
+
+            wwr_req(1016, "user-stop");
+
+            if (target) {
+                // Stop rewinds to the start of the song that was playing. That
+                // cursor move is now VISIBLE as the cued song, instead of being
+                // a hidden reposition the selection disagreed with.
+                //
+                // It also waits for TRANSPORT to confirm playState 0 rather
+                // than for a 150ms setTimeout. The old timer could not be
+                // cancelled and could not know whether REAPER had actually
+                // stopped — Main_OnCommand stops on the next audio block, so a
+                // SET/POS landing in that gap seeks a transport that is still
+                // rolling.
+                selectedRegion = { id: target.id, start: target.start, end: target.end, at: Date.now() };
+                window._pendingCuePos = target.start;
+                _paintIntent();
+                RSDiag.log('STOP_REWIND', { song: target.id, start: _fmtPos(target.start) });
+            }
+        }
+
+        // Manual Pause. Pause means "stay exactly here", so the one thing that
+        // must not survive it is a pending cue: it fires on the first reply
+        // reporting playState 0, which is the reply confirming this very pause,
+        // and would jump the cursor off the paused position as it lands.
+        //
+        // The queue IS kept. Playback will resume into the same song, so "what
+        // comes next" is still true. The cued song is kept too — #4 requires
+        // Pause to leave an explicit selection alone.
+        function pauseTransport() {
+            RSDiag.log('USER_PAUSE', { queued: queuedRegion ? queuedRegion.id : '-' });
+            beginManualTransportIntent('pause');
+            window._pendingCuePos = null;
+            cancelPendingAutomaticTransport('manual-pause');
+            wwr_req(1008, "user-pause");
         }
         function togglePlay() {
-            if (isPlaying) { wwr_req(1008, "user-pause"); return; }
+            if (isPlaying) { pauseTransport(); return; }
+
+            // An explicit Play outranks whatever the last manual command armed:
+            // Stop followed 200ms later by Play must start, not be swallowed by
+            // the guard its own predecessor set.
+            clearManualTransportGuard('user-play');
 
             var target = resolvePlayTarget();
             RSDiag.log('USER_PLAY', {
@@ -11119,8 +11291,12 @@
 
         // ── Action dispatcher ──────────────────────────────────────
         var MIDI_ACTIONS = {
-            'play':         function() { wwr_req(1007, "midi-play"); },
-            'stop':         function() { wwr_req(1016, "midi-stop"); },
+            // Routed through the same functions as every other transport
+            // control. A pedal that bypassed the guards would be the one
+            // control on stage that could still be overridden by a stale
+            // callback — and it is the one whose user has both hands busy.
+            'play':         function() { if (!isPlaying) togglePlay(); },
+            'stop':         function() { smartStop(); },
             'play_pause':   function() { togglePlay(); },
             'next_song':    function() { midiNextSong(); },
             'prev_song':    function() { midiPrevSong(); },
