@@ -570,3 +570,53 @@ those keys and nothing else.
 > directly regardless of what ReaSet allows. This is an operational safety
 > boundary that stops a musician from editing the show by accident, and it is
 > not intended to resist an attacker.
+
+---
+
+## 12. Findings carried over from the first plan revision
+
+An earlier revision of this document (commit `4cb382e`, kept in history) audited
+the same code independently. Its conclusions agree with §1–§5 above almost
+everywhere. Four points it raised are recorded here with what was done about
+each, so nothing from that pass is lost when the two documents merged.
+
+### Acted on
+
+**Followers could not compute block boundaries.** The shared payload carried
+only `chain`, `skipped` and `loop`. But `getSongEnd()` also reads
+`g_songOverrides` — `stopAfter` / `delayAfter`, which live in **this browser's**
+localStorage — and `effectiveSongEnd()` resolves `'auto'` against **this
+device's** Auto-Stop toggle. A Player therefore had no way to know a song was
+marked "always stop" on the Director, and would draw a completely different set
+of blocks from the same setlist. Fixed by adding `end` (the resolved end-state)
+per song and `autoStop` (the global) to the payload, and by having
+`getSongEnd()` prefer a synchronised end-state on a follower.
+
+**Chunked pushes could be assembled across generations.** The chunk bodies,
+the count and the revision are separate HTTP requests. `Reaset.lua` retries
+while any chunk is empty, which covers a *late* chunk — but not a *stale*
+one: a shorter push leaves the previous generation's later chunks in place
+with non-empty values, and a dropped request in the middle of a longer push
+leaves one old chunk between two new ones. Base64 concatenated across two
+generations decodes to garbage and fails at `JSON.parse` on every follower,
+with no signal about why. Fixed by publishing the total payload length
+alongside the count and having `Reaset.lua` refuse to write a file whose
+reassembled length does not match.
+
+### Considered and not done
+
+**Lease arbitration in `Reaset.lua`.** That revision proposed moving
+owner/epoch/TTL into Lua. #6 says explicitly not to add that complexity unless
+a reproducible browser-only race requires it. The claim/settle/check protocol
+in §3 resolves simultaneous acquisition through ExtState's own
+last-writer-wins, and the id tiebreak bounds the residual window to a couple of
+seconds rather than leaving it open. If real-device testing (S11) produces a
+dual-Director state that persists, the Lua arbiter is the next step and this is
+the note that says so.
+
+**Two tabs in one browser share an `instanceId`,** so they are invisible to
+each other's conflict detection. Real, and out of scope: `instanceId` is
+persisted precisely so a Director that refreshes is still recognised as the
+same Director, and the stage scenario is two devices, not two tabs. Noted here
+because it makes two tabs a *bad way to test* #6 — see the test matrix, which
+requires physical devices for exactly this reason.
