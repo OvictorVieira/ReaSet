@@ -8664,6 +8664,18 @@
             return song.chain ? 'continue' : 'auto';
         }
 
+        // The end-state that will ACTUALLY apply, with 'auto' resolved against
+        // the global Auto-Stop toggle. songEndVisual() already did exactly this
+        // resolution to pick an icon; the transport needs the same answer as a
+        // value, and the visual block grouping needs it again. One helper,
+        // three consumers, no chance of the three drifting apart.
+        function effectiveSongEnd(song) {
+            var st = getSongEnd(song);
+            if (st !== 'auto') return st;
+            var el = document.getElementById('autoStopToggle');
+            return (!el || el.checked) ? 'stop' : 'continue';
+        }
+
         function setSongEnd(id, state, seconds) {
             var song = null;
             for (var i = 0; i < displayList.length; i++) if (displayList[i].id == id) { song = displayList[i]; break; }
@@ -9241,7 +9253,21 @@
                     // Repeat from firing a conflicting jump before Lua cleanup runs.
                     _reaperNativeLoopOff();
                     if (activeRegion.loop) { wwr_req("SET/POS/" + activeRegion.start, "song-loop"); return; }
-                    if (queuedRegion) {
+
+                    // PRECEDENCE AT A BOUNDARY (#9).
+                    //
+                    // The queued song used to be checked first and therefore
+                    // beat everything, including a song explicitly marked
+                    // "always stop here". That inverts the block workflow this
+                    // tool exists for: inside a block songs run on, and the last
+                    // song of a block stops so a human decides when the next one
+                    // begins. Queueing during a block must not silently turn its
+                    // final stop into a continuation.
+                    //
+                    // So: the end-state decides WHETHER playback continues, and
+                    // only then does the queue decide WHERE it continues to.
+                    var _endState = effectiveSongEnd(activeRegion);
+                    if (queuedRegion && _endState === 'continue') {
                         wwr_req("SET/POS/" + queuedRegion.start, "queued-at-region-end");
                         clearQueuedRegion('consumed-at-region-end');
                         return;
@@ -9250,7 +9276,10 @@
                     var _rov = getOverride(activeRegion.id);
                     if (_rov.stopAfter) {
                         window._endOfRegionLocked = Date.now() + 400;
-                        var _nrs = findNextValidSong(activeIdx);
+                        // A queued song outranks setlist order for WHERE to cue,
+                        // even though it did not outrank the stop itself.
+                        var _nrs = promoteQueuedToSelected('block-stop-boundary') ||
+                                   findNextValidSong(activeIdx);
                         wwr_req(1016, "song-stop-after");
                         // Same reason as the auto-stop branch: the reposition waits
                         // for the transport to confirm it stopped.
@@ -9258,7 +9287,10 @@
                         return;
                     }
                     if (_rov.delayAfter > 0) {
-                        var _nrd = findNextValidSong(activeIdx);
+                        // 'wait' delays continuation, it does not block it, so an
+                        // explicit queued song is still the target to resume into.
+                        var _nrd = (queuedRegion || findNextValidSong(activeIdx));
+                        if (_nrd === queuedRegion) clearQueuedRegion('consumed-at-wait-boundary');
                         if (_nrd) {
                             window._endOfRegionLocked = Date.now() + 400; // lock before async — same guard as autoStop/shouldPlayNext
                             wwr_req(1016, "song-delay-after");
@@ -9290,7 +9322,10 @@
                         // and kill the new song's playback.
                         if (window._playRegionLocked && Date.now() < window._playRegionLocked) { return; }
                         window._endOfRegionLocked = Date.now() + 400;
-                        var nextR2 = findNextValidSong(activeIdx);
+                        // Same rule as the stopAfter branch: the stop stands,
+                        // and the queued song becomes what the next Play starts.
+                        var nextR2 = promoteQueuedToSelected('auto-stop-boundary') ||
+                                     findNextValidSong(activeIdx);
                         // ARM, DON'T DETECT.
                         //
                         // Detecting the end here and sending a STOP can never be
@@ -9586,6 +9621,20 @@
             _paintIntent();
         }
 
+        // At a boundary that stops, an explicit queued song is not discarded —
+        // it becomes the cued song. The performer chose it; the block simply
+        // ended before it could play. Transport stays stopped, the row stays
+        // lit, and the next Play starts exactly what they picked.
+        function promoteQueuedToSelected(reason) {
+            if (!queuedRegion) return null;
+            var q = queuedRegion;
+            selectedRegion = { id: q.id, start: q.start, end: q.end, at: Date.now() };
+            queuedRegion = null;
+            RSDiag.log('QUEUE_PROMOTE', { song: q.id, reason: reason || '?' });
+            _paintIntent();
+            return q;
+        }
+
         function clearQueuedRegion(reason) {
             if (!queuedRegion) return;
             RSDiag.log('QUEUE_CLEAR', { song: queuedRegion.id, reason: reason || '?' });
@@ -9650,16 +9699,44 @@
                 return;
             }
 
-            var queueMode = document.getElementById('queueModeToggle').checked;
-            if (!queueMode) {
-                // PLAYING with Queue Mode off still seeks immediately. That is
-                // the behaviour #9 replaces; it is left exactly as it was here
-                // so this commit changes one thing only.
+            // PLAYING: a tap is a choice about what comes NEXT. It must never
+            // interrupt what is sounding right now.
+            //
+            // Legacy click-to-seek is not deleted, it is moved out of the
+            // show. The old default was the dangerous one: Queue Mode ships
+            // unchecked, so on a fresh device a tap during a song seeked the
+            // running transport — a hidden default that can only ever be
+            // discovered mid-show. Now the show-facing path always queues, and
+            // the immediate jump survives where it is actually wanted: EDIT
+            // mode, where a Director is auditioning material rather than
+            // performing, and where Queue Mode still governs.
+            //
+            // EDIT mode is deliberately never persisted (see REASET_EDITING),
+            // so every reload lands in the safe behaviour by construction.
+            var legacySeek = REASET_EDITING &&
+                             !document.getElementById('queueModeToggle').checked;
+            if (legacySeek) {
                 window._playRegionLocked = Date.now() + 500;
                 window._pendingCuePos    = null;
                 window._playIntent       = { id: id, start: region.start };
+                RSDiag.log('USER_SEEK', { song: region.id, reason: 'edit-mode-immediate-jump' });
                 seekManualTransport(midiInitPreroll(region.start), true);
                 clearQueuedRegion('replaced-by-immediate-seek');
+                return;
+            }
+
+            // Tapping the song that is already playing is not a request to
+            // restart it — on stage that is never what a thumb landing on the
+            // active row means. It clears the queue instead, which is the one
+            // reading that is both useful and impossible to regret.
+            if (queuedRegion && queuedRegion.id == region.id) {
+                clearQueuedRegion('re-tapped-queued-song');
+                return;
+            }
+            if (currentPos >= region.start && currentPos < region.end) {
+                RSDiag.log('TAP_ACTIVE', { song: region.id, reason: 'no-restart-by-design' });
+                clearQueuedRegion('tapped-active-song');
+                flashRow(region.id);
                 return;
             }
 
@@ -11667,7 +11744,7 @@
         // strings and run through t(), so they follow the language switch.
         var HELP = {
             scroll:       ["Auto-Scroll", "Auto-Scroll keeps the active song visible."],
-            queue:        ["Queue Mode", "Queue ON = seamless transition.\nQueue OFF = immediate jump."],
+            queue:        ["Queue Mode", "During a show a song tap always queues — the current song is never interrupted.\nThis switch only applies in EDIT mode: turn it off there to jump immediately while auditioning."],
             smoothseek:   ["Smooth Seek", "Smooth Seek ON lets REAPER apply its own smooth-seek preference while playing.\nOFF forces immediate jumps for manual song/section and MIDI navigation.\nSaved per project."],
             stop:         ["Auto-Stop", "Auto-Stop ON = stops at the end of the region.\n(Use Chain to override per song)."],
             hide:         ["Hide Skips", "Hide Skips = removes inactive songs from the view."],
