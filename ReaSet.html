@@ -496,26 +496,34 @@
             pointer-events: none;
         }
 
+        /* Same family as the ＋, SHOW and ⋯ controls it sits beside: identical
+           pill radius, surface, border and hover. Those set the house style
+           for this row, so the picker follows them rather than inventing a
+           shape of its own. */
         .n-select-btn {
             width: 100%;
+            height: 34px;
             display: flex;
             align-items: center;
             gap: 8px;
-            background: rgba(0, 0, 0, 0.4);
+            background: rgba(255, 255, 255, 0.07);
             color: var(--text-primary);
-            border: 1px solid rgba(255, 255, 255, 0.14);
-            border-radius: var(--radius-sm);
-            padding: 8px 12px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: var(--radius-pill);
+            padding: 0 14px;
             font-size: 13px;
             font-weight: 600;
             font-family: var(--font-ui);
             outline: none;
             cursor: pointer;
             text-align: left;
-            transition: border-color 0.18s;
+            transition: all 0.18s;
         }
 
-        .n-select-btn:hover { border-color: rgba(255, 255, 255, 0.26); }
+        .n-select-btn:hover {
+            background: var(--bg-elevated);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
 
         .n-select-btn .sp-label {
             flex: 1;
@@ -1156,6 +1164,19 @@
         .song-chevron.open {
             transform: rotate(90deg);
             color: rgba(255, 255, 255, 0.66);
+        }
+
+        /* The dot on the playing row pulses, using the same `blink` the LIVE
+           indicator has always used — one house animation for "this is
+           happening now", not a second one that reads almost the same.
+
+           It wins over .song-chevron.open on specificity — (0,2,1) against
+           (0,2,0) — so the colour holds while the row is expanded regardless of
+           where either rule sits in the file. It animates opacity only, so it
+           cannot fight that rule's rotation either. */
+        .song-row.active .song-chevron {
+            color: var(--color-brand);
+            animation: blink 1.2s infinite ease-in-out;
         }
 
         /* Title */
