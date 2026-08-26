@@ -7905,8 +7905,14 @@
                 (REASET_MODE === 'controller') ? t('CONTROLLER') : t('PLAYER');
             // Edit mode is structural authoring, so it cannot survive a
             // downgrade — a device that was mid-edit when it lost the lease
-            // must not keep drag handles live.
-            if (!canEditSetlist() && REASET_EDITING) toggleEditMode();
+            // must not keep drag handles live. Forced directly rather than
+            // through toggleEditMode(), which now refuses to run for a role
+            // that cannot edit and would therefore refuse to turn it OFF too.
+            if (!canEditSetlist() && REASET_EDITING) {
+                REASET_EDITING = false;
+                document.body.classList.remove('reaset-editing');
+                _refreshEditModeBtn();
+            }
             // A Controller follows the Director's structural state exactly as a
             // Player does; the difference between them is transport, not sync.
             if (REASET_MODE !== 'director') { _syncStartPlayerPolling(); _dcStopHeartbeat(); }
