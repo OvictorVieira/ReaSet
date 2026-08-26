@@ -264,6 +264,7 @@ local function bridge_new(track_name, ext_name, status_key, context)
         prev_pos   = nil,
         next_pos   = nil,
         status     = nil,
+        miss_tick  = nil,         -- when the last fruitless scan ran
     }
 end
 
@@ -439,13 +440,32 @@ local function bridge_tick(b, cur_pos, tick)
     -- A latched pointer stays valid after the user renames the track, so
     -- without this a rename never takes effect and the script keeps reading
     -- the wrong (or a now-misnamed) track until REAPER restarts.
-    local needs_scan = not reaper.ValidatePtr(b.track, 'MediaTrack*')
-    if not needs_scan and (tick % RESCAN_TICKS == 0) then
-        local _, cur_name = reaper.GetTrackName(b.track)
-        if normalize_track_name(cur_name) ~= b.track_name then
-            needs_scan = true               -- renamed away from the keyword
-        elseif reaper.GetTrackNumMediaItems(b.track) == 0 then
-            needs_scan = true               -- empty: a better candidate may exist now
+    local needs_scan
+    if not reaper.ValidatePtr(b.track, 'MediaTrack*') then
+        -- NOTHING LATCHED. Back off instead of retrying every tick.
+        --
+        -- bridge_find_track walks every track in the project. With no lyrics
+        -- or chords track this branch ran on every defer tick, for both
+        -- bridges — roughly 120 full project walks a second, forever, looking
+        -- for something that is not there. And a project with no lyrics and no
+        -- chords is the NORMAL case, not a fault: the panels are optional and
+        -- most shows never use them, so the default configuration paid the
+        -- highest price. It is a large part of why REAPER felt heavy with
+        -- ReaSet open.
+        --
+        -- Retried on the same cadence used to re-validate a track we DO have,
+        -- so a track created mid-session is still picked up within ~2 s.
+        needs_scan = (b.miss_tick == nil) or ((tick - b.miss_tick) >= RESCAN_TICKS)
+        if needs_scan then b.miss_tick = tick end
+    else
+        needs_scan = false
+        if tick % RESCAN_TICKS == 0 then
+            local _, cur_name = reaper.GetTrackName(b.track)
+            if normalize_track_name(cur_name) ~= b.track_name then
+                needs_scan = true           -- renamed away from the keyword
+            elseif reaper.GetTrackNumMediaItems(b.track) == 0 then
+                needs_scan = true           -- empty: a better candidate may exist now
+            end
         end
     end
 
@@ -457,6 +477,7 @@ local function bridge_tick(b, cur_pos, tick)
             bridge_publish_status(b, "!NOTRACK")
             return
         end
+        b.miss_tick = nil                   -- found one: no backoff to carry
     end
     if not HAS_ULT then
         -- Track exists but item notes cannot be read without SWS.

@@ -5808,10 +5808,59 @@
         wwr_req_recur("TRANSPORT", 33);  // ~30fps — tighter timing for loop count accuracy
         wwr_req_recur("REGION", 1000);
         wwr_req_recur("MARKER", 1000);
-        // X-Raym exact approach: poll PROJEXTSTATE every 10ms batched
-        wwr_req_recur("GET/PROJEXTSTATE/XR_Lyrics/text;GET/PROJEXTSTATE/XR_Lyrics/prev;GET/PROJEXTSTATE/XR_Lyrics/next" +
-                      ";GET/PROJEXTSTATE/XR_Lyrics/prevPos;GET/PROJEXTSTATE/XR_Lyrics/nextPos", 10);
-        wwr_req_recur("GET/PROJEXTSTATE/XR_Chords/text;GET/PROJEXTSTATE/XR_Chords/prev;GET/PROJEXTSTATE/XR_Chords/next", 200);
+        // ── Lyrics / chords polling ─────────────────────────────────────────
+        //
+        // These used to be wwr_req_recur at 10ms and 200ms, unconditionally,
+        // for the life of the page. The 10ms one is ~100 requests a second, on
+        // the same HTTP connection every transport command has to cross —
+        // spent whether or not the project HAS a lyrics track. A project with
+        // no lyrics and no chords is the normal case, not a fault: both panels
+        // are optional, so the default configuration paid the most.
+        //
+        // They cannot simply be turned off later: wwr_req_recur has no
+        // unregister, which is why they are plain intervals now. The rate is
+        // tuned from the bridge status Reaset.lua publishes — full speed once a
+        // track is actually there, a slow heartbeat while there is nothing to
+        // read. The status itself arrives on the 2s diagnostic probe, which is
+        // independent of these, so a track created mid-session still speeds
+        // them up within a couple of seconds.
+        //
+        // Gated on the TRACK, deliberately not on whether a panel is open:
+        // Live View and Canvas read the same values, and a rule that has to
+        // enumerate every consumer is a rule that will be wrong later.
+        var LYRICS_KEYS = "GET/PROJEXTSTATE/XR_Lyrics/text;GET/PROJEXTSTATE/XR_Lyrics/prev" +
+                          ";GET/PROJEXTSTATE/XR_Lyrics/next;GET/PROJEXTSTATE/XR_Lyrics/prevPos" +
+                          ";GET/PROJEXTSTATE/XR_Lyrics/nextPos";
+        var CHORDS_KEYS = "GET/PROJEXTSTATE/XR_Chords/text;GET/PROJEXTSTATE/XR_Chords/prev" +
+                          ";GET/PROJEXTSTATE/XR_Chords/next";
+        var BRIDGE_RATE_LIVE = { lyrics: 10, chords: 200 };
+        var BRIDGE_RATE_IDLE = 1000;
+
+        var _bridgePoll = { lyrics: { timer: null, rate: 0 }, chords: { timer: null, rate: 0 } };
+
+        function _tuneBridgePoll(which, keys, hasTrack) {
+            var st   = _bridgePoll[which];
+            var want = hasTrack ? BRIDGE_RATE_LIVE[which] : BRIDGE_RATE_IDLE;
+            if (want === st.rate) return;
+            st.rate = want;
+            if (st.timer) clearInterval(st.timer);
+            st.timer = setInterval(function () { wwr_req(keys); }, want);
+        }
+
+        // A status of null (no reply yet) or "!NOTRACK" means there is nothing
+        // to read. "!NOSWS" means the track exists but its notes cannot be
+        // read, which is equally nothing to poll for at full speed.
+        function _bridgeHasTrack(status) {
+            return !!status && status !== '!NOTRACK' && status !== '!NOSWS';
+        }
+
+        function refreshBridgePolling() {
+            _tuneBridgePoll('lyrics', LYRICS_KEYS, _bridgeHasTrack(xr_lyrics_track));
+            _tuneBridgePoll('chords', CHORDS_KEYS, _bridgeHasTrack(xr_chords_track));
+        }
+
+        // Start idle. The first probe reply decides whether to speed up.
+        refreshBridgePolling();
         // Auto-detect Reaset.lua + read the lyrics/chords bridge diagnostics.
         // One-shot probe so the empty-state message is accurate immediately,
         // then a light refresh (these are tiny replies).
@@ -8424,9 +8473,11 @@
                         // REAPER track name. Consumed by _bridgeStatus() below.
                         if (tok[1] === "ReaSet" && tok[2] === "lyricsTrack") {
                             xr_lyrics_track = tok.slice(3).join('\t');
+                            refreshBridgePolling();
                         }
                         if (tok[1] === "ReaSet" && tok[2] === "chordsTrack") {
                             xr_chords_track = tok.slice(3).join('\t');
+                            refreshBridgePolling();
                         }
                         // How many tracks matched the keyword (>1 = ambiguous project).
                         if (tok[1] === "ReaSet" && tok[2] === "lyricsTrackMatches") {

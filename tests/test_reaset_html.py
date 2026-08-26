@@ -400,6 +400,50 @@ def test_save_current_state_skips_unchanged_state(script_body: str) -> None:
     )
 
 
+BRIDGE_TRACK_CASES = [
+    (None, False, "no reply yet"),
+    ("", False, "Reaset.lua is not running"),
+    ("!NOTRACK", False, "no track matches the keyword"),
+    ("!NOSWS", False, "track exists but its notes cannot be read"),
+    ("lyrics", True, "a real track name"),
+]
+
+
+@requires_node
+@pytest.mark.parametrize(
+    "status,expected,why", BRIDGE_TRACK_CASES, ids=[c[2] for c in BRIDGE_TRACK_CASES]
+)
+def test_bridge_poll_rate_gate(script_body, status, expected, why):
+    """Only a real track earns the fast lyrics/chords poll.
+
+    The lyrics keys were polled every 10ms unconditionally for the life of the
+    page — ~100 requests a second on the same connection every transport
+    command crosses, spent whether or not the project has a lyrics track. A
+    project with neither track is the normal case, so the default
+    configuration paid the most.
+    """
+    harness = (
+        extract_function(script_body, "_bridgeHasTrack")
+        + "\nconsole.log(_bridgeHasTrack(%s));" % json.dumps(status)
+    )
+    assert run_node(harness).strip() == ("true" if expected else "false"), why
+
+
+def test_lyrics_polling_is_cancellable(script_body: str) -> None:
+    """The lyrics/chords polls must not go back to wwr_req_recur.
+
+    wwr_req_recur has no unregister, so anything started with it runs at that
+    rate until the page is closed — which is exactly why the rate could never
+    be tuned before. Plain intervals are what make the gate above possible.
+    """
+    recurs = re.findall(r"wwr_req_recur\(([^,]{0,120})", script_body)
+    for arg in recurs:
+        assert "XR_Lyrics" not in arg and "XR_Chords" not in arg, (
+            "the lyrics/chords poll is registered with wwr_req_recur again — it "
+            "can never be slowed down or stopped after that"
+        )
+
+
 def test_modal_buttons_use_classes_that_exist(script_body: str) -> None:
     """showAppConfirm() REPLACES the OK button's className.
 
