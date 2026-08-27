@@ -397,8 +397,11 @@ loop button is stuck on".
 | **Y03** | On a Controller, press LOOP. | Nothing happens, and nothing pretends to. It must not look stuck. | | |
 | **Y04** | On a Controller, hover or long-press LOOP. | "Only the Director can change the loop". | | |
 | **Y05** | Director turns loop off; watch the Controller. | Its LOOP goes out within a poll. | | |
-| **Y06** | A song with **no sections**, loop on. Look at its row. | The whole row carries the loop wash — visible from a couple of metres. There is no bracket, because there is nothing to bracket. | | |
-| **Y07** | A song **with** a looping section, loop on for the song too. | Both: the wash across the row and the bracket at the section. | | |
+| **Y06** | A song with **no sections**, loop on. Look at its row. | A **bracket** end to end — `[` and `]` facing each other across the row. Not a tint: a tint only reads to someone who already knows what purple means. | | |
+| **Y07** | A song **with** a looping section, loop on for the song too. | Two brackets: one spanning the row, one at the section's own position. | | |
+| **Y11** | Expand a song whose section loops. | That **section's own row** is bracketed edge to edge. The song row says where; the section row says this is it. | | |
+| **Y12** | A song whose **first** section loops. And one whose **last** does. | The bracket arm keeps clear of the card's border — it does not draw on top of it. Intro and outro are the two that land on the edge. | | |
+| **Y13** | A song with **one** section, and it loops. | Both ends clear at once. | | |
 | **Y08** | Set the language to Português and repeat Y04. | "Só o Diretor pode mudar o loop". | | |
 
 ### The role modal
