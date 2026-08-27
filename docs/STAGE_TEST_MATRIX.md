@@ -404,6 +404,30 @@ loop button is stuck on".
 | **Y13** | A song with **one** section, and it loops. | Both ends clear at once. | | |
 | **Y08** | Set the language to Português and repeat Y04. | "Só o Diretor pode mudar o loop". | | |
 
+### Colouring songs and blocks
+
+The Director picks a colour; it is written to the **region in REAPER**, and
+every device gets it from its own REGION poll. Nothing is stored per device,
+so nothing can disagree.
+
+**This needs the new `Reaset.lua` on the REAPER machine, with the script
+restarted.** Without that the colour silently does nothing — the browser
+writes an ExtState key that nobody is listening for. If Z01 does nothing at
+all, check that before anything else.
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **Z01** | As Director, open a song's menu, turn colour on, pick a swatch. | The row takes the colour **and so does the region in REAPER's timeline**. | | |
+| **Z02** | Look at a phone that is watching the same setlist. | Within about a second, the same colour. Nobody had to import anything. | | |
+| **Z03** | Save the REAPER project, close it, reopen. | The colour is still there. It belongs to the project now, not to a browser. | | |
+| **Z04** | Tick **Apply to the whole block**, then pick a colour. | Every song in that block takes it — including the ones above the one you opened. | | |
+| **Z05** | Do Z04 from the **middle** of a block. | Still the whole block, not just the tail. | | |
+| **Z06** | Press **Remove colour**. | The region goes back to REAPER's own default. Not black. | | |
+| **Z07** | On a **Controller**, open a song menu. | No colour picker, or it refuses. This is an edit, and edits are the Director's. | | |
+| **Z08** | Colour a song, then watch REAPER for a minute without touching anything. | The project does **not** keep marking itself dirty. The instruction is consumed once. | | |
+| **Z09** | A song that appears **twice** in the set, inside one block. Colour the block. | It is written once, and both rows show it. | | |
+| **Z10** | Colour a song, then change the region's colour in REAPER itself. | ReaSet follows REAPER. REAPER is the source. | | |
+
 ### The role modal
 
 | ID | Scenario | Expected | Result | Notes |
