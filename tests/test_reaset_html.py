@@ -1487,7 +1487,11 @@ def test_off_setlist_songs_never_reach_playback(script_body: str) -> None:
     # Only the picker may read it.
     readers = [m for m in re.findall(r"function\s+(\w+)[^{]*\{", body)
                if "g_offSetlist" in _fn_body(body, m)]
-    allowed = {"syncRegions", "openAddSongPicker", "addSongToSetlist", "removeFromSetlist"}
+    # renderAddSongList is the picker's list builder, split out of
+    # openAddSongPicker so the search field can re-list without reopening the
+    # overlay. Still the picker; still nothing that plays anything.
+    allowed = {"syncRegions", "openAddSongPicker", "renderAddSongList",
+               "addSongToSetlist", "removeFromSetlist"}
     assert set(readers) <= allowed, (
         f"g_offSetlist is read outside the picker and its two actions: "
         f"{sorted(set(readers) - allowed)}"
@@ -3853,6 +3857,97 @@ def test_the_live_view_keeps_its_geometry_in_the_stylesheet() -> None:
             f"so the phone rule for it never applies — @media adds no "
             f"specificity"
         )
+
+
+# ── EDIT-mode search ────────────────────────────────────────────────────────
+
+
+def test_the_search_filters_the_view_and_never_the_setlist(script_body: str) -> None:
+    """A view filter, and that word is the whole risk.
+
+    Sortable rebuilds the order from THE ROWS ON SCREEN. With a search active
+    those are only the matches, so one drag would write the matches back as
+    the setlist and silently delete every song that did not match. The handle
+    is hidden while filtering, but a hidden handle is a CSS fact, not a
+    guarantee — the handler has to refuse too.
+
+    And the filter may not touch what plays: the totals, the order and
+    displayList itself all describe the SET, not the query.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    body = strip_comments(script_body)
+
+    render = strip_comments(extract_function(body, "renderSetlist"))
+    assert render.count("_matchesEditFilter(r)") == 2, (
+        "both views have to honour the search, or switching to grid quietly "
+        f"shows the songs the list is hiding (found "
+        f"{render.count('_matchesEditFilter(r)')})"
+    )
+    # The totals are accumulated BEFORE the filter skips a row, exactly like
+    # the skip filter above it — a search that changed the song count would be
+    # reporting the query rather than the show.
+    for m in re.finditer(r"_matchesEditFilter\(r\)\)\s*continue;", render):
+        before = render[:m.start()]
+        assert before.rindex("activeCount++") > before.rindex("for (var i = 0"), (
+            "a row is filtered out before it is counted, so searching changes "
+            "the number of songs in the set"
+        )
+
+    # Nothing in the filter path may write the set.
+    for fn in ("setEditFilter", "clearEditFilter", "_matchesEditFilter"):
+        src = strip_comments(extract_function(body, fn))
+        for forbidden in ("displayList =", "displayList.splice", "displayList.push",
+                          "setlists[", "saveCurrentState"):
+            assert forbidden not in src, (
+                f"{fn}() writes the setlist ({forbidden}) — the search is "
+                f"supposed to change what is DRAWN and nothing else"
+            )
+
+    # The drag guard, both halves.
+    css = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
+    hide = [m.start() for m in re.finditer(
+        r"(?m)^ {8}body\.reaset-filtering \.song-row \.drag-handle\s*\{([^}]*)\}", css)]
+    assert hide, "the drag handle is live while the list is filtered"
+    shown = [m.start() for m in re.finditer(
+        r"(?m)^ {8}body\.reaset-editing \.song-row \.drag-handle,", css)]
+    assert shown and hide[0] > shown[0], (
+        "the filtering rule sits ABOVE the edit-mode rule that reveals the "
+        "handle — same specificity, so the later one wins and it says nothing"
+    )
+
+    # The handler's own refusal. Not the CSS: this is the one that stops a set
+    # being rewritten as its own search results.
+    end = body[body.index("onEnd: function (evt)"):body.index("onEnd: function (evt)") + 2000]
+    guard = re.search(r"if \(g_editFilter\)\s*\{(.*?)\}", end, re.S)
+    assert guard, (
+        "a reorder is not refused while a search is active — Sortable would "
+        "rebuild the setlist from the visible rows and drop the rest"
+    )
+    assert "return;" in guard.group(1), "the reorder guard does not actually stop"
+    assert end.index("if (g_editFilter)") < end.index("setlists[currentSetlistName] ="), (
+        "the guard runs after the setlist has already been overwritten"
+    )
+
+    # Leaving edit mode has to drop it: a filter that outlived the mode would
+    # hide songs from a show with no visible control left to explain why.
+    for fn in ("_exitEditMode", "enterEditMode"):
+        assert "clearEditFilter()" in strip_comments(extract_function(body, fn)), (
+            f"{fn}() leaves the search applied"
+        )
+
+    # Accent-folding without normalize(): that is ES6, and this has to run on
+    # Safari 9.
+    fold = strip_comments(extract_function(body, "_foldForSearch"))
+    assert "normalize(" not in fold, (
+        "the search folds accents with String.prototype.normalize, which the "
+        "iPad this targets does not have — every accented title stops matching"
+    )
+    assert "toLowerCase()" in fold, "the search is case-sensitive"
+    tables = re.findall(r"var _FOLD_(?:FROM|TO)\s*=\s*'([^']*)'", html)
+    assert len(tables) == 2 and len(tables[0]) == len(tables[1]), (
+        f"the fold tables are not the same length ({[len(x) for x in tables]}), "
+        f"so some letters fold to the wrong character"
+    )
 
 
 # ── Row chrome ──────────────────────────────────────────────────────────────

@@ -2797,6 +2797,82 @@
         }
         .song-row .song-remove-btn:hover { background: rgba(252, 60, 68, 0.28); }
 
+        /* ── EDIT-mode search ───────────────────────────────────────────
+           A long set is a long scroll, and the two things edit mode is FOR —
+           adding a song and taking one out — both start with finding it.
+           Hidden outside edit mode: it filters what is on screen, and a
+           filtered list during a show is a list that is lying about the show.
+        */
+        .setlist-search {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            margin: 0 0 10px;
+            padding: 0 12px;
+            height: 42px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: var(--radius-pill);
+        }
+        body.reaset-editing .setlist-search { display: flex; }
+        /* The picker's copy is always shown: the picker itself only opens in
+           edit mode, so gating it on the body class would only make it
+           disappear when the overlay repaints. */
+        .add-song-card .asp-search { display: flex; margin: 0 14px 10px; }
+        html.no-flexgap .setlist-search > * + * { margin-left: 8px; }
+
+        .setlist-search:focus-within {
+            border-color: rgba(255, 255, 255, 0.30);
+            background: rgba(255, 255, 255, 0.09);
+        }
+        .ss-ico {
+            display: flex;
+            align-items: center;
+            flex: 0 0 auto;
+            color: rgba(255, 255, 255, 0.38);
+        }
+        .ss-ico svg { display: block; width: 16px; height: 16px; }
+        .ss-input {
+            flex: 1 1 auto;
+            min-width: 0;
+            background: none;
+            border: none;
+            outline: none;
+            color: var(--text-primary);
+            font-family: var(--font-ui);
+            font-size: 15px;
+            font-weight: 600;
+            /* 16px or more, or iOS zooms the whole page in on focus and the
+               setlist you were filtering is off the side of the screen. The
+               weight buys the legibility the size gives up. */
+        }
+        .ss-input::-webkit-input-placeholder { color: rgba(255, 255, 255, 0.32); font-weight: 500; }
+        .ss-input::placeholder { color: rgba(255, 255, 255, 0.32); font-weight: 500; }
+
+        /* Only there when there is something to clear: a permanent ✕ beside an
+           empty field is a control that does nothing. */
+        .ss-clear {
+            display: none;
+            flex: 0 0 auto;
+            width: 26px; height: 26px;
+            align-items: center; justify-content: center;
+            border: none; border-radius: 50%;
+            background: rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 12px; line-height: 1; cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body.reaset-filtering .ss-clear { display: flex; }
+        .ss-clear:hover { background: rgba(255, 255, 255, 0.22); color: #fff; }
+
+        .setlist-empty {
+            padding: 26px 14px;
+            text-align: center;
+            color: var(--text-subdued);
+            font-size: 14px;
+            font-weight: 600;
+        }
+
         /* The add-song row closes the list in edit mode. Full width because it
            is not a per-row control and must not read as one. */
         .add-song-row {
@@ -2861,6 +2937,16 @@
         body.reaset-editing .song-row .song-dotmenu-btn,
         body.reaset-editing .song-row .song-remove-btn,
         body.reaset-editing .section-row .sub-dotmenu-btn { display: flex; }
+
+        /* Reordering a FILTERED list would write the filtered order back as
+           the setlist — every row not matching the search silently dropped.
+           The handle goes away while a search is active, and onEnd refuses as
+           well, because a hidden handle is a CSS fact and not a guarantee.
+
+           BELOW the rule above, not above it: both are body-class + two
+           classes, so specificity is a tie and the later one wins. Written
+           first, this said nothing at all. */
+        body.reaset-filtering .song-row .drag-handle { display: none; }
 
         /* In edit mode the three live toggles step aside; their state moves
            into the ⋮ panel, where it is labelled rather than glyph-only. */
@@ -5357,6 +5443,21 @@
         </div>
 
         <div class="app-content">
+            <!-- EDIT-mode search. Present in the markup at all times and shown
+                 by body.reaset-editing, so it appears and disappears with the
+                 mode rather than being built and destroyed — an input that is
+                 recreated loses focus and the caret on every re-render, and
+                 this one sits above a list that re-renders on every REAPER
+                 tick. -->
+            <div class="setlist-search" id="setlistSearch">
+                <span class="ss-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><circle cx="10.5" cy="10.5" r="6.2" stroke="currentColor" stroke-width="2"/><path d="M15.2 15.2 20 20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+                <input type="text" id="setlistSearchInput" class="ss-input"
+                       placeholder="Search songs" aria-label="Search songs"
+                       autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+                       oninput="setEditFilter(this.value)" onkeydown="_editFilterKey(event)">
+                <button class="ss-clear" id="setlistSearchClear" onclick="clearEditFilter()"
+                        title="Clear search" aria-label="Clear search">&#10005;</button>
+            </div>
             <ul id="setlist" style="list-style: none; padding: 0; margin: 0; padding-bottom: 20px;"></ul>
         </div>
 
@@ -5799,6 +5900,16 @@
     <div id="add-song-overlay" onclick="if(event.target===this)closeAddSongPicker()">
         <div class="add-song-card">
             <div class="add-song-title">Add a song to this setlist</div>
+            <!-- The other half of the same problem: finding the song to ADD in
+                 a project with sixty regions is the same scroll as finding the
+                 one to remove. Same field, same folding, same behaviour. -->
+            <div class="setlist-search asp-search">
+                <span class="ss-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><circle cx="10.5" cy="10.5" r="6.2" stroke="currentColor" stroke-width="2"/><path d="M15.2 15.2 20 20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+                <input type="text" id="addSongSearchInput" class="ss-input"
+                       placeholder="Search songs" aria-label="Search songs"
+                       autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+                       oninput="renderAddSongList()">
+            </div>
             <div class="add-song-list" id="add-song-list"></div>
             <button class="m-btn m-btn-cancel" style="margin:4px 14px 16px" onclick="closeAddSongPicker()">Cancel</button>
         </div>
@@ -6878,6 +6989,12 @@
             ["Close", "Cerrar", "Fechar"],
             ["MIDI access denied: ", "Acceso MIDI denegado: ", "Acesso MIDI negado: "],
             ["Visible elements", "Elementos visibles", "Elementos visíveis"],
+            // EDIT-mode search.
+            ["Search songs", "Buscar canciones", "Buscar músicas"],
+            ["Clear search", "Borrar búsqueda", "Limpar busca"],
+            ["No song matches that search",
+             "Ninguna canción coincide con la búsqueda",
+             "Nenhuma música corresponde à busca"],
             // Live view → Visible elements. These were written straight into
             // LIVE_CFG_DEFS in Spanish and had no rows at all, so the panel
             // stayed Spanish whatever the language was set to.
@@ -9840,6 +9957,7 @@
             // that cannot edit and would therefore refuse to turn it OFF too.
             if (!canEditSetlist() && REASET_EDITING) {
                 REASET_EDITING = false;
+                clearEditFilter();
                 document.body.classList.remove('reaset-editing');
                 _refreshEditModeBtn();
             }
@@ -11195,6 +11313,68 @@
             if (row) row.classList.toggle("expanded", !!expandedSongs[uid]);
         }
 
+        // ── EDIT-mode search ────────────────────────────────────────────
+        //
+        // A view filter and nothing else: displayList is never touched, so the
+        // set, its order, and what REAPER is told to play are exactly what
+        // they were. Only which rows are DRAWN changes.
+        var g_editFilter = '';
+
+        // Accent-insensitive, because "Evidências" is typed "evidencias" by
+        // anyone in a hurry, which on stage is everyone.
+        //
+        // Not String.prototype.normalize: that is ES6, and the iPad this has
+        // to run on is Safari 9. A table of the letters Portuguese and Spanish
+        // actually use is smaller than the polyfill and cannot be tripped by a
+        // missing Unicode database.
+        var _FOLD_FROM = 'áàâãäåéèêëíìîïóòôõöúùûüçñýÿÁÀÂÃÄÅÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑÝ';
+        var _FOLD_TO   = 'aaaaaaeeeeiiiiooooouuuucnyyAAAAAAEEEEIIIIOOOOOUUUUCNY';
+        function _foldForSearch(str) {
+            var out = '';
+            var v = String(str == null ? '' : str);
+            for (var i = 0; i < v.length; i++) {
+                var idx = _FOLD_FROM.indexOf(v.charAt(i));
+                out += idx === -1 ? v.charAt(i) : _FOLD_TO.charAt(idx);
+            }
+            return out.toLowerCase();
+        }
+
+        function _matchesEditFilter(r) {
+            if (!g_editFilter) return true;
+            return _foldForSearch(r.displayName || r.name).indexOf(g_editFilter) !== -1;
+        }
+
+        function setEditFilter(value) {
+            var next = _foldForSearch(value).replace(/^\s+|\s+$/g, '');
+            if (next === g_editFilter) return;
+            g_editFilter = next;
+            // Not through the checksum: that describes the SET, and this
+            // describes the view. Rendered directly so a keystroke lands on
+            // the frame it was typed in rather than on the next REAPER tick.
+            document.body.classList.toggle('reaset-filtering', !!g_editFilter);
+            renderSetlist();
+        }
+
+        function clearEditFilter() {
+            var input = document.getElementById('setlistSearchInput');
+            if (input) input.value = '';
+            if (!g_editFilter) return;
+            g_editFilter = '';
+            document.body.classList.remove('reaset-filtering');
+            renderSetlist();
+        }
+
+        // Escape clears without leaving the field, which is what every other
+        // search box on the device does.
+        function _editFilterKey(e) {
+            if (!e) return;
+            var k = e.key || e.keyCode;
+            if (k === 'Escape' || k === 'Esc' || k === 27) {
+                e.preventDefault();
+                clearEditFilter();
+            }
+        }
+
         function renderSetlist() {
             var listEl = document.getElementById('setlist');
             var scrollPos = listEl.scrollTop;
@@ -11209,6 +11389,11 @@
                     // Feature 8: nosong items don't count toward song total
                     if (!r.skipped && !r.nosong) { totalDur += r.duration; activeCount++; }
                     if (_hideSkippedEffective() && r.skipped) continue;
+                    // After the totals, like the skip filter above it: the
+                    // count and the running time describe the SET, and a
+                    // search that changed them would be reporting the
+                    // query rather than the show.
+                    if (!_matchesEditFilter(r)) continue;
                     var li = document.createElement("li");
                     li.className = "song-row" + (r.skipped ? " skipped" : "");
                     li.id = "row-" + r.uid; li.setAttribute("data-id", r.id); li.setAttribute("data-uid", r.uid);
@@ -11250,6 +11435,11 @@
                     // Feature 8: nosong items don't count toward song total
                     if (!r.skipped && !r.nosong) { totalDur += r.duration; activeCount++; }
                     if (_hideSkippedEffective() && r.skipped) continue;
+                    // After the totals, like the skip filter above it: the
+                    // count and the running time describe the SET, and a
+                    // search that changed them would be reporting the
+                    // query rather than the show.
+                    if (!_matchesEditFilter(r)) continue;
 
                     var subs = g_subRegionMap[r.name] || [];
                     var hasSubs = subs.length > 0;
@@ -11424,6 +11614,16 @@
 
                     listEl.appendChild(li);
                 }
+            }
+
+            // A search that matches nothing renders an empty list, which is
+            // indistinguishable from an empty setlist — and the add-song row
+            // below it then reads as the only thing in the show.
+            if (g_editFilter && !listEl.firstChild) {
+                var none = document.createElement('li');
+                none.className = 'setlist-empty';
+                none.textContent = t('No song matches that search');
+                listEl.appendChild(none);
             }
 
             // Appended after the rows and OUTSIDE any .song-container, so
@@ -11647,6 +11847,7 @@
             if (!canEditSetlist()) { RSDiag.blocked('enterEditMode', 'role-cannot-edit-setlist'); return; }
             if (REASET_EDITING) return;
             REASET_EDITING = true;
+            clearEditFilter();
             document.body.classList.add('reaset-editing');
             _editTakeSnapshot();
             _refreshEditModeBtn();
@@ -11656,6 +11857,9 @@
 
         function _exitEditMode() {
             REASET_EDITING = false;
+            // A filter that outlived the mode would hide songs from a show
+            // with no visible control left to explain why.
+            clearEditFilter();
             document.body.classList.remove('reaset-editing');
             _editSnapshot = null;
             _refreshEditModeBtn();
@@ -11849,8 +12053,22 @@
         function openAddSongPicker() {
             if (!canEditSetlist()) { RSDiag.blocked('openAddSongPicker', 'role-cannot-edit-setlist'); return; }
             var ov = document.getElementById('add-song-overlay');
+            if (!ov) return;
+            // A search left over from the last time this was opened would hide
+            // most of the project with no obvious reason why.
+            var q = document.getElementById('addSongSearchInput');
+            if (q) q.value = '';
+            renderAddSongList();
+            ov.classList.add('open');
+        }
+
+        // Split out so typing in the field can re-list without reopening the
+        // overlay — and so the list is built in exactly one place.
+        function renderAddSongList() {
             var list = document.getElementById('add-song-list');
-            if (!ov || !list) return;
+            if (!list) return;
+            var qEl = document.getElementById('addSongSearchInput');
+            var q = qEl ? _foldForSearch(qEl.value).replace(/^\s+|\s+$/g, '') : '';
             list.innerHTML = '';
 
             var seen = {};
@@ -11861,10 +12079,23 @@
                 seen[displayList[j].id] = true;
                 rows.push({ r: displayList[j], again: true });
             }
+            var hadAny = rows.length > 0;
+            if (q) {
+                var kept = [];
+                for (var f = 0; f < rows.length; f++) {
+                    var fn = rows[f].r.displayName || rows[f].r.name;
+                    if (_foldForSearch(fn).indexOf(q) !== -1) kept.push(rows[f]);
+                }
+                rows = kept;
+            }
             if (!rows.length) {
                 var empty = document.createElement('div');
                 empty.className = 'add-song-empty';
-                empty.textContent = t('This project has no regions yet.');
+                // Two different nothings: a project with no regions is a setup
+                // problem, a search with no hits is a typo.
+                empty.textContent = hadAny
+                    ? t('No song matches that search')
+                    : t('This project has no regions yet.');
                 list.appendChild(empty);
             }
             for (var n = 0; n < rows.length; n++) {
@@ -11892,7 +12123,6 @@
                     list.appendChild(b);
                 })(rows[n]);
             }
-            ov.classList.add('open');
         }
         function closeAddSongPicker() {
             var ov = document.getElementById('add-song-overlay');
@@ -14981,6 +15211,16 @@
                 // hidden handle is a CSS fact, not a permission.
                 if (!canEditSetlist()) {
                     RSDiag.blocked('reorder', 'role-cannot-edit-setlist');
+                    lastRenderChecksum = ''; renderSetlist();
+                    return;
+                }
+                // The new order is rebuilt from the ROWS ON SCREEN. With a
+                // search active those are only the matches, so a drag would
+                // write the matches back as the whole setlist and delete
+                // everything that did not match. The handle is hidden while
+                // filtering; this is the part that is not a CSS fact.
+                if (g_editFilter) {
+                    RSDiag.blocked('reorder', 'search-filter-active');
                     lastRenderChecksum = ''; renderSetlist();
                     return;
                 }

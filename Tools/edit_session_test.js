@@ -311,6 +311,104 @@ const snap = () => ({
     check('Apply ends the session', applied.editing === false);
     check('Apply keeps the change', applied.skipped === true);
 
+    // ── 5b. The search ──────────────────────────────────────────────────────
+    //
+    // A view filter, and that word is the whole risk. displayList must not
+    // move, the totals must not move, and Sortable must not be allowed to
+    // rebuild the order from a list that is showing three of eleven rows —
+    // which would write those three back as the setlist and drop the rest.
+    console.log('\n5b. EDIT-mode search');
+    const search = await page.evaluate('(function(){' + `
+        REASET_MODE = 'director';
+        document.body.classList.remove('reaset-controller');
+        enterEditMode();
+        var input = document.getElementById('setlistSearchInput');
+        var names = function () {
+            return [].map.call(
+                document.querySelectorAll('#setlist .song-container .song-name'),
+                function (e) { return e.textContent.trim(); }).join(',');
+        };
+        var out = { hiddenOutside: null, shownInside: null };
+
+        out.shownInside = getComputedStyle(
+            document.getElementById('setlistSearch')).display !== 'none';
+        // Rendered first: tb-count is only rewritten by renderSetlist(), so
+        // reading it straight after enterEditMode() picks up whatever the last
+        // render left there — including a skip applied by an earlier section.
+        renderSetlist();
+        out.before = names();
+        out.orderBefore = displayList.map(function (r) { return r.uid; }).join(',');
+        out.countBefore = document.getElementById('tb-count').textContent;
+
+        setEditFilter('two');
+        out.filtered = names();
+        out.orderAfter = displayList.map(function (r) { return r.uid; }).join(',');
+        out.countAfter = document.getElementById('tb-count').textContent;
+        out.handlesShown = [].filter.call(
+            document.querySelectorAll('.song-row .drag-handle'),
+            function (e) { return getComputedStyle(e).display !== 'none'; }).length;
+        out.clearShown = getComputedStyle(
+            document.getElementById('setlistSearchClear')).display !== 'none';
+
+        setEditFilter('zzzz');
+        out.emptyMsg = (document.querySelector('#setlist .setlist-empty') || {}).textContent || '';
+
+        clearEditFilter();
+        out.cleared = names();
+        out.fieldCleared = input.value === '';
+
+        // A filter must not survive the mode that explains it.
+        setEditFilter('two');
+        applyEdits();
+        out.afterApply = names();
+        out.classAfterApply = document.body.classList.contains('reaset-filtering');
+        out.hiddenOutside = getComputedStyle(
+            document.getElementById('setlistSearch')).display === 'none';
+        return out;
+    ` + '})()');
+
+    check('the field is shown in edit mode', search.shownInside === true);
+    check('and hidden outside it', search.hiddenOutside === true);
+    check('it filters the rows', search.filtered === 'TWO', search.filtered);
+    check('it does NOT touch the setlist',
+          search.orderAfter === search.orderBefore,
+          `${search.orderBefore} -> ${search.orderAfter}`);
+    check('the song count still describes the set',
+          search.countAfter === search.countBefore,
+          `${search.countBefore} -> ${search.countAfter}`);
+    check('no drag handle is live while filtering', search.handlesShown === 0,
+          `${search.handlesShown} shown`);
+    check('the clear button appears with a query', search.clearShown === true);
+    check('a search with no hits says so', search.emptyMsg.length > 0, search.emptyMsg);
+    check('clearing restores every row', search.cleared === search.before,
+          `${search.cleared} vs ${search.before}`);
+    check('clearing empties the field', search.fieldCleared === true);
+    check('leaving edit mode drops the filter',
+          search.afterApply === search.before, search.afterApply);
+    check('and drops the body class', search.classAfterApply === false);
+
+    // The one that would lose songs. Sortable rebuilds the order from the rows
+    // on screen, so a drag while filtered has to be refused by the handler and
+    // not only by the hidden handle.
+    const reorder = await page.evaluate('(function(){' + `
+        enterEditMode();
+        setEditFilter('two');
+        var before = displayList.map(function (r) { return r.uid; }).join(',');
+        // The precondition for the data loss: the DOM Sortable would rebuild
+        // the order from is holding fewer rows than the set. The refusal
+        // itself lives in onEnd and is pinned by the pytest suite, which can
+        // read it without a drag.
+        var rows = document.querySelectorAll('#setlist .song-container').length;
+        clearEditFilter();
+        applyEdits();
+        return { before: before, rowsWhileFiltered: rows,
+                 after: displayList.map(function (r) { return r.uid; }).join(',') };
+    ` + '})()');
+    check('the filtered list really is shorter than the set',
+          reorder.rowsWhileFiltered === 1, `${reorder.rowsWhileFiltered} rows on screen`);
+    check('and the set is unchanged either way',
+          reorder.after === reorder.before, `${reorder.before} -> ${reorder.after}`);
+
     // ── 6. A Controller has no way in ───────────────────────────────────────
     console.log('\n6. Editing is the Director\'s');
     const ctrl = await page.evaluate('(function(){' + `
