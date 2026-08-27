@@ -1645,6 +1645,21 @@ Driven by the **same** `_lastReplyTs` test as the badge dot, so the two can
 never disagree about whether REAPER is answering. The pulse honours
 `prefers-reduced-motion`, and colour plus icon still carry the state without it.
 
+**`disabled` was not enough, and the reason is a specificity trap.** The first
+version shipped with the attribute set and still repainted under the cursor,
+because `.t-btn-sync:hover` has the **same specificity** as
+`.t-btn-sync.is-live` and sits **later** in the file — so it won. `.t-btn:active`
+did the same thing one level up, shrinking a button that deliberately does
+nothing.
+
+`disabled` stops the click; only CSS stops it *looking* pressable, and the two
+have to agree. The hover rule is now guarded with `:not(:disabled)`, the press
+transform is cancelled for any disabled transport button, and the connected
+state pins its own hover and active colours so nothing later can repaint it.
+
+Caught on a real screen, not by the suite — which is why the assertion added
+with the fix checks the *guard*, not just that a hover rule exists.
+
 ### Locked by tests
 
 `test_an_incumbent_director_needs_evidence_to_be_displaced`,

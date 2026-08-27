@@ -1719,10 +1719,12 @@
             -webkit-tap-highlight-color: transparent;
         }
 
-        .t-btn:active {
-            transform: scale(0.96);
-            filter: brightness(0.85);
-        }
+        .t-btn:active { transform: scale(0.96); filter: brightness(0.85); }
+        /* A disabled transport button must not flinch when tapped. Without
+           this the connected RECONNECT still shrank under a finger, which
+           reads as "it did something" on a control that deliberately does
+           nothing. */
+        .t-btn:disabled:active { transform: none; filter: none; }
 
         .t-btn-play {
             background: var(--color-brand);
@@ -1875,12 +1877,24 @@
         /* Connected: a status light, not a control. Disabled on purpose — there
            is nothing to repair, and a pressable button invites a mid-show press
            that restarts polling for no reason. */
+        /* Connected: a READOUT. Everything that suggests "press me" is off —
+           no hover repaint, no press scale, no pointer cursor, no focus ring
+           to tab into. What stays is the green plug, which says the one thing
+           worth saying: REAPER is answering. */
         .t-btn-sync.is-live {
             cursor: default;
             color: var(--color-brand);
             border-color: rgba(30, 215, 96, 0.34);
             background: rgba(30, 215, 96, 0.09);
             opacity: 1;
+            box-shadow: none;
+        }
+        .t-btn-sync.is-live:hover,
+        .t-btn-sync.is-live:active {
+            background: rgba(30, 215, 96, 0.09);
+            color: var(--color-brand);
+            transform: none;
+            filter: none;
         }
         .t-btn-sync.is-live .rc-ok { display: block; }
 
@@ -1903,7 +1917,13 @@
         @media (prefers-reduced-motion: reduce) {
             .t-btn-sync.is-down { animation: none; }
         }
-        .t-btn-sync:hover {
+        /* :not(:disabled) is load-bearing, not defensive. This rule has the
+           SAME specificity as .t-btn-sync.is-live and sits LATER in the file,
+           so without the guard it wins and repaints the connected button on
+           hover — which is exactly the affordance the disabled state exists to
+           remove. `disabled` stops the click; only CSS stops it looking
+           pressable, and the two have to agree. */
+        .t-btn-sync:not(:disabled):hover {
             background: rgba(255, 255, 255, 0.12);
             color: var(--text-primary);
         }

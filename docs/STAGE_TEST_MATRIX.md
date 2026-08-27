@@ -273,6 +273,7 @@ nobody else in the room, and the banner named a takeover that never happened.
 | **D05** | Same, in Live View / Canvas / Lyrics. | Content starts below the banner, not under it. | | |
 | **D06** | Banner up on a **phone**, in Portuguese and in English. | Wraps to two lines if needed and still pushes content down by its real height. | | |
 | **D07** | Normal operation, REAPER answering. | RECONNECT is **green, disabled, quiet** — a status light. Pressing it does nothing. | | |
+| **D07b** | **Hover over it, and press it, while connected.** | It does not light up, does not change colour, does not shrink, and the cursor stays an arrow. `disabled` blocks the click; the styling has to agree, or it still reads as pressable. | | |
 | **D08** | Quit REAPER, or pull the network. | Within ~2s it turns **red, swaps to a broken-plug icon, and pulses**. | | |
 | **D09** | With it red, press it. | Reconnects. Once replies flow again it goes back to green and disabled by itself. | | |
 | **D10** | Repeat D08 with the OS set to "reduce motion". | Still red, still the broken plug — just not pulsing. The state must not depend on the animation. | | |

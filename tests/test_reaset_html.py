@@ -2077,6 +2077,25 @@ def test_reconnect_button_reports_the_connection(script_body: str) -> None:
 
     html = REASET_HTML.read_text(encoding="utf-8")
     assert 'id="reconnect-btn"' in html, "the button lost the id its refresher needs"
+
+    # `disabled` stops the click. Only CSS stops it LOOKING pressable, and the
+    # two have to agree — a hover repaint on a control that does nothing is the
+    # affordance the disabled state exists to remove.
+    #
+    # This is a specificity trap, not a nicety: `.t-btn-sync:hover` has the SAME
+    # specificity as `.t-btn-sync.is-live` and sits LATER in the file, so it wins
+    # unless it is guarded. It shipped that way and was caught on a real screen.
+    hover = re.search(r"^\s*\.t-btn-sync(:[^\s{]*)*:hover\s*(,|\{)", html, re.M)
+    assert hover, ".t-btn-sync hover rule is gone — re-check this by hand"
+    assert ":not(:disabled)" in hover.group(0) or ".is-down" in hover.group(0), (
+        f"the generic hover rule {hover.group(0).strip()!r} still applies to the "
+        f"DISABLED connected button, so it repaints under the cursor and reads "
+        f"as pressable"
+    )
+    assert re.search(r"\.t-btn:disabled:active\s*\{[^}]*transform:\s*none", html), (
+        "a disabled transport button still shrinks when tapped, which reads as "
+        "\"it did something\" on a control that deliberately does nothing"
+    )
     # Scoped to the rule, not the file: `animation:` appears in dozens of other
     # rules, so a file-wide search never sees this one go.
     down = re.search(r"\.t-btn-sync\.is-down\s*\{([^}]*)\}", html)
