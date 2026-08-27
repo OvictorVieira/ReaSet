@@ -3680,6 +3680,49 @@ def test_the_palettes_offer_fixed_colours_only() -> None:
         )
 
 
+# ── Row chrome ──────────────────────────────────────────────────────────────
+
+
+def test_rows_are_not_numbered_and_the_count_lives_in_the_top_bar() -> None:
+    """A number per row said what its position was — but the position is
+    changed by dragging, not by reading, and the only number a performer
+    actually wants is how many songs are in the set. That one is in the top
+    bar, so the per-row index was 22px of every row saying nothing.
+
+    Both views: numbering one and not the other is worse than either.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    for cls in ("song-index", "grid-card-index"):
+        assert cls not in html, (
+            f".{cls} is back — every row is numbering itself again"
+        )
+
+    # The count it was traded for has to still be there.
+    assert re.search(r'id="tb-count"', html), (
+        "the top-bar song count is gone, so nothing says how many songs are "
+        "in the set any more"
+    )
+
+    # And the row must not have grown its own number by another name.
+    row = re.search(r"rowDiv\.innerHTML =(.*?);\n", html, re.S)
+    assert row, "the setlist row is no longer built in one expression"
+    assert not re.search(r"\(i \+ 1\)", row.group(1)), (
+        "the setlist row is numbering itself from the loop index again"
+    )
+
+
+def test_the_drag_handle_draws_no_separator() -> None:
+    """A 1px hairline sat between the drag handle and the ✕ — read as a bar
+    hanging off the delete button rather than as a divider between controls,
+    on the one row control that is destructive."""
+    html = REASET_HTML.read_text(encoding="utf-8")
+    css = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
+    assert not re.search(r"\.drag-handle::(after|before)\s*\{", css), (
+        "the drag handle draws a pseudo-element again"
+    )
+
+
 # ── Hover ───────────────────────────────────────────────────────────────────
 
 

@@ -914,7 +914,6 @@
             box-shadow: none;
             --row-hover: rgba(13, 97, 43, 0.85);
         }
-        .song-row.active .song-index { color: var(--color-brand); }
 
         .song-row.skipped {
             opacity: 0.28;
@@ -1101,16 +1100,6 @@
             display: flex;
             align-items: center;
             gap: 8px;
-        }
-
-        /* Vertical separator between drag-handle and 3-dot */
-        .drag-handle::after {
-            content: '';
-            display: block;
-            width: 1px;
-            height: 20px;
-            background: rgba(255, 255, 255, 0.12);
-            flex-shrink: 0;
         }
 
         .song-row:hover .drag-handle {
@@ -1487,24 +1476,6 @@
             flex-shrink: 0;
         }
 
-        /* Number */
-        /* Mirrors .song-duration at the other end of the row: same 8px inner
-           padding, so the number sits the same distance from the left edge as
-           the time does from the right. The row's own padding is symmetric
-           for the same reason. min-width rather than a fixed width so a
-           two-digit number still fits, while text-align keeps every number
-           in a column regardless of digit count. */
-        .song-index {
-            min-width: 22px;
-            text-align: right;
-            color: var(--text-subdued);
-            font-size: 13px;
-            font-variant-numeric: tabular-nums;
-            flex-shrink: 0;
-            padding: 0 8px;
-            cursor: pointer;
-        }
-
         /* Color dot */
         .song-color-dot {
             display: none;
@@ -1841,7 +1812,6 @@
 
         /* Feature 8: [nosong] — dimmed, no numbering dot */
         .song-row.nosong { opacity: 0.55; }
-        .song-row.nosong .song-index { visibility: hidden; }
 
         /* Feature 12: CSS class markers — affect the name text, not the container */
         .song-row.bold .song-name,
@@ -1979,7 +1949,6 @@
             box-shadow: none;
             --row-hover: rgba(13, 97, 43, 0.85);
         }
-        .grid-card.active .grid-card-index { color: var(--color-brand); }
 
         .grid-card.skipped {
             opacity: 0.28;
@@ -2025,12 +1994,6 @@
             border-radius: 0 2px 2px 0;
             background: rgba(255, 255, 255, 0.22);
             pointer-events: none;
-        }
-
-        .grid-card-index {
-            font-size: 12px;
-            font-variant-numeric: tabular-nums;
-            color: var(--text-subdued);
         }
 
         .grid-card-dot {
@@ -11147,8 +11110,6 @@
                         + (r.skipped ? " skipped" : "") + classAdds + extraClass;
                     if (reapColor) li.setAttribute("style", buildColorVarsFromHex(reapColor));
 
-                    // Feature 8: nosong items show no index number
-                    var gridIndex = r.nosong ? '' : (i + 1) + '.';
                     // The grid used to show a number, a name and a duration and
                     // nothing else — so the one thing a performer reads a
                     // setlist for, where the show pauses, was invisible in this
@@ -11163,7 +11124,6 @@
                         + (r.loop ? '<span class="gc-pip loop-on" title="Loop">&#8635;</span>' : '')
                         + (r.skipped ? '<span class="gc-pip skip-on" title="Skipped">&#10005;</span>' : '');
                     li.innerHTML = '<div class="card-bg-fill" id="bg-' + r.uid + '" style="border-radius: var(--radius-card);"></div>'
-                        + '<span class="grid-card-index">' + gridIndex + '</span>'
                         + '<div class="grid-card-name">' + rDisplayName + (r.markerInfo ? '<span class="song-name-info">' + r.markerInfo + '</span>' : '') + '</div>'
                         + '<div class="gc-pips">' + gPips + '</div>'
                         + '<span class="grid-card-dur" id="dur-' + r.uid + '" data-length="' + formatTime(r.duration) + '">' + formatTime(r.duration) + '</span>';
@@ -11222,14 +11182,9 @@
                         rowDiv.setAttribute("style", buildColorVarsFromHex(reapColor));
                     }
 
-                    // Feature 8: nosong items show no index number
-                    var songIndex = r.nosong ? '' : (i + 1) + '.';
                     // Overrides: description, stopAfter, delayAfter
                     var rov = getOverride(r.id);
                     var descHtml   = rov.description ? '<span class="song-name-info">— ' + rov.description + '</span>' : '';
-                    // The end-state now has its own button; only the delay's
-                    // seconds still need a separate tag to be readable.
-                    var stopHtml   = '';
                     // Falls back to the synchronised value: on a follower the
                     // local override is empty, and the seconds are part of what
                     // "wait" means on stage.
@@ -11272,7 +11227,6 @@
                         + '<div class="drag-handle">⋮⋮</div>'
                         + '<button class="song-remove-btn" title="' + t('Remove from setlist') + '" onclick="event.stopPropagation(); removeFromSetlist(\'' + r.uid + '\')">&#10005;</button>'
                         + '<button class="song-dotmenu-btn" onclick="event.stopPropagation(); openSongMenu(event,\'' + r.uid + '\')"><svg width="4" height="18" viewBox="0 0 4 18" fill="currentColor"><circle cx="2" cy="2" r="2"/><circle cx="2" cy="9" r="2"/><circle cx="2" cy="16" r="2"/></svg></button>'
-                        + '<span class="song-index">' + songIndex + stopHtml + '</span>'
                         + '<button class="' + chevClass + '" id="chev-' + r.uid + '" onclick="event.stopPropagation();toggleExpand(\'' + r.uid + '\',' + hasSubs + ')">' + chevIcon + '</button>'
                         + '<div class="song-title-area" onclick="playRegion(' + r.start + ',\'' + r.id + '\',\'' + r.uid + '\')">'
                         + '  <div class="song-name">' + songNameHtml + '</div>'
