@@ -2191,7 +2191,10 @@
            is enough to make one button taller than the rest. */
         .t-btn-loop .t-ico, .t-btn-nav .t-ico { display: flex; align-items: center; }
         .t-btn svg { display: block; }
-        .t-btn-play .t-ico { font-size: 16px; }
+        /* The size lives here, not on the svg, so the Live view can draw the
+           same icon larger without a second copy of the path. */
+        .t-btn .t-ico svg { width: 18px; height: 18px; }
+        .t-btn-play .t-ico { display: flex; align-items: center; }
 
         @media (max-width: 600px) {
             .app-transport { padding-left: 10px; padding-right: 10px; }
@@ -3408,6 +3411,17 @@
             font-size: 14px;
             border: 1.5px solid rgba(255, 255, 255, 0.14);
         }
+
+        /* Icon beside word, never above it. "▶ PLAY" was one text node in a
+           flex box: on a narrow phone it broke between the glyph and the
+           word and the button grew a second line. Two elements and
+           nowrap cannot do that. */
+        .lt-btn { white-space: nowrap; }
+        .lt-btn .t-ico { display: flex; align-items: center; }
+        .lt-btn .t-lbl { margin-left: 7px; }
+        .lt-btn svg { display: block; }
+        .lt-play .t-ico svg { width: 20px; height: 20px; }
+        .lt-ghost .t-ico svg { width: 19px; height: 19px; }
 
         .lt-ghost.active {
             background: rgba(191, 90, 242, 0.18);
@@ -5281,11 +5295,11 @@
              it lives in the banner that appears only when the link drops. -->
         <div class="app-transport">
             <button class="t-btn t-btn-nav" id="footer-prev-btn" onclick="navSong('prev', event)"
-                title="Previous song" aria-label="Previous song"><span class="t-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18 5.2v13.6L8.2 12 18 5.2Z" fill="currentColor"/><rect x="5" y="5.2" width="2.3" height="13.6" rx="1.15" fill="currentColor"/></svg></span></button>
-            <button class="t-btn t-btn-play" id="main-play-btn" onclick="togglePlay()"><span class="t-ico">▶</span><span class="t-lbl">PLAY</span></button>
-            <button class="t-btn t-btn-loop" id="footer-loop-btn" onclick="toggleCurrentLoop()"><span class="t-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20.5 2.8v4.4h-4.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="t-lbl">LOOP</span></button>
+                title="Previous song" aria-label="Previous song"><span class="t-ico" data-ico="prev"></span></button>
+            <button class="t-btn t-btn-play" id="main-play-btn" onclick="togglePlay()"><span class="t-ico" data-ico="play"></span><span class="t-lbl">PLAY</span></button>
+            <button class="t-btn t-btn-loop" id="footer-loop-btn" onclick="toggleCurrentLoop()"><span class="t-ico" data-ico="loop"></span><span class="t-lbl">LOOP</span></button>
             <button class="t-btn t-btn-nav" id="footer-next-btn" onclick="navSong('next', event)"
-                title="Next song" aria-label="Next song"><span class="t-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 5.2v13.6L15.8 12 6 5.2Z" fill="currentColor"/><rect x="16.7" y="5.2" width="2.3" height="13.6" rx="1.15" fill="currentColor"/></svg></span></button>
+                title="Next song" aria-label="Next song"><span class="t-ico" data-ico="next"></span></button>
         </div>
     </div>
 
@@ -5911,10 +5925,10 @@
             <p class="live-next" style="margin-top:0;">Up Next: <span id="live-next-name">—</span></p>
         </div>
         <div class="live-transport" id="live-transport-bar">
-            <button class="lt-btn lt-ghost" onclick="navSong('prev', event)" aria-label="Previous song">⏮</button>
-            <button class="lt-btn lt-play" id="live-play-btn" onclick="togglePlay()">▶ PLAY</button>
-            <button class="lt-btn lt-ghost" id="live-loop-btn" onclick="toggleCurrentLoop(event)">↻ Loop</button>
-            <button class="lt-btn lt-ghost" onclick="navSong('next', event)" aria-label="Next song">⏭</button>
+            <button class="lt-btn lt-ghost" onclick="navSong('prev', event)" aria-label="Previous song"><span class="t-ico" data-ico="prev"></span></button>
+            <button class="lt-btn lt-play" id="live-play-btn" onclick="togglePlay()"><span class="t-ico" data-ico="play"></span><span class="t-lbl">PLAY</span></button>
+            <button class="lt-btn lt-ghost" id="live-loop-btn" onclick="toggleCurrentLoop(event)"><span class="t-ico" data-ico="loop"></span><span class="t-lbl">Loop</span></button>
+            <button class="lt-btn lt-ghost" onclick="navSong('next', event)" aria-label="Next song"><span class="t-ico" data-ico="next"></span></button>
         </div>
         <!-- Live View config panel -->
         <div id="live-config-panel">
@@ -6075,9 +6089,9 @@
             <div class="canvas-widget" id="cw-transport" style="left: 52%; top: 72%; width: 43%; height: 24%;">
                 <div class="cw-content" id="cw-content-transport">
                     <div class="cw-transport-wrapper" style="display: flex; gap: 8px; justify-content: center;">
-                        <button class="lt-btn lt-ghost" onclick="navSong('prev', event)" aria-label="Previous song">⏮</button>
-                        <button class="lt-btn lt-play" id="cw-play-btn" onclick="togglePlay()">▶ PLAY</button>
-                        <button class="lt-btn lt-ghost" onclick="navSong('next', event)" aria-label="Next song">⏭</button>
+                        <button class="lt-btn lt-ghost" onclick="navSong('prev', event)" aria-label="Previous song"><span class="t-ico" data-ico="prev"></span></button>
+                        <button class="lt-btn lt-play" id="cw-play-btn" onclick="togglePlay()"><span class="t-ico" data-ico="play"></span><span class="t-lbl">PLAY</span></button>
+                        <button class="lt-btn lt-ghost" onclick="navSong('next', event)" aria-label="Next song"><span class="t-ico" data-ico="next"></span></button>
                     </div>
                 </div>
             </div>
@@ -6702,7 +6716,6 @@
             ["Import", "Importar", "Importar"],
             ["Delete", "Eliminar", "Apagar"],
             ["Up Next:", "Sigue:", "A seguir:"],
-            ["↻ Loop", "↻ Loop", "↻ Loop"],
             ["Views", "Vistas", "Telas"],
             ["Show Options", "Opciones de show", "Opções do Show"],
             ["Auto-Scroll", "Auto-scroll", "Auto-Scroll"],
@@ -11923,8 +11936,8 @@
             // .t-ico, so a flat string here would put the word back on every
             // play/pause and re-cram the bar the slider needs.
             if (playBtn) playBtn.innerHTML = isPlaying
-                ? '<span class="t-ico">&#9646;&#9646;</span><span class="t-lbl">PAUSE</span>'
-                : '<span class="t-ico">&#9654;</span><span class="t-lbl">PLAY</span>';
+                ? _ico('pause') + '<span class="t-lbl">PAUSE</span>'
+                : _ico('play') + '<span class="t-lbl">PLAY</span>';
 
             // Reset old song duration display
             if (lastActiveID && (!activeRegion || activeRegion.uid !== lastActiveID)) {
@@ -12468,7 +12481,9 @@
                     if (cNameFallback && !cTitle) cNameFallback.innerText = songName;
                     // Play button sync
                     var cwPlay = document.getElementById('cw-play-btn');
-                    if (cwPlay) cwPlay.innerHTML = isPlaying ? '&#9646;&#9646; PAUSE' : '&#9654; PLAY';
+                    if (cwPlay) cwPlay.innerHTML = isPlaying
+                        ? _ico('pause') + '<span class="t-lbl">PAUSE</span>'
+                        : _ico('play') + '<span class="t-lbl">PLAY</span>';
                 }
             } else {
                 // No active region
@@ -12493,7 +12508,9 @@
                     if (cSection) cSection.innerText = '';
                     if (cNext) cNext.innerText = 'Next\u2192 \u2014';
                     var cwPlay = document.getElementById('cw-play-btn');
-                    if (cwPlay) cwPlay.innerHTML = isPlaying ? '&#9646;&#9646; PAUSE' : '&#9654; PLAY';
+                    if (cwPlay) cwPlay.innerHTML = isPlaying
+                        ? _ico('pause') + '<span class="t-lbl">PAUSE</span>'
+                        : _ico('play') + '<span class="t-lbl">PLAY</span>';
                 }
             }
         }
@@ -14500,7 +14517,9 @@
             document.getElementById("live-next-name").innerText = nxt ? nxt.name : "(end of setlist)";
             // Play btn
             var lp = document.getElementById("live-play-btn");
-            if (lp) lp.innerHTML = isPlaying ? "&#9646;&#9646; PAUSE" : "&#9654; PLAY";
+            if (lp) lp.innerHTML = isPlaying
+                ? _ico('pause') + '<span class="t-lbl">PAUSE</span>'
+                : _ico('play') + '<span class="t-lbl">PLAY</span>';
             // Loop btn
             var ll = document.getElementById("live-loop-btn");
             if (ll) { if (isLooping) ll.classList.add("active"); else ll.classList.remove("active"); }
@@ -15298,6 +15317,42 @@
         // The ✦ that marks the new item is appended at render, outside the
         // translated string: a marker glyph inside the key would need its own
         // row in every language to say the same nothing.
+        // ── Transport icons ────────────────────────────────────────────
+        // ONE set of glyphs for every transport bar in the app.
+        //
+        // The footer already drew real icons; the Live view and the canvas
+        // widget were still on ⏮ ▶ ↻ ⏭ — emoji, whose shape, weight and
+        // colour belong to the device's font, not to this app. On the stage
+        // screen, which is the one screen read from four metres away, they
+        // rendered as a different set of pictures from the ones on every
+        // other screen, and the play button wrapped its own glyph onto a
+        // second line.
+        //
+        // No width/height attributes: the size is CSS, so the same icon can be
+        // 18px in the footer and 22px on stage without a second copy of the
+        // path. Every slot in the markup is `data-ico`, filled once at boot
+        // by _paintTransportIcons() — so an icon has exactly one definition
+        // and cannot drift between the bars that draw it.
+        var TRANSPORT_ICONS = {
+            prev:  '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18 5.2v13.6L8.2 12 18 5.2Z" fill="currentColor"/><rect x="5" y="5.2" width="2.3" height="13.6" rx="1.15" fill="currentColor"/></svg>',
+            next:  '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 5.2v13.6L15.8 12 6 5.2Z" fill="currentColor"/><rect x="16.7" y="5.2" width="2.3" height="13.6" rx="1.15" fill="currentColor"/></svg>',
+            loop:  '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20.5 2.8v4.4h-4.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+            play:  '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7.2 4.6v14.8L19.6 12 7.2 4.6Z" fill="currentColor"/></svg>',
+            pause: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="6.4" y="4.8" width="3.8" height="14.4" rx="1.3" fill="currentColor"/><rect x="13.8" y="4.8" width="3.8" height="14.4" rx="1.3" fill="currentColor"/></svg>'
+        };
+
+        function _ico(name) {
+            return '<span class="t-ico">' + (TRANSPORT_ICONS[name] || '') + '</span>';
+        }
+
+        function _paintTransportIcons() {
+            var slots = document.querySelectorAll('[data-ico]');
+            for (var i = 0; i < slots.length; i++) {
+                var g = TRANSPORT_ICONS[slots[i].getAttribute('data-ico')];
+                if (g) slots[i].innerHTML = g;
+            }
+        }
+
         var LIVE_CFG_DEFS = [
             { key: 'showHeader',       label: 'LIVE header + clock' },
             { key: 'showSetlistName',  label: 'Setlist name' },
@@ -15588,6 +15643,11 @@
 
         // ── Init ───────────────────────────────────────────────────
         loadLiveSettings();
+        // Fill every data-ico slot from the one icon table. Runs inline rather
+        // than on load: the script tag sits below the markup, so the buttons
+        // already exist, and painting them here means no frame is drawn with
+        // empty icon slots.
+        _paintTransportIcons();
 
         // ══════════════════════════════════════════════════════════
 

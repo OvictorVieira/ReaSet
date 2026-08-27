@@ -2350,14 +2350,85 @@ def test_play_button_keeps_its_word_in_a_span(script_body: str) -> None:
     stripped = strip_comments(script_body)
     writes = [
         stripped[m.end():m.end() + 320]
-        for m in re.finditer(r"playBtn\.innerHTML\s*=", stripped)
+        for m in re.finditer(r"(playBtn|lp|cwPlay)\.innerHTML\s*=", stripped)
     ]
-    assert writes, "nothing writes the PLAY button any more"
+    assert len(writes) >= 4, (
+        f"only {len(writes)} play buttons are written — the footer, the Live "
+        "view and the two canvas branches all rewrite one"
+    )
     for write in writes:
-        assert "t-ico" in write and "t-lbl" in write, (
+        # `_ico()` IS the glyph span — it is the only thing that emits one, so
+        # naming it here is naming .t-ico.
+        assert "_ico(" in write and "t-lbl" in write, (
             "a writer of the PLAY button emits a flat label instead of the two "
             f"spans, so the phone bar re-crams on the next transport change: {write.strip()[:90]}"
         )
+        assert "&#9654;" not in write and "&#9646;" not in write, (
+            "a play button is drawing its own glyph again instead of taking it "
+            f"from the icon table: {write.strip()[:90]}"
+        )
+
+
+def test_every_transport_glyph_comes_from_the_icon_table() -> None:
+    """The Live view and the canvas widget drew ⏮ ▶ ↻ ⏭ — emoji.
+
+    An emoji's shape, weight and colour belong to the device's font, not to
+    this app, so the stage screen — the one screen read from four metres — drew
+    a different set of pictures from every other screen, and "▶ PLAY" as a
+    single text node broke between the glyph and the word on a narrow phone.
+
+    Every glyph now comes from TRANSPORT_ICONS, through a `data-ico` slot in
+    markup or `_ico()` in JS. One definition per icon, so the bars cannot
+    drift apart again.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    table = re.search(r"var TRANSPORT_ICONS = \{(.*?)\n        \};", html, re.S)
+    assert table, "the icon table is gone"
+    names = set(re.findall(r"(\w+):\s*'<svg", table.group(1)))
+    assert {"prev", "next", "play", "pause", "loop"} <= names, (
+        f"the icon table is missing transport icons: {sorted(names)}"
+    )
+    for tag in re.findall(r"<svg[^>]*>", table.group(1)):
+        assert "width=" not in tag and "height=" not in tag, (
+            "an icon carries its own size, so the Live view cannot draw the "
+            f"same path larger without a second copy of it: {tag}"
+        )
+
+    # Every slot the markup declares must be a name the table defines,
+    # otherwise the boot pass leaves an empty button.
+    slots = set(re.findall(r'data-ico="([^"]+)"', html))
+    assert slots, "no button takes its icon from the table"
+    assert slots <= names, f"markup asks for icons the table has not got: {slots - names}"
+
+    # And every transport button must use one. A button that draws its own
+    # glyph is the emoji coming back on one bar only, which is how the three
+    # bars diverged in the first place.
+    for bar in ("app-transport", "live-transport", "cw-transport-wrapper"):
+        m = re.search(
+            r'class="[^"]*\b' + bar + r'\b[^"]*"[^>]*>(.*?)(?=\n\s*</div>)', html, re.S
+        )
+        assert m, f"the {bar} bar is gone"
+        buttons = re.findall(r"<button.*?</button>", m.group(1), re.S)
+        assert len(buttons) >= 3, f"the {bar} bar lost its controls"
+        for btn in buttons:
+            assert "data-ico=" in btn, (
+                f"a button in {bar} draws its own glyph instead of taking one "
+                f"from the table: {btn[:110]}"
+            )
+            for glyph in "\u23ee\u23ed\u21bb\u21ba\u25b6\u25a0\u23f8\u25ae":
+                assert glyph not in btn, (
+                    f"a transport emoji ({glyph!r}) is back on {bar}: {btn[:110]}"
+                )
+
+    # The slots are filled once, at boot, from the table.
+    assert re.search(r"^\s*_paintTransportIcons\(\);", html, re.M), (
+        "nothing fills the icon slots, so every transport button renders empty"
+    )
+    paint = strip_comments(extract_function(html, "_paintTransportIcons"))
+    assert "data-ico" in paint and "TRANSPORT_ICONS[" in paint, (
+        "_paintTransportIcons no longer reads the table into the slots"
+    )
 
 
 def test_transport_bar_reserves_space_without_flex_gap() -> None:
