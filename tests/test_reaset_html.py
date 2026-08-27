@@ -3203,3 +3203,62 @@ def test_every_control_in_the_row_panel_is_sized_for_a_finger(script_body: str) 
     assert sized(".song-ctx-row", "min-height"), (
         "the panel rows are no longer given a minimum height"
     )
+
+
+# ── Design tokens ───────────────────────────────────────────────────────────
+
+
+def test_every_custom_property_used_is_actually_defined() -> None:
+    """`--accent` was read by nine rules and declared by none.
+
+    A custom property with no definition and no fallback makes the whole
+    declaration invalid at computed-value time, so the browser drops it in
+    silence. Nothing throws, nothing logs, and the element simply renders
+    without that colour — which is how the lyrics popover's selected weight
+    ended up as plain bold text where a filled segment belonged.
+
+    `var(--x, something)` is fine: that one carries its own fallback.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    css = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
+
+    defined = set(re.findall(r"(--[\w-]+)\s*:", css))
+    # Some are written from JS at runtime rather than declared in the sheet.
+    defined |= set(re.findall(r"setProperty\(\s*['\"](--[\w-]+)['\"]", html))
+
+    used_bare = set(re.findall(r"var\(\s*(--[\w-]+)\s*\)", css))
+    missing = sorted(used_bare - defined)
+    assert not missing, (
+        f"used with no definition and no fallback, so every rule reading them "
+        f"is dropped in silence: {missing}"
+    )
+
+
+def test_the_lyrics_popover_uses_the_app_controls() -> None:
+    """It was the last surface still rendering browser-default controls.
+
+    Its sliders had no class at all, so they came out as the OS's blue track
+    and thumb, and its checkbox was a native blue tick — next to a modal, three
+    lines of markup away, that already used the app's own slider and switch.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    popover = re.search(
+        r'<div class="lyrics-settings".*?\n        </div>', html, re.S
+    )
+    assert popover, "the lyrics settings popover is gone"
+    block = popover.group(0)
+
+    ranges = re.findall(r'<input type="range"[^>]*>', block)
+    assert ranges, "the popover lost its sliders"
+    for tag in ranges:
+        assert "ap-slider" in tag, (
+            f"a slider is drawn by the browser, not the app: {tag[:80]}"
+        )
+
+    boxes = re.findall(r'<input type="checkbox"[^>]*>', block)
+    for tag in boxes:
+        # The app's switch wraps the input and hides it; a bare one is the
+        # OS tick.
+        assert "n-switch" in block.split(tag)[0][-220:], (
+            f"a checkbox is not inside the app's switch: {tag[:80]}"
+        )

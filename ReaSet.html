@@ -40,6 +40,36 @@
             --text-secondary: #D0D0D0;
             --text-subdued: #808080;
             --color-brand: #1ED760;
+            /* ── Tokens that were READ but never DECLARED ──────────────────
+               Ten names, forty-one rules between them, every one of those
+               declarations invalid at computed-value time and therefore
+               dropped in silence. Nothing throws and nothing logs; the element
+               simply renders without that colour, border or font. It is why
+               the lyrics popover's selected weight came out as plain bold text
+               where a filled segment belonged, and why panels drawn with
+               var(--border) had no border at all.
+
+               Seven of them have an obvious counterpart already in this list
+               and are aliased to it. Three had to be chosen, and are marked. */
+            --accent: #1ED760;                      /* = --color-brand */
+            --text:   #FFFFFF;                      /* = --text-primary */
+            --text2:  #D0D0D0;                      /* = --text-secondary, 23 rules */
+            --text3:  #808080;                      /* = --text-subdued */
+            --border: rgba(255, 255, 255, 0.14);    /* the hairline every panel already draws */
+            --bg-surface: #000000;                  /* = --bg-app, and .app-frame is the app */
+            --shadow: rgba(0, 0, 0, 0.55);          /* same depth the other popovers use */
+
+            /* CHOSEN, not derived. #live-time-rem is a countdown and
+               #live-sub-region labels it, and the top bar already reads its
+               position out in this orange. */
+            --accent2: #FF9F0A;                     /* = --color-timer */
+            /* CHOSEN. #live-show-time is the session clock, which the top bar
+               already shows in this cyan. */
+            --accent3: #64D2FF;                     /* = --color-live */
+            /* CHOSEN. Offered to the user as a font called "Heading", so it
+               has to resolve to a real family; no display face is loaded, so
+               it is the app's own UI stack. */
+            --font-heading: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
             --color-active: #FC3C44;
             --color-loop: #BF5AF2;
             --color-chain: #30D158;
@@ -3616,6 +3646,10 @@
         .ls-row input[type="range"] { width: 100%; }
 
         .ls-btn-group { display: flex; gap: 6px; }
+        /* WebKit before 14.1 drops flex gap: without these the weight buttons
+           and the colour swatches sit flush against each other. */
+        html.no-flexgap .ls-btn-group > * + * { margin-left: 6px; }
+        html.no-flexgap .ls-swatches > * + * { margin-left: 7px; }
 
         .ls-btn {
             flex: 1;
@@ -3631,10 +3665,13 @@
 
         .ls-btn:hover { color: var(--text-primary); }
 
+        /* The same segmented-control look the ⋮ panel's end-state buttons
+           use, rather than a filled pill: white on #1ED760 is about 1.9:1,
+           which is unreadable, and nothing else in the app fills a segment. */
         .ls-btn.active {
-            background: var(--accent);
-            border-color: var(--accent);
-            color: #fff;
+            background: rgba(30, 215, 96, 0.12);
+            border-color: rgba(30, 215, 96, 0.45);
+            color: var(--color-brand);
             font-weight: 700;
         }
 
@@ -3782,7 +3819,10 @@
             letter-spacing: 1px;
         }
 
-        .live-show-time {
+        /* Was `.live-show-time` — a class selector, while the element carries
+           the ID. It matched nothing, so the session clock inherited the red
+           of the LIVE indicator beside it instead of reading as a clock. */
+        #live-show-time {
             font-family: monospace;
             font-size: 15px;
             color: var(--accent3);
@@ -5693,17 +5733,17 @@
         <div class="lyrics-settings" id="lyrics-settings" onclick="event.stopPropagation()">
             <div class="ls-row">
                 <div class="ls-label"><span>Tamaño global</span><span class="js-lyr-size-val" id="ls-size-val">42px</span></div>
-                <input type="range" class="js-lyr-size" id="ls-size" min="16" max="120" step="1"
+                <input type="range" class="ap-slider js-lyr-size" id="ls-size" min="16" max="120" step="1"
                        oninput="applyLyricsSize(this.value)">
             </div>
             <div class="ls-row">
                 <div class="ls-label"><span>Línea principal</span><span class="js-lyr-main-val" id="ls-size-main-val">100%</span></div>
-                <input type="range" class="js-lyr-main" id="ls-size-main" min="50" max="150" step="1" value="100"
+                <input type="range" class="ap-slider js-lyr-main" id="ls-size-main" min="50" max="150" step="1" value="100"
                        oninput="applyLyricsMainScale(this.value)">
             </div>
             <div class="ls-row">
                 <div class="ls-label"><span>Letras secundarias</span><span class="js-lyr-sec-val" id="ls-size-sec-val">44%</span></div>
-                <input type="range" class="js-lyr-sec" id="ls-size-sec" min="10" max="100" step="1" value="44"
+                <input type="range" class="ap-slider js-lyr-sec" id="ls-size-sec" min="10" max="100" step="1" value="44"
                        oninput="applyLyricsSecScale(this.value)">
             </div>
             <div class="ls-row">
@@ -5738,8 +5778,11 @@
             <div class="ls-row">
                 <label class="ls-toggle">
                     <span>Mostrar versos anterior/siguiente</span>
-                    <input type="checkbox" class="js-lyr-context" id="ls-context" checked
-                           onchange="applyLyricsContext(this.checked)">
+                    <span class="n-switch">
+                        <input type="checkbox" class="js-lyr-context" id="ls-context" checked
+                               onchange="applyLyricsContext(this.checked)">
+                        <span class="n-track"><span class="n-thumb"></span></span>
+                    </span>
                 </label>
             </div>
         </div>

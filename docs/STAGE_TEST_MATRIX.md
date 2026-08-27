@@ -525,6 +525,28 @@ calls a phone — the controls are sized for a finger.
 | **M09** | On the iPad **sideways**, open it and turn colour on. | It repositions rather than running off the bottom. | | |
 | **M10** | On a desktop, open it. | Unchanged: a popup near the row, mouse-sized. | | |
 
+### The app's own controls, everywhere
+
+Ten CSS custom properties were **read but never declared** — `--accent`,
+`--text`, `--text2`, `--text3`, `--border`, `--bg-surface`, `--shadow`,
+`--accent2`, `--accent3`, `--font-heading` — across forty-one rules. A
+`var(--x)` with no definition and no fallback makes the whole declaration
+invalid, so the browser drops it in silence: no error, no warning, the element
+just renders without that colour, border or font.
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **T01** | Open Lyrics → the gear → the settings popover. | Green slider thumbs on a thin track, the app's switch, the app's segmented buttons. Not the browser's blue. | | |
+| **T02** | Change the weight (Thin / Medium / Bold / Black). | The chosen one is a green segment, exactly like the end-state buttons in the `⋮` panel. It used to render as plain bold text. | | |
+| **T03** | Drag each of the three sliders. | They still change what they always changed. This was a styling change only. | | |
+| **T04** | Toggle "show previous/next verses". | The app's switch, and it still works. | | |
+| **T05** | Open Live View. | The session clock next to LIVE ● is **cyan**, not red. Its rule was written as a class while the element carries the id, so it matched nothing and inherited the indicator's red. | | |
+| **T06** | Look at the section name and the remaining time in Live View. | Orange, the same orange the top bar reads its position out in. | | |
+| **T07** | Look at any panel that draws a hairline border — Lyrics, Chords, Canvas. | The border is there. `var(--border)` was undefined, so every one of those `border` declarations was dropped. | | |
+| **T08** | Open Canvas. | The song name is green; the tool buttons highlight green on hover. | | |
+| **T09** | The active tab at the top. | Green text with a green underline. | | |
+| **T10** | On the old iPad: the weight buttons and the colour swatches in the Lyrics popover. | Spaced apart, not touching. They spaced with flex `gap`, which that engine drops. | | |
+
 ### The role modal
 
 | ID | Scenario | Expected | Result | Notes |
