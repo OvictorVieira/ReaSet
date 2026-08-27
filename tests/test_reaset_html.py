@@ -2828,3 +2828,59 @@ def test_a_loop_at_the_songs_edge_does_not_draw_on_the_card_border() -> None:
     assert "!important" not in whole, (
         "the whole-song mark is overriding the track's inset again"
     )
+
+
+# ── Region colour ───────────────────────────────────────────────────────────
+
+
+def test_region_colour_is_written_to_reaper_not_to_this_browser(script_body: str) -> None:
+    """A colour only the Director can see is not a colour anyone can use.
+
+    The local override is per-device localStorage, and the sync payload
+    deliberately carries only what a follower needs to PLAY the show — not
+    authoring data. So the colour goes onto the REGION: every device polls
+    REGION once a second and gets it for free, it survives a reload, and it
+    comes back with the project tomorrow.
+    """
+    body = strip_comments(script_body)
+
+    push = strip_comments(extract_function(body, "_pushRegionColor"))
+    assert "canEditSetlist()" in push, (
+        "anyone can recolour the project — this is an edit, and edits are the "
+        "Director's"
+    )
+    assert "SET/EXTSTATE/ReaSet/regionColor/" in push, (
+        "the colour no longer reaches Reaset.lua"
+    )
+    assert "join(';')" in push, (
+        "a whole block is no longer one write, so Reaset.lua re-enumerates the "
+        "project once per song on its defer thread"
+    )
+
+    pick = strip_comments(extract_function(body, "_ctxPickColor"))
+    assert "_pushRegionColor" in pick, "picking a colour no longer writes the region"
+    assert re.search(r"setSongOverride\([^)]*'colorHex',\s*null\)", pick), (
+        "picking a colour still sets a LOCAL override as well — the Director's "
+        "screen would then disagree with every other one in the room"
+    )
+
+
+def test_a_block_colours_as_one_unit(script_body: str) -> None:
+    """A block is what a performer thinks in, so it is what they colour.
+
+    Same operation as one song over a different set, so it is one function —
+    two would drift, and this file has lost afternoons to exactly that.
+    """
+    body = strip_comments(script_body)
+    fn = strip_comments(extract_function(body, "_blockRegionIdsFor"))
+    assert "isBlockStart" in fn, (
+        "the block is no longer derived from the same boundary rule the list "
+        "draws its gaps from, so the colour and the gap can disagree"
+    )
+    assert "while (from > 0 && !isBlockStart(from)) from--" in fn, (
+        "it no longer walks BACK to the block's first row, so colouring from "
+        "the middle of a block only paints its tail"
+    )
+    # A repeated song is two rows and one region; colouring it twice is a
+    # wasted write, not a bug, but the dedupe is cheap and states the intent.
+    assert "seen" in fn, "a song that repeats inside a block is written twice"

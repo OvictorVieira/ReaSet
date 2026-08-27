@@ -1216,6 +1216,12 @@
         }
 
         .ctx-color-swatch:hover { transform: scale(1.18); }
+        .ctx-block-scope {
+            display: flex; align-items: center; gap: 7px;
+            margin: 9px 0 2px;
+            font-size: 11.5px; color: var(--text2);
+            cursor: pointer;
+        }
 
         .ctx-color-swatch.selected {
             border-color: #fff;
@@ -6559,6 +6565,7 @@
              "STOP hay que arrastrarlo de lado a lado, como el deslizar para apagar del Mac.\nUn toque accidental no puede parar el show, y un deslizamiento a medias se abandona soltando.\nDesactivalo para tener un botón STOP común que actúa con una sola pulsación.",
              "O STOP tem que ser arrastado de um lado ao outro, igual ao deslizar para desligar do Mac.\nUm toque acidental não para o show, e um deslize pela metade é abandonado ao soltar.\nDesligue isso para ter um botão STOP comum, que age num toque só."],
             ["Note about the song…", "Nota sobre la canción…", "Nota sobre a música…"],
+            ["Apply to the whole block", "Aplicar a todo el bloque", "Aplicar ao bloco inteiro"],
             ["Remove colour", "Quitar color", "Remover cor"],
             ["Add song", "Agregar canción", "Adicionar música"],
             ["Add a song to this setlist", "Agregar una canción a este setlist",
@@ -8231,7 +8238,7 @@
             for (var c = 0; c < SONG_COLOR_PALETTE.length; c++) {
                 var cx = SONG_COLOR_PALETTE[c];
                 var sel = (colorHex === cx) ? ' selected' : '';
-                paletteHtml += '<div class="ctx-color-swatch' + sel + '" style="background:' + cx + '" data-color="' + cx + '" onclick="_ctxPickColor(\'' + rowUid + '\',\'' + cx + '\')"></div>';
+                paletteHtml += '<div class="ctx-color-swatch' + sel + '" style="background:' + cx + '" data-color="' + cx + '" onclick="_ctxPickColor(\'' + rowUid + '\',\'' + cx + '\', _ctxBlockScope(\'' + rowUid + '\'))"></div>';
             }
 
             var panel = document.createElement('div');
@@ -8268,6 +8275,13 @@
                 + '<label class="song-ctx-toggle"><input type="checkbox" id="_ctx_coloron_' + rowUid + '"' + (colorOn ? ' checked' : '') + ' onchange="_ctxToggleColor(\'' + rowUid + '\',this.checked)"><span class="song-ctx-track"><span class="song-ctx-thumb"></span></span></label>'
                 + '</div><div id="_ctx_palette_' + rowUid + '"' + (!colorOn ? ' style="display:none"' : '') + '>'
                 + '<div class="song-ctx-palette">' + paletteHtml + '</div>'
+                // A block is what a performer thinks in — the run of songs
+                // that plays without stopping — so colouring one is the same
+                // gesture as colouring a song, over a different set. Sticky,
+                // because picking a colour and then reaching for a modifier is
+                // backwards: the choice of scope comes first.
+                + '<label class="song-ctx-toggle ctx-block-scope"><input type="checkbox" id="_ctx_blockscope_' + rowUid + '">'
+                + '<span>' + t('Apply to the whole block') + '</span></label>'
                 + '<button class="ctx-clear-btn" onclick="_ctxClearColor(\'' + rowUid + '\')">\u2715 ' + t('Remove colour') + '</button>'
                 + '</div></div>';
 
@@ -8324,9 +8338,74 @@
             }
         }
 
-        function _ctxPickColor(uid, hex) {
+        // Colour lives on the REGION, not in this browser.
+        //
+        // A local override is per-device localStorage, so the Director would
+        // be the only person who could see it — and the sync payload
+        // deliberately carries only what a follower needs to play the show
+        // correctly, not authoring data. Adding colour to it would be a second
+        // copy of a fact REAPER can already hold.
+        //
+        // Writing the region makes REAPER the one source. Every device polls
+        // REGION once a second and gets the colour for free, it survives a
+        // reload, and it comes back with the project tomorrow. The Director
+        // sets it; everyone else simply sees it, which is the role model
+        // already in force everywhere else here.
+        //
+        // The id is REAPER's own markrgnindexnumber — the third field of the
+        // REGION reply this file already parses, and exactly what
+        // SetProjectMarker3 takes on the other side. Nothing has to be mapped.
+        function _pushRegionColor(regionIds, hex) {
+            if (!canEditSetlist()) {
+                RSDiag.blocked('_pushRegionColor', 'role-cannot-edit-setlist');
+                return;
+            }
+            var parts = [];
+            for (var i = 0; i < regionIds.length; i++) {
+                if (regionIds[i] === null || regionIds[i] === undefined) continue;
+                parts.push(regionIds[i] + ':' + (hex ? String(hex).replace('#', '') : 'x'));
+            }
+            if (!parts.length) return;
+            // One write for a whole block: Reaset.lua splits on ';' and indexes
+            // the regions once, rather than re-enumerating per song on the
+            // defer thread of a machine that is also playing audio.
+            wwr_req('SET/EXTSTATE/ReaSet/regionColor/' + parts.join(';'), 'region-color');
+            RSDiag.log('REGION_COLOR', { n: parts.length, hex: hex || 'clear' });
+        }
+
+        // Every row of the playback block `uid` belongs to. "Colour this song"
+        // and "colour this block" are the same operation over a different set,
+        // so they are one function and cannot drift apart.
+        function _blockRegionIdsFor(uid) {
+            var at = -1;
+            for (var i = 0; i < displayList.length; i++) {
+                if (displayList[i].uid === uid) { at = i; break; }
+            }
+            if (at === -1) return [];
+            var from = at;
+            while (from > 0 && !isBlockStart(from)) from--;
+            var ids = [], seen = {};
+            for (var j = from; j < displayList.length; j++) {
+                if (j > from && isBlockStart(j)) break;
+                var rid = displayList[j].id;
+                if (!seen[rid]) { seen[rid] = 1; ids.push(rid); }
+            }
+            return ids;
+        }
+
+        function _ctxBlockScope(uid) {
+            var cb = document.getElementById('_ctx_blockscope_' + uid);
+            return !!(cb && cb.checked);
+        }
+
+        function _ctxPickColor(uid, hex, whole) {
             var id = _uidToRegionId(uid); if (id === null) return;
-            setSongOverride(id, 'colorHex', hex);
+            // The local override is CLEARED, not set. Keeping both would let
+            // the Director's screen disagree with every other one in the room
+            // about the same song — the override wins locally and nobody else
+            // has it.
+            setSongOverride(id, 'colorHex', null);
+            _pushRegionColor(whole ? _blockRegionIdsFor(uid) : [id], hex);
             if (_ctxPanel) {
                 var sw = _ctxPanel.querySelectorAll('.ctx-color-swatch');
                 for (var i = 0; i < sw.length; i++)
@@ -8337,6 +8416,8 @@
         function _ctxClearColor(uid) {
             var id = _uidToRegionId(uid); if (id === null) return;
             setSongOverride(id, 'colorHex', null);
+            // 'x' on the wire: REAPER's own default, not black.
+            _pushRegionColor([id], null);
             var cb = document.getElementById('_ctx_coloron_' + uid);
             if (cb) { cb.checked = false; _ctxToggleColor(id, false); }
             else closeOpenCtxPanel();

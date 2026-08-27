@@ -853,6 +853,65 @@ end
 
 local _hb_tick = 0
 
+----------------------------------------------------------------------------
+-- REGION COLOUR — set from the web interface
+----------------------------------------------------------------------------
+-- The browser can already reach this script: it writes a project ExtState key
+-- and the tick reads it, which is how NativeLoop and Auto-Stop are armed. This
+-- is the same channel carrying one more instruction, and the id it names is
+-- REAPER's own markrgnindexnumber — the third field of the REGION reply the
+-- web interface already reads, and exactly what SetProjectMarker3 takes. No
+-- lookup table has to exist on either side.
+--
+-- CONSUMED BEFORE ACTING, not after. Colouring a region dirties the project,
+-- so a key left in place would re-apply and re-dirty it on every tick forever,
+-- ~30 times a second. If the write below fails the instruction is simply lost,
+-- which is the right trade: the user can pick the colour again, and a project
+-- that will not stop asking to be saved is a support call.
+local function color_tick()
+    local cmd = reaper.GetExtState(SEC, "regionColor")
+    if cmd == "" then return end
+    reaper.SetExtState(SEC, "regionColor", "", false)
+
+    -- Index the regions ONCE. A whole block arrives as one semicolon-separated
+    -- write, and re-enumerating per entry is O(regions x entries) on the defer
+    -- thread of a machine that is also playing audio.
+    local byidx, i = {}, 0
+    while true do
+        local ok, isrgn, pos, rgnend, name, midx = reaper.EnumProjectMarkers(i)
+        if ok == 0 then break end
+        if isrgn then byidx[midx] = { pos = pos, e = rgnend, name = name } end
+        i = i + 1
+    end
+
+    local touched = false
+    for one in cmd:gmatch("[^;]+") do
+        local sidx, hex = one:match("^(%d+):(%w+)$")
+        local reg = sidx and byidx[tonumber(sidx)]
+        if reg then
+            local col
+            if hex == "x" then
+                col = 0                     -- back to REAPER's own default
+            else
+                local r = tonumber(hex:sub(1, 2), 16)
+                local g = tonumber(hex:sub(3, 4), 16)
+                local b = tonumber(hex:sub(5, 6), 16)
+                if r and g and b then
+                    -- 0x1000000 is REAPER's "this colour is set" flag; without
+                    -- it the value reads as unset and the region stays default.
+                    col = reaper.ColorToNative(r, g, b) | 0x1000000
+                end
+            end
+            if col then
+                reaper.SetProjectMarker3(0, tonumber(sidx), true,
+                                         reg.pos, reg.e, reg.name, col)
+                touched = true
+            end
+        end
+    end
+    if touched then reaper.UpdateArrange() end
+end
+
 local function tick_body()
     -- Presence flag (never expires — only proves the script ran at least once).
     if _hb_tick % 150 == 0 then
@@ -883,6 +942,9 @@ local function tick_body()
     -- 5) Setlist library: serves the project's /reaset/setlists folder and
     --    writes back whatever the browser saves.
     library_tick()
+
+    -- 6) Region colours the Director picked in the web interface.
+    color_tick()
 end
 
 local function main()
