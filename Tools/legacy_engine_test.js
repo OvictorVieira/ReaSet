@@ -256,6 +256,80 @@ async function touchTargets(browser) {
     }
 }
 
+// ── 3b. The Live view at the sizes it is actually read at ────────────────
+// The stage screen was laid out in fixed pixels against a 40px inset, some of
+// it inline on the elements themselves — and an inline style outranks every
+// rule in the sheet, so no media query could reach it. On a 320px phone the
+// four transport pills measured 384px and the outer two hung off both edges;
+// the "Vista" button and the size control, 40px in from either side, ran into
+// each other as soon as their labels grew, which is what happens the moment
+// the app is read in Portuguese.
+//
+// Every language, because the labels are what grow: SIZE becomes TAMANHO.
+async function liveViewFits(browser) {
+    console.log('\n3b. Live view fits the screen');
+    const sizes = [
+        [320, 568, 'small phone'], [390, 844, 'phone'],
+        [768, 1024, 'iPad portrait'], [1024, 768, 'iPad landscape'],
+    ];
+    for (const [w, h, label] of sizes) {
+        for (const lang of ['en', 'es', 'pt']) {
+            const ctx = await browser.newContext({ viewport: { width: w, height: h } });
+            const page = await ctx.newPage();
+            await page.addInitScript(l => localStorage.setItem('reaset_lang', l), lang);
+            await page.goto(FILE);
+            await page.waitForTimeout(500);
+            const r = await page.evaluate(() => {
+                openLiveView();
+                // A real title, not the em-dash placeholder. The column only
+                // overflows once the song name wraps, which is what it does
+                // for most of the songs anyone actually plays — with "—" in
+                // there the layout fits and the check measures nothing.
+                document.getElementById('live-song-name').textContent =
+                    'Vou Deixar A Vida Me Levar';
+                document.getElementById('live-setlist-name').textContent =
+                    'SHOW ACUSTICO NO TEATRO';
+                document.getElementById('live-next-name').textContent = 'Trem Bala';
+                toggleLiveConfig();
+                const box = el => {
+                    const b = el.getBoundingClientRect();
+                    return { l: Math.round(b.left), r: Math.round(b.right),
+                             t: Math.round(b.top), b: Math.round(b.bottom) };
+                };
+                return {
+                    vw: window.innerWidth, vh: window.innerHeight,
+                    bar:   box(document.getElementById('live-transport-bar')),
+                    top:   box(document.getElementById('live-now-label')).t,
+                    cfg:   box(document.getElementById('live-config-btn')),
+                    size:  box(document.querySelector('.live-size-ctrl')),
+                    panel: box(document.getElementById('live-config-panel')),
+                    sideways: document.documentElement.scrollWidth > window.innerWidth,
+                };
+            });
+            const tag = `${label} ${lang}`;
+            check(`${tag}: the transport bar is on the screen`,
+                  r.bar.l >= 0 && r.bar.r <= r.vw, `[${r.bar.l},${r.bar.r}] of ${r.vw}`);
+            // The view centres its column. When the column is taller than the
+            // screen a centred flex box spills out of BOTH ends, which put
+            // PLAY underneath the two controls pinned to the bottom edge.
+            check(`${tag}: PLAY is not under the bottom controls`,
+                  r.bar.b <= r.cfg.t && r.bar.b <= r.size.t,
+                  `bar ends ${r.bar.b}, controls start ${Math.min(r.cfg.t, r.size.t)}`);
+            check(`${tag}: the top of the view is reachable`,
+                  r.top >= 0, `first line at ${r.top}`);
+            check(`${tag}: the bottom controls do not collide`,
+                  r.cfg.r < r.size.l, `view ends ${r.cfg.r}, size starts ${r.size.l}`);
+            check(`${tag}: the config panel is on the screen`,
+                  r.panel.l >= 0 && r.panel.r <= r.vw && r.panel.b <= r.vh,
+                  `[${r.panel.l},${r.panel.r}] bottom ${r.panel.b} of ${r.vw}x${r.vh}`);
+            check(`${tag}: the panel clears the buttons under it`,
+                  r.panel.b <= r.cfg.t, `panel ends ${r.panel.b}, view starts ${r.cfg.t}`);
+            check(`${tag}: the page does not scroll sideways`, !r.sideways);
+            await ctx.close();
+        }
+    }
+}
+
 // ── 4. The probe itself ───────────────────────────────────────────────────
 async function probeBehaviour(browser) {
     // ── 5. The colour palette on an engine with no CSS Grid ──────────────
@@ -370,6 +444,7 @@ async function probeBehaviour(browser) {
         await transportResponds(browser);
         await gapEmulation(browser);
         await touchTargets(browser);
+        await liveViewFits(browser);
         await probeBehaviour(browser);
     } finally {
         await browser.close();

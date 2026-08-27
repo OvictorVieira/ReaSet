@@ -3680,6 +3680,104 @@ def test_the_palettes_offer_fixed_colours_only() -> None:
         )
 
 
+def test_the_live_view_keeps_its_geometry_in_the_stylesheet() -> None:
+    """An inline style outranks every rule in the sheet.
+
+    The stage screen carried its layout on the elements themselves —
+    `position:absolute; bottom:20px; right:40px` on the size control, `top:30px;
+    right:40px` on the close button — so no media query could reach any of it.
+    On a phone the "Vista" button and the size control sat 40px in from either
+    edge and ran into each other the moment their labels grew, which is what
+    happens as soon as the app is read in Portuguese: SIZE becomes TAMANHO.
+
+    CI has no browser, so this checks the cause rather than the symptom: no
+    geometry inline, and no fixed-pixel horizontal inset on anything anchored
+    to an edge of the view. Tools/legacy_engine_test.js measures the result.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    view = html[html.index('<div id="live-view">'):html.index("<!-- APP CONFIRM MODAL -->")]
+
+    GEOMETRY = {"position", "top", "right", "bottom", "left", "width", "gap"}
+    for style in re.findall(r'style="([^"]*)"', view):
+        # Split into declarations and compare the PROPERTY, not a substring:
+        # `margin-left` contains `left`, and banning it would ban nothing
+        # useful while pretending to ban something.
+        for decl in style.split(";"):
+            if ":" not in decl:
+                continue
+            prop = decl.split(":", 1)[0].strip().lower()
+            assert prop not in GEOMETRY, (
+                f"the Live view sets {prop!r} inline ({style.strip()!r}), which "
+                f"no media query can override"
+            )
+
+    # And the rules that place the bottom chrome must not do it in fixed px:
+    # 40px from either edge is a desktop measurement that leaves two labels
+    # 240px apart on a 320px screen.
+    css = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
+    for sel in ("#live-config-btn", "#live-config-panel", ".live-size-ctrl",
+                ".live-close-btn"):
+        block = _css_decls(html, sel)
+        assert block, f"{sel} has no rule of its own any more"
+        for side in ("left", "right"):
+            m = re.search(r"(?m)^\s*" + side + r":\s*([^;]+);", block)
+            if not m:
+                continue
+            assert not re.match(r"^\d+px$", m.group(1).strip()), (
+                f"{sel} is anchored {m.group(1).strip()} from the {side} edge — "
+                f"a fixed inset that is most of a small phone"
+            )
+
+    # The transport bar has to be allowed to shrink. Four pills at their
+    # desktop padding measured 384px, which is wider than a 320px screen, and
+    # a flex child does not shrink below its content unless it is told it may.
+    bar = _css_decls(html, ".live-transport")
+    assert "max-width: 100%" in bar, (
+        "the Live transport bar can grow past the screen it is on again"
+    )
+    assert "flex-shrink: 1" in _css_decls(html, ".lt-btn"), (
+        "the Live transport buttons cannot shrink, so the outer two hang off "
+        "the edges of a small phone"
+    )
+    # A phone layout that actually names this view's chrome. Matching the
+    # media query alone would match any of the several in this file.
+    phone = [
+        m for m in re.finditer(
+            r"@media \(max-width: (\d+)px\)\s*\{(.*?)\n        \}", css, re.S
+        )
+        if int(m.group(1)) <= 768 and "#live-config-panel" in m.group(2)
+    ]
+    assert phone, (
+        "no phone-width media query places the Live view's config panel, so "
+        "it is laid out at its desktop inset on every screen"
+    )
+    block = phone[0].group(2)
+    for sel in ("#live-view", "#live-config-btn", ".live-size-ctrl", ".lt-play"):
+        assert sel in block, (
+            f"the Live view's phone layout says nothing about {sel}"
+        )
+
+    # And it has to sit BELOW the rules it overrides. `@media` adds nothing to
+    # specificity: `#live-view` inside a media query and `#live-view` outside
+    # one are both 1,0,0, so the later rule wins. Written above the base rules
+    # the whole block is inert — which is exactly how it shipped the first
+    # time, silently, with the phone still laid out at its desktop insets.
+    at = phone[0].start()
+    for sel in ("#live-view", "#live-config-btn", "#live-config-panel",
+                ".live-song-name", ".live-size-ctrl", ".lt-play", ".lt-ghost"):
+        base = [
+            m.start() for m in re.finditer(
+                r"(?m)^ {8}" + re.escape(sel) + r"\s*\{", css
+            )
+        ]
+        assert base, f"{sel} has no base rule to override"
+        assert max(base) < at, (
+            f"{sel} is defined again at column 8 AFTER the phone media query, "
+            f"so the phone rule for it never applies — @media adds no "
+            f"specificity"
+        )
+
+
 # ── Row chrome ──────────────────────────────────────────────────────────────
 
 
