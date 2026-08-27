@@ -8971,13 +8971,24 @@
             setSongOverride(id, 'description', val.trim());
         }
 
+        // Turning the Color switch off and pressing Remove colour are the same
+        // statement — "no colour here" — so they are one path, and "here" is
+        // whatever the scope switch names. Removing used to clear one song
+        // while the switch said the whole block.
         function _ctxToggleColor(uid, on) {
             var id = _uidToRegionId(uid); if (id === null) return;
             var pal = document.getElementById('_ctx_palette_' + uid);
             if (pal) pal.style.display = on ? '' : 'none';
             _ctxReflow();
             if (!on) {
-                _stageColor([id], null);
+                // A removal supersedes what the scope switch remembered,
+                // exactly as a new pick does. Without this _ctxScopePrev still
+                // held the colours the block had BEFORE the switch went on, so
+                // turning it off again after a removal poured those colours
+                // back over the songs that had just been cleared — which on
+                // screen is Remove putting the applied colour straight back.
+                _ctxScopePrev = null;
+                _stageColor(_ctxBlockScope(uid) ? _blockRegionIdsFor(uid) : [id], null);
                 if (_ctxPanel) {
                     var sw = _ctxPanel.querySelectorAll('.ctx-color-swatch');
                     for (var i = 0; i < sw.length; i++) sw[i].classList.remove('selected');
@@ -9208,14 +9219,17 @@
         }
 
         function _ctxClearColor(uid) {
-            var id = _uidToRegionId(uid); if (id === null) return;
-            // Removing is the same operation as picking, over the same set.
-            // It used to ignore the scope switch and clear one song, so a
-            // block you had coloured as a unit could not be un-coloured as one.
-            _stageColor(_ctxBlockScope(uid) ? _blockRegionIdsFor(uid) : [id], null);
+            if (_uidToRegionId(uid) === null) return;
             var cb = document.getElementById('_ctx_coloron_' + uid);
-            if (cb) { cb.checked = false; _ctxToggleColor(id, false); }
-            else closeOpenCtxPanel();
+            if (cb) cb.checked = false;
+            // THE UID. This passed the region ID, which _ctxToggleColor does
+            // resolve — _instanceForAction falls back to matching by id — so
+            // the function ran and looked like it worked. But every element it
+            // reaches for is keyed on the UID ('_ctx_palette_<uid>'), and none
+            // of them were found: the palette stayed open underneath a colour
+            // switch that had just been turned off.
+            _ctxToggleColor(uid, false);
+            if (!cb) closeOpenCtxPanel();
         }
 
         // ── Sub-region (section) context menu ───────────────────────────────

@@ -311,6 +311,94 @@ const snap = () => ({
     check('Apply ends the session', applied.editing === false);
     check('Apply keeps the change', applied.skipped === true);
 
+    // ── 5a. Remove colour, over the set the scope switch names ──────────────
+    //
+    // "Remove colour" means back to REAPER's default — no colour — over
+    // whatever "Apply to the whole block" is pointing at. Two faults made it
+    // do the opposite:
+    //
+    //   * _ctxScopePrev, the block's colours from BEFORE the switch went on,
+    //     was cleared by a new pick but not by a removal. Turning the switch
+    //     off after a Remove poured those colours back over the songs that had
+    //     just been cleared — on screen, Remove putting the applied colour back.
+    //   * _ctxClearColor passed the REGION ID where a UID was wanted.
+    //     _instanceForAction falls back to matching by id, so the call ran and
+    //     looked fine, but every element it reaches for is keyed on the uid:
+    //     the palette stayed open under a colour switch it had just turned off.
+    console.log('\n5a. Remove colour');
+
+    const COLOUR_CASES = [
+        ['scope on, remove',                  ['scopeOn', 'remove'],                     'all'],
+        ['scope on, remove, REAPER ticks',    ['scopeOn', 'remove', 'tick'],             'all'],
+        ['scope on, remove, scope off',       ['scopeOn', 'remove', 'scopeOff'],         'all'],
+        ['pick, scope on, remove',            ['pick', 'scopeOn', 'remove'],             'all'],
+        ['pick, scope on, remove, scope off', ['pick', 'scopeOn', 'remove', 'scopeOff'], 'all'],
+        ['scope on, colour switch off',       ['scopeOn', 'switchOff'],                  'all'],
+        ['remove with scope off clears one',  ['remove'],                                'one'],
+    ];
+
+    for (const [label, steps, want] of COLOUR_CASES) {
+        const r = await page.evaluate(new Function('steps', `
+            window.__sent = [];
+            window.wwr_req = function (c) { window.__sent.push(String(c)); };
+            REASET_MODE = 'director';
+            document.body.classList.remove('reaset-controller');
+            // Three songs chained into one block, every one of them already
+            // coloured IN REAPER — the state the report came from.
+            displayList = [
+                {id:'11',uid:'a',name:'A',start:0,  end:100,duration:100,color:'#FF453A',chain:true},
+                {id:'12',uid:'b',name:'B',start:100,end:200,duration:100,color:'#FF453A',chain:true},
+                {id:'13',uid:'c',name:'C',start:200,end:300,duration:100,color:'#FF453A',chain:false}
+            ];
+            g_regionReaperColor = {'11':'#ff453a','12':'#ff453a','13':'#ff453a'};
+            g_stagedColors = {}; g_songOverrides = {};
+            _ctxScopePrev = null;
+            closeOpenCtxPanel(); lastRenderChecksum = ''; renderSetlist();
+            openSongMenu({ stopPropagation: function () {}, currentTarget:
+                document.querySelector('[data-uid="a"] .song-dotmenu-btn') }, 'a');
+
+            steps.forEach(function (s) {
+                var sc = document.getElementById('_ctx_blockscope_a');
+                if (s === 'scopeOn')   { sc.checked = true;  _ctxScopeChanged('a', true); }
+                if (s === 'scopeOff')  { sc.checked = false; _ctxScopeChanged('a', false); }
+                if (s === 'pick')      { _ctxPickColor('a', '#0A84FF', _ctxBlockScope('a')); }
+                if (s === 'remove')    { _ctxClearColor('a'); }
+                if (s === 'switchOff') { var cb = document.getElementById('_ctx_coloron_a');
+                                         cb.checked = false; _ctxToggleColor('a', false); }
+                // What a REGION reply does a second later: confirm anything
+                // REAPER already agrees with, and repaint.
+                if (s === 'tick')      { _confirmStagedColors(); lastRenderChecksum = ''; renderSetlist(); }
+            });
+
+            var pal = document.getElementById('_ctx_palette_a');
+            var out = {
+                shown: displayList.map(function (r) { return _songColor(r.id, r.color); }),
+                paletteHidden: !pal || pal.style.display === 'none',
+                selected: _ctxPanel ? _ctxPanel.querySelectorAll('.ctx-color-swatch.selected').length : -1
+            };
+            _flushStagedColors();
+            out.sent = window.__sent.slice();
+            return out;
+        `), steps);
+
+        const expect = want === 'all' ? [null, null, null] : [null, '#FF453A', '#FF453A'];
+        check(label, JSON.stringify(r.shown) === JSON.stringify(expect),
+              `${JSON.stringify(r.shown)} want ${JSON.stringify(expect)}`);
+
+        if (want === 'all') {
+            // It has to REACH REAPER as a removal: 'x' is the sentinel
+            // Reaset.lua turns into colour 0, REAPER's own default. A hex here
+            // would be a repaint pretending to be a removal.
+            const wire = r.sent[0] || '';
+            check(`  ${label} — sends a clear for the whole block`,
+                  /regionColor\/11:x,12:x,13:x$/.test(wire), wire || '(nothing sent)');
+        }
+        if (steps.indexOf('remove') !== -1 || steps.indexOf('switchOff') !== -1) {
+            check(`  ${label} — the palette closes`, r.paletteHidden === true);
+            check(`  ${label} — no swatch is left lit`, r.selected === 0, `${r.selected} lit`);
+        }
+    }
+
     // ── 5b. The search ──────────────────────────────────────────────────────
     //
     // A view filter, and that word is the whole risk. displayList must not
@@ -318,6 +406,17 @@ const snap = () => ({
     // rebuild the order from a list that is showing three of eleven rows —
     // which would write those three back as the setlist and drop the rest.
     console.log('\n5b. EDIT-mode search');
+    // Section 5a replaces displayList with its own three-song block and leaves
+    // colours staged. Re-seed, or this section searches a set that no longer
+    // holds the songs it is looking for — and reports the search broken.
+    await page.evaluate('(function(){' + `
+        g_stagedColors = {};
+        if (typeof _colorApplyWatch !== 'undefined' && _colorApplyWatch) {
+            clearTimeout(_colorApplyWatch); _colorApplyWatch = null;
+        }
+        closeOpenCtxPanel();
+    ` + '})()');
+    await page.evaluate('(function(){' + SEED + '})()');
     const search = await page.evaluate('(function(){' + `
         REASET_MODE = 'director';
         document.body.classList.remove('reaset-controller');

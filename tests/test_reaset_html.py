@@ -3859,6 +3859,67 @@ def test_the_live_view_keeps_its_geometry_in_the_stylesheet() -> None:
         )
 
 
+def test_removing_a_colour_removes_it_over_the_scope_that_is_set(script_body: str) -> None:
+    """"Remove colour" means REAPER's default — no colour — over whatever
+    "Apply to the whole block" is pointing at.
+
+    Two faults made it do the opposite. `_ctxScopePrev` holds the block's
+    colours from BEFORE the scope switch was turned on, so switching it off
+    again puts them back; a new pick clears that memory, but a REMOVAL did not
+    — so turning the switch off after a Remove poured the old colours back over
+    the songs that had just been cleared. And `_ctxClearColor` passed the
+    REGION ID where a UID was wanted: `_instanceForAction` falls back to
+    matching by id so the call ran and looked fine, but every element it
+    reaches for is keyed on the uid, and none were found.
+    """
+    body = strip_comments(script_body)
+
+    clear = strip_comments(extract_function(body, "_ctxClearColor"))
+    # It must hand the toggle a UID. Passing `id` is the defect, and it is
+    # invisible at runtime because the id fallback resolves it.
+    assert not re.search(r"_ctxToggleColor\(\s*id\s*,", clear), (
+        "_ctxClearColor passes the region id where a uid is wanted — the "
+        "panel's own elements are keyed on the uid, so none of them are found"
+    )
+    assert re.search(r"_ctxToggleColor\(\s*uid\s*,\s*false\s*\)", clear), (
+        "_ctxClearColor no longer routes through the colour switch, so the two "
+        "ways of saying 'no colour here' can drift apart again"
+    )
+
+    off = strip_comments(extract_function(body, "_ctxToggleColor"))
+    assert "_ctxBlockScope(uid)" in off and "_blockRegionIdsFor(uid)" in off, (
+        "removing a colour ignores the scope switch, so a block coloured as a "
+        "unit cannot be un-coloured as one"
+    )
+    assert "_stageColor(" in off and "null" in off, (
+        "nothing stages the removal"
+    )
+    assert "_ctxScopePrev = null" in off, (
+        "a removal does not supersede what the scope switch remembered, so "
+        "turning the switch off afterwards restores the colour that was just "
+        "removed — which reads as Remove putting the applied colour back"
+    )
+
+    # A pick has to do the same, for the same reason.
+    pick = strip_comments(extract_function(body, "_ctxPickColor"))
+    assert "_ctxScopePrev = null" in pick, (
+        "a new pick no longer supersedes the scope memory"
+    )
+
+    # And the wire has to carry a REMOVAL, not a colour. 'x' is the sentinel
+    # Reaset.lua turns into colour 0 — REAPER's own default.
+    push = strip_comments(extract_function(body, "_pushRegionColorPairs"))
+    assert re.search(r"hx\s*\?[^:]+:\s*'x'", push), (
+        "a cleared region no longer sends the 'x' sentinel, so Reaset.lua has "
+        "nothing to turn into colour 0 and the colour stays on the region"
+    )
+    lua = (ROOT / "Reaset.lua").read_text(encoding="utf-8")
+    assert re.search(r'hex\s*==\s*"x"', lua) and re.search(r'col\s*=\s*0', lua), (
+        "Reaset.lua no longer maps the clear sentinel to REAPER's default "
+        "colour, so 'remove' would write a colour instead of removing one"
+    )
+
+
 # ── EDIT-mode search ────────────────────────────────────────────────────────
 
 
