@@ -302,6 +302,57 @@ async function probeBehaviour(browser) {
         await ctx.close();
     }
 
+    // ── 6. One palette, everywhere ───────────────────────────────────────
+    // There were three lists of colours for one decision: eighteen on a song
+    // row, five in Appearance → Lyrics, seven in Appearance → Chords. Asserted
+    // by COMPARING THE RENDERED SWATCHES rather than by reading the source —
+    // the source check would have passed while the Lyrics tab rendered nothing
+    // but a custom-colour blob, which is exactly what shipped.
+    {
+        console.log('\n6. One palette, everywhere');
+        const { ctx, page, errors } = await openPage(browser, {});
+        const sets = await page.evaluate(() => {
+            REASET_MODE = 'director';
+            document.body.classList.remove('reaset-controller');
+            openAppearanceModal();
+            displayList = [{ id: '1', uid: 'u1', name: 'X', displayName: 'X', start: 0,
+                             end: 9, duration: 9, chain: false, skipped: false,
+                             loop: false, color: null }];
+            REASET_EDITING = true;
+            document.body.classList.add('reaset-editing');
+            renderSetlist();
+            openSongMenu({ stopPropagation: function () {},
+                           currentTarget: document.querySelector('.song-dotmenu-btn') }, 'u1');
+            function colours(sel) {
+                var host = document.querySelector(sel);
+                if (!host) return null;
+                var out = [];
+                var sw = host.querySelectorAll('.ls-swatch, .ctx-color-swatch');
+                for (var i = 0; i < sw.length; i++) {
+                    var c = sw[i].getAttribute('data-color');
+                    if (c) out.push(c.toUpperCase());   // the custom swatch has none
+                }
+                return out;
+            }
+            return {
+                song:   colours('.song-ctx-palette'),
+                lyrics: colours('.js-lyr-swatches'),
+                chords: colours('#chords-color-selector'),
+                popover: colours('#ls-swatches'),
+            };
+        });
+        const song = sets.song || [];
+        check('the song row has its palette', song.length >= 12, `${song.length} colours`);
+        for (const name of ['lyrics', 'chords', 'popover']) {
+            const got = sets[name];
+            check(`${name} offers the same colours as a song row`,
+                  !!got && got.join(',') === song.join(','),
+                  got ? `${got.length} vs ${song.length}` : 'container missing');
+        }
+        check('no page errors', errors.length === 0, errors[0] || '');
+        await ctx.close();
+    }
+
     console.log('\n4. The flex-gap probe');
     const { ctx, page, errors } = await openPage(browser, {});
     const cls = await page.evaluate(() => document.documentElement.className);

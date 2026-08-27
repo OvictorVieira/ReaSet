@@ -597,7 +597,9 @@ the whole panel when there is not. Measured with grid forced off: each swatch
 | **W01** | On the iPad, open a song's `⋮` and turn Colour on. | A grid of small round swatches, several per row. Not one enormous circle per line. | | |
 | **W02** | Count the rows. | Three or four. Eighteen means the fallback is not applying. | | |
 | **W03** | Tap a swatch. | It takes the colour, same as anywhere else. | | |
-| **W04** | Appearance → Lyrics → Colour, and the Lyrics popover's colour row. | Same palette, same swatches, same size. They are one CSS rule now. | | |
+| **W04** | Appearance → **Lyrics** → Colour, Appearance → **Chords** → Colour, the Lyrics popover's colour row, and a song row's `⋮`. | **The same eighteen colours, in the same order, in all four.** They are built from one list now. There used to be three lists: eighteen on a song row, five in Lyrics, seven in Chords. | | |
+| **W4b** | Appearance → Lyrics → Colour specifically. | Swatches are there. A build of this shipped with that row EMPTY apart from the rainbow custom blob — the markup was replaced by a call to a builder that did not exist. | | |
+| **W4c** | Pick a colour in each of the four, then reopen it. | The one you picked is ringed. Building the palette must happen before the saved colour is restored, or nothing gets marked. | | |
 | **W05** | Turn on **Grid View** on the iPad. | Cards two per row, not one per row. | | |
 | **W06** | Open the sidebar on a phone: the view switcher (SHOW / LYRICS / CHORDS…). | Three per row. | | |
 | **W07** | Any modal using two or three columns. | Still in columns, not stacked. | | |

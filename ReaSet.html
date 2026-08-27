@@ -5570,7 +5570,7 @@
                     <!-- Filled from SONG_COLOR_PALETTE by _buildPalettes(), so
                          this is the same set of colours the song rows offer. -->
                     <div class="ap-swatches js-lyr-swatches" data-palette="applyLyricsColor">
-                        <span class="ls-swatch" title="Color personalizado" style="background:linear-gradient(135deg,#f00,#0f0,#00f)">
+                        <span class="ls-swatch ls-swatch-custom" title="Color personalizado" style="background:linear-gradient(135deg,#f00,#0f0,#00f)">
                             <input type="color" class="js-lyr-color-custom" oninput="applyLyricsColor(this.value)">
                         </span>
                     </div>
@@ -5618,15 +5618,7 @@
 
                 <div class="ap-group">
                     <div class="ap-group-title">Colour</div>
-                    <div class="ap-swatches" id="chords-color-selector">
-                        <span class="ls-swatch" data-color="#BF5AF2" style="background:#BF5AF2" title="Lilac" onclick="applyChordsColor('#BF5AF2')"></span>
-                        <span class="ls-swatch" data-color="#FC3C44" style="background:#FC3C44" title="Red" onclick="applyChordsColor('#FC3C44')"></span>
-                        <span class="ls-swatch" data-color="#FFFFFF" style="background:#FFFFFF" title="White" onclick="applyChordsColor('#FFFFFF')"></span>
-                        <span class="ls-swatch" data-color="#1ED760" style="background:#1ED760" title="Green" onclick="applyChordsColor('#1ED760')"></span>
-                        <span class="ls-swatch" data-color="#64D2FF" style="background:#64D2FF" title="Blue" onclick="applyChordsColor('#64D2FF')"></span>
-                        <span class="ls-swatch" data-color="#FF9F0A" style="background:#FF9F0A" title="Amber" onclick="applyChordsColor('#FF9F0A')"></span>
-                        <span class="ls-swatch" data-color="#30D158" style="background:#30D158" title="Teal" onclick="applyChordsColor('#30D158')"></span>
-                    </div>
+                    <div class="ap-swatches" id="chords-color-selector" data-palette="applyChordsColor"></div>
                 </div>
             </div>
         </div>
@@ -5773,18 +5765,8 @@
             </div>
             <div class="ls-row">
                 <div class="ls-label"><span>Color</span></div>
-                <div class="ls-swatches js-lyr-swatches" id="ls-swatches">
-                    <span class="ls-swatch" data-color="#ffffff" style="background:#ffffff"
-                          onclick="applyLyricsColor('#ffffff')"></span>
-                    <span class="ls-swatch" data-color="#ffd166" style="background:#ffd166"
-                          onclick="applyLyricsColor('#ffd166')"></span>
-                    <span class="ls-swatch" data-color="#8ecae6" style="background:#8ecae6"
-                          onclick="applyLyricsColor('#8ecae6')"></span>
-                    <span class="ls-swatch" data-color="#a7f3d0" style="background:#a7f3d0"
-                          onclick="applyLyricsColor('#a7f3d0')"></span>
-                    <span class="ls-swatch" data-color="#f4978e" style="background:#f4978e"
-                          onclick="applyLyricsColor('#f4978e')"></span>
-                    <span class="ls-swatch" id="ls-swatch-custom" title="Color personalizado"
+                <div class="ls-swatches js-lyr-swatches" id="ls-swatches" data-palette="applyLyricsColor">
+                    <span class="ls-swatch ls-swatch-custom" id="ls-swatch-custom" title="Color personalizado"
                           style="background:linear-gradient(135deg,#f00,#0f0,#00f)">
                         <input type="color" class="js-lyr-color-custom" id="ls-color-custom"
                                oninput="applyLyricsColor(this.value)">
@@ -8464,6 +8446,38 @@
             '#00C7BE','#64D2FF','#0A84FF','#5E5CE6','#BF5AF2','#FF375F',
             '#8E8E93','#636366','#48484A','#FFFFFF','#C6A882','#A25752'
         ];
+
+        // ONE palette, everywhere a colour is chosen.
+        //
+        // There were three: eighteen colours on a song row, five in Appearance
+        // → Lyrics (#ffd166, #8ecae6, #a7f3d0, #f4978e — a set that exists
+        // nowhere else), and seven different ones in Appearance → Chords.
+        // Three lists for one decision, so of course they disagreed.
+        //
+        // The markup now carries only the NAME OF THE HANDLER; the colours come
+        // from SONG_COLOR_PALETTE. A palette cannot drift from the others
+        // because there is only one to drift from.
+        //
+        // A custom-colour swatch is markup rather than a palette entry — it
+        // holds a native <input type=color> — so it is detached, the palette is
+        // written, and it goes back at the end.
+        function _buildPalettes() {
+            var hosts = document.querySelectorAll('[data-palette]');
+            for (var h = 0; h < hosts.length; h++) {
+                var host = hosts[h];
+                var fn = host.getAttribute('data-palette');
+                var custom = host.querySelector('.ls-swatch-custom');
+                var html = '';
+                for (var i = 0; i < SONG_COLOR_PALETTE.length; i++) {
+                    var c = SONG_COLOR_PALETTE[i];
+                    html += '<span class="ls-swatch" data-color="' + c +
+                            '" style="background:' + c + '" title="' + c +
+                            '" onclick="' + fn + '(\'' + c + '\')"></span>';
+                }
+                host.innerHTML = html;
+                if (custom) host.appendChild(custom);
+            }
+        }
 
         var _ctxPanel = null;
         var _ctxBtnRef = null;
@@ -13736,6 +13750,9 @@
         });
 
         function initLyricsPrefs() {
+            // Before the saved colour is restored: the restore marks the
+            // matching swatch, and it cannot mark one that has not been built.
+            _buildPalettes();
             var savedFont = localStorage.getItem("lyrics_font");
             var savedSize = parseInt(localStorage.getItem("lyrics_size")) || 36;
             if (savedFont) {
@@ -13854,6 +13871,9 @@
             }
         }
         function initChordsPrefs() {
+            // Idempotent, and called from both inits because neither owns the
+            // order the two run in.
+            _buildPalettes();
             var sf = localStorage.getItem('reaset_chords_font');
             var ss = parseInt(localStorage.getItem('reaset_chords_size')) || 110;
             var sc = localStorage.getItem('reaset_chords_color');
