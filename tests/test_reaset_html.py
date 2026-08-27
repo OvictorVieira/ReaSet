@@ -642,14 +642,14 @@ def test_stop_slide_fires_on_release_not_on_threshold(script_body: str) -> None:
     safer than a tap. Stop must happen on release, and only if still armed.
     """
     body = strip_comments(script_body)
-    up = strip_comments(extract_function(body, "_stopCtlUp"))
-    assert "smartStop()" in up, "_stopCtlUp() no longer stops on release"
-    move = strip_comments(extract_function(body, "_stopCtlMove"))
+    up = strip_comments(extract_function(body, "_stopCtlEnd"))
+    assert "smartStop()" in up, "_stopCtlEnd() no longer stops on release"
+    move = strip_comments(extract_function(body, "_stopCtlDrag"))
     assert "smartStop" not in move, (
-        "_stopCtlMove() stops as soon as the threshold is crossed — the slide "
+        "_stopCtlDrag() stops as soon as the threshold is crossed — the slide "
         "can no longer be abandoned, which is the whole point of it"
     )
-    down = strip_comments(extract_function(body, "_stopCtlDown"))
+    down = strip_comments(extract_function(body, "_stopCtlBegin"))
     assert re.search(r"""_stopMode\s*!==\s*['"]slide['"]\s*\)\s*\{\s*smartStop\(\)""", down), (
         "tap mode no longer acts on press"
     )
@@ -1136,9 +1136,18 @@ def test_reconnect_does_not_share_the_loop_glyph() -> None:
     )
     loop = re.search(r'<button[^>]*\bt-btn-loop\b[^>]*>(.*?)</button>', html, re.S)
     assert loop, "the loop button is gone"
-    assert "&#8635;" in loop.group(1) or "\u21bb" in loop.group(1), (
-        "the loop button no longer uses ↻ — if it moved to something else, "
-        "check this test still compares the two controls that sit side by side"
+    # ↻ is not merely ambiguous next to a reconnect button — it is the RELOAD
+    # mark, so on its own it reads as "refresh the page". Neither control may
+    # carry it now: the loop draws the media repeat mark, the reconnect a plug.
+    for glyph in ("&#8635;", "\u21bb", "&#8634;", "\u21ba"):
+        assert glyph not in loop.group(1), (
+            f"the loop button is drawing {glyph!r} again — that is the reload "
+            f"mark, which is what made it unreadable beside a reconnect button"
+        )
+    assert "<svg" in loop.group(1), "the loop button has no icon at all"
+    assert re.search(r">\s*LOOP\s*<", loop.group(1)), (
+        "the loop button lost its word — a symbol nobody can name is not an "
+        "icon, and this one was reported as unreadable"
     )
 
 
@@ -2402,12 +2411,15 @@ def _css_decls(html: str, selector: str) -> str:
     Last, not first: CSS cascade means a later rule of equal specificity wins,
     so asserting against the first one would pass while the screen disagrees.
 
-    Anchored to the start of a line, because an unanchored ".stop-ctl.is-slide"
-    also matches inside ".app-transport .stop-ctl.is-slide" — which is how a
-    mutation that gutted the base rule survived: the phone override still
-    carried the declaration and the test read that instead.
+    Anchored to a rule at the stylesheet's own indentation — eight spaces —
+    for two reasons that bit in the same afternoon. An unanchored
+    ".stop-ctl.is-slide" also matches inside ".app-transport .stop-ctl.is-slide",
+    so a mutation that gutted the base rule survived by leaving the phone
+    override intact. And a merely line-anchored one matches rules nested in a
+    @media block, which are indented further: the last match became a tablet
+    override carrying one font-size, and the base rule went unread.
     """
-    pat = re.compile(r"(?m)^[ \t]*" + re.escape(selector) + r"\s*\{([^{}]*)\}")
+    pat = re.compile(r"(?m)^ {8}" + re.escape(selector) + r"\s*\{([^{}]*)\}")
     found = pat.findall(html)
     assert found, f"no CSS rule for {selector!r} — it was renamed or deleted"
     return found[-1]
@@ -2467,39 +2479,80 @@ def test_slide_label_never_sits_under_the_thumb() -> None:
     )
 
 
-def test_phone_bar_drops_words_from_play_and_loop_but_never_from_stop() -> None:
-    """Space for the slider comes from the two controls a glyph fully explains.
+def test_play_is_the_only_control_that_grows() -> None:
+    """Area is hierarchy, and the bar had it backwards.
 
-    PLAY and Loop are unambiguous as symbols. STOP is not: it is the control
-    whose mistake happens in front of an audience, and in slide mode its label
-    is the only thing that says a tap will not do anything. Hiding that word to
-    win a few pixels would reintroduce exactly the silent-Stop failure the
-    slider was built to end.
+    PLAY was 17% of the transport bar while a full-red Stop slide took 48%: the
+    loudest colour and the largest target belonged to the one action nobody
+    wants to trigger by accident, and the control the whole bar exists for was
+    the smallest thing on it. From the far end of a stage, in peripheral
+    vision, size is the only hierarchy that survives.
+
+    So exactly one control in the main row grows, and it is PLAY. Loop and
+    RECONNECT are fixed: whatever width is left over is PLAY's.
     """
     html = REASET_HTML.read_text(encoding="utf-8")
 
-    phone = [
-        block
-        for block in re.findall(r"@media \(max-width: 600px\)\s*\{(.*?)\n        \}", html, re.S)
-        if ".app-transport" in block
-    ]
-    assert len(phone) == 1, (
-        f"expected one phone rule block for the transport bar, found {len(phone)}"
+    play = _css_decls(html, ".t-btn-play")
+    assert re.search(r"flex:\s*1\b", play), (
+        "PLAY no longer absorbs the leftover width, so the bar is back to "
+        "splitting by weight — which is how Stop came to be three times its size"
     )
-    block = phone[0]
 
-    assert re.search(r"\.t-lbl\s*\{[^{}]*display:\s*none", block), (
-        "the phone bar no longer hides the PLAY and Loop words, so the four "
-        "controls are back to sharing the width by flex weight and the slider "
-        "has no travel"
+    for sel, why in [
+        (".t-btn-loop", "Loop"),
+        (".tr-row-main > .t-btn-sync", "RECONNECT"),
+        (".tr-row-main > .t-btn-stop", "the tap-mode Stop"),
+    ]:
+        decls = _css_decls(html, sel)
+        assert re.search(r"flex:\s*0 0 auto", decls) and "width:" in decls, (
+            f"{why} can grow again — anything that grows beside PLAY takes "
+            f"width from the one control that should have it all"
+        )
+
+
+def test_stop_takes_its_own_row_above_play() -> None:
+    """The easiest thing to reach must never be the one that ends the show.
+
+    On a tablet propped on a stand the bottom edge is the shortest reach, and
+    the control reached for blind — mid-song, between fills — is PLAY. So Stop
+    goes on the row ABOVE it, where a mis-reach lands on nothing, and where it
+    has the full width a slide needs to have real travel.
+
+    One button, re-parented between the two rows. Two Stop buttons in the
+    markup would need two of everything that keeps a Stop control honest, and
+    the last time this bar carried three copies of it, two of them never
+    updated their label at all.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    bar = re.search(r'<div class="app-transport">(.*?)\n        </div>', html, re.S)
+    assert bar, "the transport bar is gone"
+    stop_row = bar.group(1).find('id="tr-row-stop"')
+    main_row = bar.group(1).find('id="tr-row-main"')
+    assert stop_row != -1 and main_row != -1, "the transport bar lost one of its rows"
+    assert stop_row < main_row, (
+        "the Stop row is no longer above the main row — on a propped device "
+        "that puts the show-ending control in the easiest reach"
     )
-    assert not re.search(r"\.stop-label\s*\{[^{}]*display:\s*none", block), (
-        "the phone bar hides the Stop label — a Stop that will not answer a tap "
-        "and does not say so is the failure this control replaced"
+
+    assert html.count('id="main-stop-btn"') == 1, (
+        "there is more than one footer Stop button; one of them will drift"
     )
-    assert re.search(r"\.t-btn-stop\s*\{[^{}]*flex:\s*1", block), (
-        "STOP is no longer the control that absorbs the freed width, so removing "
-        "the words bought the slider nothing"
+
+    body = strip_comments(inline_scripts(html)[0])
+    place = strip_comments(extract_function(body, "_placeStopControl"))
+    assert "tr-row-stop" in place and "tr-row-main" in place, (
+        "_placeStopControl() no longer moves the button between the two rows"
+    )
+    assert re.search(r"""_stopMode\s*===\s*['"]slide['"]""", place), (
+        "the row the Stop button lands in no longer follows the mode, so tap "
+        "mode gets a full-width bar for a control that is just a button"
+    )
+    labels = strip_comments(extract_function(body, "_refreshStopLabels"))
+    assert "_placeStopControl()" in labels, (
+        "nothing calls _placeStopControl() when the mode changes — the button "
+        "stays on whichever row it was on when the page loaded"
     )
 
 
@@ -2533,4 +2586,166 @@ def test_play_button_keeps_its_word_in_a_span(script_body: str) -> None:
         assert "t-ico" in write and "t-lbl" in write, (
             "a writer of the PLAY button emits a flat label instead of the two "
             f"spans, so the phone bar re-crams on the next transport change: {write.strip()[:90]}"
+        )
+
+
+def test_stop_slide_works_without_pointer_events(script_body: str) -> None:
+    """On the iPad this has to run on, `pointerdown` never fires.
+
+    WebKit shipped no Pointer Events until Safari 13, and a tablet that has
+    stopped receiving updates never gets that engine — Chrome on iOS is the
+    same WebKit underneath, so installing another browser changes nothing.
+    Bound to pointer events alone, Stop on those devices is not merely ugly:
+    it is INERT. The one control whose failure mode is "the show does not
+    stop".
+
+    Three properties, and the gesture is broken on one engine or the other if
+    any of them goes:
+
+      the fallback exists at all — touch, and mouse for a trackpad;
+      the two paths are EXCLUSIVE, or a device reporting both runs the drag
+        twice and the thumb jumps at double speed;
+      the touch path calls preventDefault, because `touch-action: none` — what
+        stops the page scrolling out from under the drag — landed in Safari 13
+        as well. Without it the first vertical wobble hands the gesture to the
+        scroller.
+    """
+    body = strip_comments(script_body)
+
+    assert "PointerEvent" in body, (
+        "nothing detects Pointer Events any more, so the binding cannot choose "
+        "a path and one engine or the other gets no Stop gesture"
+    )
+
+    init = strip_comments(extract_function(body, "initStopMode"))
+    assert "_bindStopPointer" in init and "_bindStopLegacy" in init, (
+        "the Stop control no longer binds both input models"
+    )
+    assert re.search(r"if\s*\(\s*_HAS_POINTER\s*\)", init), (
+        "the two binding paths are no longer exclusive — a device that reports "
+        "both touch and pointer will run the drag twice"
+    )
+
+    legacy = strip_comments(extract_function(body, "_bindStopLegacy"))
+    for evt in ("touchstart", "touchmove", "touchend"):
+        assert evt in legacy, f"the legacy path does not listen for {evt}"
+    assert legacy.count("preventDefault") >= 2, (
+        "the touch path no longer cancels the default action, so on an engine "
+        "without touch-action the page scrolls instead of the thumb moving"
+    )
+    assert "passive: false" in legacy, (
+        "preventDefault is registered on a passive listener, where the browser "
+        "ignores it — which is the same as not calling it at all"
+    )
+
+
+def test_transport_bar_reserves_space_without_flex_gap() -> None:
+    """`gap` in a flex container is a no-op on the engine this must run on.
+
+    WebKit did not support it until 14.1. Where it is the only thing separating
+    the controls, they fuse into one bar-shaped slab — and every target on it
+    becomes adjacent to every other, on the screen where a mis-tap stops the
+    show.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    bar_css = html[html.index("        .app-transport {"):html.index("        .t-btn-loop {")]
+    assert not re.search(r"^\s*(gap|column-gap|row-gap)\s*:", bar_css, re.M), (
+        "the transport bar is spacing itself with flex `gap` again — it "
+        "resolves to zero on the tablet this has to run on"
+    )
+    assert re.search(r"\.tr-row\s*>\s*\.t-btn\s*\{[^{}]*margin-right", bar_css), (
+        "nothing reserves the space between the transport controls"
+    )
+
+
+# ── Legacy WebKit ────────────────────────────────────────────────────────────
+# ReaSet has to run on an iPad that no longer receives updates. Chrome on iOS
+# is the system WebKit with a different icon, so "install another browser" is
+# not a fix — the engine is whatever the last iOS for that device shipped.
+#
+# None of what follows is a parse error, which is why none of it would show up
+# in review: the engine drops the declaration it cannot read and renders
+# something plausible-but-wrong. A modal backdrop that darkens a 40x20 corner.
+# A song title sized for a stage rendering at body-text size. Controls with no
+# space between them on a touch screen.
+
+
+def test_flex_gap_has_a_fallback_for_every_container() -> None:
+    """`gap` in a flex container is a no-op before WebKit 14.1.
+
+    Not a degraded layout — zero. Every control the gap separates ends up
+    touching the next one, and on a touch UI two adjacent targets with no space
+    between them is a mis-tap waiting to happen.
+
+    So every flex container that uses gap needs a margin fallback, and the
+    fallback must be gated: if it could apply on an engine that also honours
+    gap, the spacing doubles everywhere.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    css = html[html.index("<style>"):html.index("</style>")]
+
+    flex_gap = []
+    for m in re.finditer(r"([^{}]*)\{([^{}]*)\}", css):
+        sel = m.group(1).strip().split("\n")[-1].strip()
+        body = m.group(2)
+        if not re.search(r"^\s*gap\s*:", body, re.M):
+            continue
+        disp = re.search(r"display:\s*([\w-]+)", body)
+        if disp and disp.group(1) in ("flex", "inline-flex"):
+            flex_gap.append(sel)
+
+    assert flex_gap, "no flex container uses gap any more — this test is obsolete"
+
+    missing = [s for s in flex_gap if ("html.no-flexgap " + s + " >") not in css]
+    assert not missing, (
+        f"{len(missing)} flex container(s) use gap with no margin fallback, so "
+        f"their children touch on the tablet this has to run on: {missing[:5]}"
+    )
+
+    # The gate. Without it the fallback and a working gap both apply.
+    assert ".no-flexgap" in css, "the fallback rules are no longer gated"
+    body = strip_comments(inline_scripts(html)[0])
+    detect = strip_comments(extract_function(body, "detectFlexGap"))
+    assert "scrollWidth" in detect, (
+        "flex-gap support is no longer MEASURED — a UA string cannot answer "
+        "this, since Chrome on iOS reports Chrome and runs the failing engine"
+    )
+    assert "no-flexgap" in detect, "the detect no longer sets the class it exists to set"
+    assert "removeChild" in detect, "the probe element is left in the document"
+
+
+def test_shorthands_older_webkit_drops_carry_a_longhand() -> None:
+    """`inset`, `clamp()` and `aspect-ratio` all postdate this engine.
+
+    Each one fails silently and differently: `inset: 0` dropped leaves an
+    overlay collapsed to its content in the top-left corner, so a modal
+    backdrop darkens a small rectangle instead of the screen; a dropped
+    `clamp()` font-size falls back to what the element inherited, which on the
+    Live View's song title is body text where 78px of stage-readable type
+    should be.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    css = html[html.index("<style>"):html.index("</style>")]
+
+    # Comments explaining the rule are not the rule.
+    live_css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    assert "inset: 0" not in live_css, (
+        "the `inset` shorthand is back — WebKit before 14.1 drops it and the "
+        "overlay collapses to its content in the top-left corner"
+    )
+
+    for m in re.finditer(r"font-size:\s*clamp\(", css):
+        head = css[max(0, m.start() - 140):m.start()]
+        assert re.search(r"font-size:\s*[\d.]+px;\s*$", head), (
+            "a clamp() font-size has no plain fallback before it, so on an "
+            f"engine that drops clamp the element inherits its size: "
+            f"{css[m.start():m.start() + 60]!r}"
+        )
+
+    for m in re.finditer(r"^\s*aspect-ratio:", css, re.M):
+        head = css[max(0, m.start() - 160):m.start()]
+        assert re.search(r"height:\s*[^;]+;\s*$", head), (
+            "aspect-ratio with no height fallback — the box has no height at "
+            "all on an engine that drops it"
         )
