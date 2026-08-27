@@ -208,9 +208,61 @@ async function gapEmulation(browser) {
     }
 }
 
-// ── 3. The probe itself ───────────────────────────────────────────────────
+// ── 3. Every target stays a target ────────────────────────────────────────
+//
+// 44pt in both axes is the floor for a finger, and a slider needs travel on
+// top of that. Both were lost once already: a phone on its side is 844px wide
+// and 390px tall, and a width-only media query read that as a tablet — the bar
+// took 46% of the screen and left about one song visible. Fixing that by
+// compressing it then took the Stop track down to 32px, which is thin enough
+// that a thumb landing slightly high misses the one control that has to work.
+//
+// So both directions are checked at once, at every size that matters.
+async function touchTargets(browser) {
+    console.log('\n3. Touch targets and slider travel');
+    const sizes = [
+        [844, 390, 'phone landscape'], [390, 844, 'phone portrait'],
+        [1024, 768, 'iPad landscape'], [768, 1024, 'iPad portrait'],
+        [320, 568, 'small phone'],     [1400, 900, 'desktop'],
+    ];
+    for (const [w, h, label] of sizes) {
+        const ctx = await browser.newContext({ viewport: { width: w, height: h } });
+        const page = await ctx.newPage();
+        await page.addInitScript(() => {
+            localStorage.setItem('reaset_stop_mode', 'slide');
+            localStorage.setItem('reaset_lang', 'pt');   // the longest labels
+        });
+        await page.goto(FILE);
+        await page.waitForTimeout(600);
+        const r = await page.evaluate(() => {
+            const box = id => {
+                const b = document.getElementById(id).getBoundingClientRect();
+                return [Math.round(b.width), Math.round(b.height)];
+            };
+            const stop = document.getElementById('main-stop-btn');
+            const thumb = stop.querySelector('.ss-thumb');
+            const label = stop.querySelector('.stop-label');
+            const bar = document.querySelector('.app-transport').getBoundingClientRect();
+            return {
+                heights: ['main-play-btn', 'main-stop-btn', 'footer-loop-btn', 'reconnect-btn'].map(i => box(i)[1]),
+                travel: stop.clientWidth - thumb.offsetWidth - 8,
+                clipped: label.scrollWidth > label.clientWidth + 1,
+                row: stop.parentElement.id,
+                barShare: Math.round(bar.height / window.innerHeight * 100),
+            };
+        });
+        const shortest = Math.min(...r.heights);
+        check(`${label}: every control is at least 44px tall`, shortest >= 44, `shortest ${shortest}px`);
+        check(`${label}: the slider has real travel`, r.travel >= 80, `${r.travel}px`);
+        check(`${label}: the label is not clipped`, !r.clipped);
+        check(`${label}: the bar does not eat the setlist`, r.barShare <= 35, `${r.barShare}% of the screen`);
+        await ctx.close();
+    }
+}
+
+// ── 4. The probe itself ───────────────────────────────────────────────────
 async function probeBehaviour(browser) {
-    console.log('\n3. The flex-gap probe');
+    console.log('\n4. The flex-gap probe');
     const { ctx, page, errors } = await openPage(browser, {});
     const cls = await page.evaluate(() => document.documentElement.className);
     check('does not fire on an engine that supports gap', !/no-flexgap/.test(cls), `class="${cls}"`);
@@ -226,6 +278,7 @@ async function probeBehaviour(browser) {
         console.log('ReaSet legacy engine harness —', FILE);
         await gestureMatrix(browser);
         await gapEmulation(browser);
+        await touchTargets(browser);
         await probeBehaviour(browser);
     } finally {
         await browser.close();

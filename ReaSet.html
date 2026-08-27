@@ -1938,8 +1938,13 @@
         }
 
         /* An iPad on a stand is further away than a phone in a hand, and it has
-           the room, so everything grows rather than merely centring. */
-        @media (min-width: 700px) {
+           the room, so everything grows rather than merely centring.
+
+           Gated on height as well as width, because a phone on its side is
+           844px wide and 390px tall: on width alone it read as a tablet and
+           took the tablet's bar, which is 46% of that screen and leaves about
+           one song visible. */
+        @media (min-width: 700px) and (min-height: 600px) {
             .app-transport { padding: 14px 18px calc(14px + env(safe-area-inset-bottom)); }
             .tr-row > .t-btn { margin-right: 10px; }
             .tr-row-main > .t-btn { padding-top: 26px; padding-bottom: 26px; }
@@ -1950,6 +1955,21 @@
             .tr-row-main > .t-btn-sync { width: 84px; }
             .tr-row-main > .t-btn-loop .t-lbl { font-size: 11px; }
             .stop-ctl.is-slide .stop-label { font-size: 13px; }
+        }
+
+        /* Short viewport — a phone in landscape, or a small window. The bar
+           keeps every target at 44px, which is the floor for a finger, and
+           spends nothing above it: the setlist is what the remaining height is
+           for. */
+        @media (max-height: 560px) {
+            .app-transport { padding-top: 6px; padding-bottom: calc(6px + env(safe-area-inset-bottom)); }
+            .tr-row-main > .t-btn { padding-top: 10px; padding-bottom: 10px; }
+            .tr-row-stop { margin-bottom: 5px; }
+            .tr-row-stop > .stop-ctl.is-slide { padding-top: 15px; padding-bottom: 15px; }
+            .t-btn-play { font-size: 15px; }
+            .t-btn-play .t-ico { font-size: 17px; }
+            .tr-row-main > .t-btn-loop { width: 68px; }
+            .tr-row-main > .t-btn-sync { width: 54px; }
         }
 
         .t-btn-loop {
