@@ -586,88 +586,6 @@ def test_view_tabs_have_one_owner(script_body: str) -> None:
         )
 
 
-@requires_node
-def test_every_stop_button_says_what_it_wants() -> None:
-    """A Stop button that will not respond to a tap must say so.
-
-    The label was a literal "STOP" in the main transport's markup and in Live
-    View's, and nothing ever updated either: the button said STOP, wanted a
-    three-second hold, and did nothing at all for a tap. Silently. That is the
-    worst failure a transport control can have, and it cost a real testing
-    session. Hold is gone, but the property that broke is the same one — three
-    copies of a control, one function that must reach all of them.
-
-    Asserts every Stop control shares the class the handlers and the styles are
-    written against, carries a label element and a thumb, and that one function
-    writes all of them at once.
-    """
-    html = REASET_HTML.read_text(encoding="utf-8")
-
-    stop_buttons = re.findall(r"<button[^>]*\bstop-ctl\b[^>]*>(.*?)</button>", html, re.S)
-    assert len(stop_buttons) == 3, (
-        f"expected the three Stop controls to carry .stop-ctl, found {len(stop_buttons)} — "
-        f"a copy that misses the class gets neither the gesture nor the label"
-    )
-    for markup in stop_buttons:
-        assert 'class="stop-label"' in markup, (
-            "a Stop control has no .stop-label, so its text can never be kept in "
-            f"step with the mode: {markup.strip()[:80]}"
-        )
-        assert 'class="ss-thumb"' in markup, (
-            "a Stop control has no .ss-thumb, so in slide mode it renders as a "
-            f"track with nothing to drag: {markup.strip()[:80]}"
-        )
-
-    # The retired gesture must not linger in markup or styles.
-    assert "stop-holding" not in html and "handleMainStopPress" not in html, (
-        "the three-second hold is still wired up somewhere"
-    )
-
-    scripts = inline_scripts(html)[0]
-    body = extract_function(scripts, "_refreshStopLabels")
-    assert "querySelectorAll('.stop-ctl')" in body, (
-        "_refreshStopLabels no longer writes every control at once — one button "
-        "will drift out of step with the others"
-    )
-    assert "is-slide" in body and "_stopMode" in body, (
-        "the label and the slide class no longer follow _stopMode"
-    )
-
-
-def test_stop_slide_fires_on_release_not_on_threshold(script_body: str) -> None:
-    """A slide taken to the end and then back is a change of mind.
-
-    Firing the moment the thumb crosses the commit threshold would make the
-    gesture uninterruptible — which removes the one property that makes it
-    safer than a tap. Stop must happen on release, and only if still armed.
-    """
-    body = strip_comments(script_body)
-    up = strip_comments(extract_function(body, "_stopCtlEnd"))
-    assert "smartStop()" in up, "_stopCtlEnd() no longer stops on release"
-    move = strip_comments(extract_function(body, "_stopCtlDrag"))
-    assert "smartStop" not in move, (
-        "_stopCtlDrag() stops as soon as the threshold is crossed — the slide "
-        "can no longer be abandoned, which is the whole point of it"
-    )
-    down = strip_comments(extract_function(body, "_stopCtlBegin"))
-    assert re.search(r"""_stopMode\s*!==\s*['"]slide['"]\s*\)\s*\{\s*smartStop\(\)""", down), (
-        "tap mode no longer acts on press"
-    )
-
-
-def test_stop_mode_migrates_the_retired_hold(script_body: str) -> None:
-    """A device that stored 'hold' must not come back with a gesture nothing
-    implements — that is a Stop button that does nothing at all, again."""
-    body = strip_comments(script_body)
-    decl = body[body.index("var _stopMode ="):body.index("function toggleStopMode")]
-    assert re.search(r"""v\s*===\s*['"]hold['"]""", decl), (
-        "the stored 'hold' mode is no longer migrated"
-    )
-    assert re.search(r"""return\s+['"]slide['"]""", decl), (
-        "'hold' does not migrate to 'slide'"
-    )
-
-
 def test_modal_buttons_use_classes_that_exist(script_body: str) -> None:
     """showAppConfirm() REPLACES the OK button's className.
 
@@ -1115,51 +1033,6 @@ def test_controller_list_excludes_songs_outside_the_set(script_body: str) -> Non
         f"{body.count('(_hideSkippedEffective() ? 1 : 0)')}"
     )
 
-
-def test_reconnect_does_not_share_the_loop_glyph() -> None:
-    """Two controls, one symbol, one transport bar.
-
-    RECONNECT used the ↻ (&#8635;) codepoint — the same one .t-btn-loop draws,
-    two buttons away on the same bar. Mid-show that is a coin flip between
-    "repeat this song" and "restart the network connection", and those are not
-    neighbouring mistakes.
-    """
-    html = REASET_HTML.read_text(encoding="utf-8")
-    sync = re.search(r'<button[^>]*\bt-btn-sync\b[^>]*>(.*?)</button>', html, re.S)
-    assert sync, "the reconnect button is gone"
-    for glyph in ("&#8635;", "\u21bb", "&#8634;", "\u21ba"):
-        assert glyph not in sync.group(1), (
-            f"the reconnect button is drawing {glyph!r} again — that is the loop icon"
-        )
-    assert "<svg" in sync.group(1), (
-        "the reconnect button has no icon at all"
-    )
-    loop = re.search(r'<button[^>]*\bt-btn-loop\b[^>]*>(.*?)</button>', html, re.S)
-    assert loop, "the loop button is gone"
-    # ↻ is not merely ambiguous next to a reconnect button — it is the RELOAD
-    # mark, so on its own it reads as "refresh the page". Neither control may
-    # carry it now: the loop draws the media repeat mark, the reconnect a plug.
-    for glyph in ("&#8635;", "\u21bb", "&#8634;", "\u21ba"):
-        assert glyph not in loop.group(1), (
-            f"the loop button is drawing {glyph!r} again — that is the reload "
-            f"mark, which is what made it unreadable beside a reconnect button"
-        )
-    assert "<svg" in loop.group(1), "the loop button has no icon at all"
-    assert re.search(r">\s*LOOP\s*<", loop.group(1)), (
-        "the loop button lost its word — a symbol nobody can name is not an "
-        "icon, and this one was reported as unreadable"
-    )
-
-
-# ── i18n ─────────────────────────────────────────────────────────────────────
-# Nothing FAILS when a string bypasses the translation table. It renders, it is
-# readable to whoever wrote it, and only a user in the other language sees the
-# seam — which is how a phone set to English ended up showing
-#
-#     ⚠ El dispositivo "Mac · Chrome" is now the Director — this device is read-only
-#
-# one sentence in two languages. A reviewer will not reliably catch that. These
-# will.
 
 def _i18n_rows() -> list[list[str]]:
     html = REASET_HTML.read_text(encoding="utf-8")
@@ -2060,73 +1933,6 @@ def test_the_displaced_banner_does_not_invent_a_takeover(script_body: str) -> No
     assert "stepped down" in banner, "there is no message for the no-takeover case"
 
 
-def test_reconnect_button_reports_the_connection(script_body: str) -> None:
-    """A button that looks the same whether or not anything is wrong asks the
-    musician to remember what it is for and to guess whether now is the moment.
-
-    Connected: disabled, quiet, a status light. Lost: red, pulsing, pressable.
-    Both driven by the SAME evidence as the badge dot, so the two can never
-    disagree about whether REAPER is answering.
-    """
-    body = strip_comments(script_body)
-    fn = strip_comments(extract_function(body, "_refreshReconnectBtn"))
-    assert "is-live" in fn and "is-down" in fn, "the button no longer has two states"
-    assert "disabled" in fn, (
-        "the button stays pressable while connected — a mid-show press then "
-        "restarts polling for no reason"
-    )
-    assert "_connIsLive()" in fn or "live" in fn, "it no longer reads the connection"
-
-    badge = strip_comments(extract_function(body, "_refreshConnBadge"))
-    assert "_refreshReconnectBtn" in badge, (
-        "the button is refreshed somewhere other than beside the badge dot, so "
-        "the two can drift apart about the same fact"
-    )
-    assert "_connIsLive" in badge, "the badge and the button no longer share one test"
-
-    html = REASET_HTML.read_text(encoding="utf-8")
-    assert 'id="reconnect-btn"' in html, "the button lost the id its refresher needs"
-
-    # `disabled` stops the click. Only CSS stops it LOOKING pressable, and the
-    # two have to agree — a hover repaint on a control that does nothing is the
-    # affordance the disabled state exists to remove.
-    #
-    # This is a specificity trap, not a nicety: `.t-btn-sync:hover` has the SAME
-    # specificity as `.t-btn-sync.is-live` and sits LATER in the file, so it wins
-    # unless it is guarded. It shipped that way and was caught on a real screen.
-    hover = re.search(r"^\s*\.t-btn-sync(:[^\s{]*)*:hover\s*(,|\{)", html, re.M)
-    assert hover, ".t-btn-sync hover rule is gone — re-check this by hand"
-    assert ":not(:disabled)" in hover.group(0) or ".is-down" in hover.group(0), (
-        f"the generic hover rule {hover.group(0).strip()!r} still applies to the "
-        f"DISABLED connected button, so it repaints under the cursor and reads "
-        f"as pressable"
-    )
-    assert re.search(r"\.t-btn:disabled:active\s*\{[^}]*transform:\s*none", html), (
-        "a disabled transport button still shrinks when tapped, which reads as "
-        "\"it did something\" on a control that deliberately does nothing"
-    )
-    # Scoped to the rule, not the file: `animation:` appears in dozens of other
-    # rules, so a file-wide search never sees this one go.
-    down = re.search(r"\.t-btn-sync\.is-down\s*\{([^}]*)\}", html)
-    assert down, ".t-btn-sync.is-down is gone — there is no disconnected state"
-    assert "animation:" in down.group(1), (
-        "the disconnected state no longer pulses. It is the only thing on that "
-        "bar that moves, and that is the whole point: a musician should not have "
-        "to remember what the button is for or guess whether now is the moment."
-    )
-    assert "background:" in down.group(1), (
-        "the disconnected state no longer changes colour either, so it reads "
-        "identically to the connected one"
-    )
-    # The pulse must be skippable, and the state still legible without it.
-    rm = re.search(r"@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{(.*?)\n        \}",
-                   html, re.S)
-    assert rm and "t-btn-sync.is-down" in rm.group(1) and "animation: none" in rm.group(1), (
-        "the pulse ignores prefers-reduced-motion — colour and icon must still "
-        "carry the state for a viewer who asked for less motion"
-    )
-
-
 def test_a_warning_banner_does_not_cover_what_it_warns_about() -> None:
     """The banner is position:fixed directly under the top bar.
 
@@ -2425,60 +2231,6 @@ def _css_decls(html: str, selector: str) -> str:
     return found[-1]
 
 
-def test_slide_label_cannot_wrap() -> None:
-    """A wrapped label is what broke the slider, and it broke everything else.
-
-    The label taking a second line grows the button, the taller button stretches
-    the absolutely-positioned thumb, and the stretched thumb stops looking like
-    something you drag. One declaration prevents the whole cascade, and a second
-    caps the thumb so a tall button can never produce the blob again.
-    """
-    html = REASET_HTML.read_text(encoding="utf-8")
-
-    label = _css_decls(html, ".stop-ctl .stop-label")
-    assert "white-space: nowrap" in label, (
-        "the Stop label may wrap again — on a narrow phone 'SLIDE TO STOP' "
-        "takes three lines and drags the thumb's geometry with it"
-    )
-
-    thumb = _css_decls(html, ".stop-ctl.is-slide .ss-thumb")
-    assert "max-height" in thumb, (
-        "nothing caps the thumb's height, so a button that grows for any reason "
-        "stretches it back into an oversized blob"
-    )
-
-    slide_label = _css_decls(html, ".stop-ctl.is-slide .stop-label")
-    assert "text-overflow: ellipsis" in slide_label, (
-        "the label has no truncation fallback — on a 320px phone the Portuguese "
-        "sentence cannot fit beside the thumb at any readable size, and a hard "
-        "mid-letter cut is what made this control look broken in the first place"
-    )
-
-
-def test_slide_label_never_sits_under_the_thumb() -> None:
-    """The thumb is absolutely positioned, so padding is what reserves its lane.
-
-    The first attempt centred the label with auto margins AND pushed it right
-    with its own padding. The two fought for the same pixels: on a wide button
-    the text sat off-centre, and on a narrow one it was squeezed to nothing
-    underneath the thumb. Padding on the button — which the label cannot spend
-    — is the only thing that holds the lane open at every width.
-    """
-    html = REASET_HTML.read_text(encoding="utf-8")
-
-    slide = _css_decls(html, ".stop-ctl.is-slide")
-    label = _css_decls(html, ".stop-ctl.is-slide .stop-label")
-
-    assert "padding-left" in slide, (
-        "the slide track no longer reserves a lane for the thumb, so the label "
-        "renders underneath it"
-    )
-    assert "margin-left: auto" not in label and "padding-left" not in label, (
-        "the label is positioning itself again — that is the arrangement that "
-        "put the text under the thumb"
-    )
-
-
 def test_play_is_the_only_control_that_grows() -> None:
     """Area is hierarchy, and the bar had it backwards.
 
@@ -2501,59 +2253,13 @@ def test_play_is_the_only_control_that_grows() -> None:
 
     for sel, why in [
         (".t-btn-loop", "Loop"),
-        (".tr-row-main > .t-btn-sync", "RECONNECT"),
-        (".tr-row-main > .t-btn-stop", "the tap-mode Stop"),
+        (".t-btn-nav", "Previous and Next"),
     ]:
         decls = _css_decls(html, sel)
         assert re.search(r"flex:\s*0 0 auto", decls) and "width:" in decls, (
             f"{why} can grow again — anything that grows beside PLAY takes "
             f"width from the one control that should have it all"
         )
-
-
-def test_stop_takes_its_own_row_above_play() -> None:
-    """The easiest thing to reach must never be the one that ends the show.
-
-    On a tablet propped on a stand the bottom edge is the shortest reach, and
-    the control reached for blind — mid-song, between fills — is PLAY. So Stop
-    goes on the row ABOVE it, where a mis-reach lands on nothing, and where it
-    has the full width a slide needs to have real travel.
-
-    One button, re-parented between the two rows. Two Stop buttons in the
-    markup would need two of everything that keeps a Stop control honest, and
-    the last time this bar carried three copies of it, two of them never
-    updated their label at all.
-    """
-    html = REASET_HTML.read_text(encoding="utf-8")
-
-    bar = re.search(r'<div class="app-transport">(.*?)\n        </div>', html, re.S)
-    assert bar, "the transport bar is gone"
-    stop_row = bar.group(1).find('id="tr-row-stop"')
-    main_row = bar.group(1).find('id="tr-row-main"')
-    assert stop_row != -1 and main_row != -1, "the transport bar lost one of its rows"
-    assert stop_row < main_row, (
-        "the Stop row is no longer above the main row — on a propped device "
-        "that puts the show-ending control in the easiest reach"
-    )
-
-    assert html.count('id="main-stop-btn"') == 1, (
-        "there is more than one footer Stop button; one of them will drift"
-    )
-
-    body = strip_comments(inline_scripts(html)[0])
-    place = strip_comments(extract_function(body, "_placeStopControl"))
-    assert "tr-row-stop" in place and "tr-row-main" in place, (
-        "_placeStopControl() no longer moves the button between the two rows"
-    )
-    assert re.search(r"""_stopMode\s*===\s*['"]slide['"]""", place), (
-        "the row the Stop button lands in no longer follows the mode, so tap "
-        "mode gets a full-width bar for a control that is just a button"
-    )
-    labels = strip_comments(extract_function(body, "_refreshStopLabels"))
-    assert "_placeStopControl()" in labels, (
-        "nothing calls _placeStopControl() when the mode changes — the button "
-        "stays on whichever row it was on when the page loaded"
-    )
 
 
 def test_play_button_keeps_its_word_in_a_span(script_body: str) -> None:
@@ -2589,56 +2295,6 @@ def test_play_button_keeps_its_word_in_a_span(script_body: str) -> None:
         )
 
 
-def test_stop_slide_works_without_pointer_events(script_body: str) -> None:
-    """On the iPad this has to run on, `pointerdown` never fires.
-
-    WebKit shipped no Pointer Events until Safari 13, and a tablet that has
-    stopped receiving updates never gets that engine — Chrome on iOS is the
-    same WebKit underneath, so installing another browser changes nothing.
-    Bound to pointer events alone, Stop on those devices is not merely ugly:
-    it is INERT. The one control whose failure mode is "the show does not
-    stop".
-
-    Three properties, and the gesture is broken on one engine or the other if
-    any of them goes:
-
-      the fallback exists at all — touch, and mouse for a trackpad;
-      the two paths are EXCLUSIVE, or a device reporting both runs the drag
-        twice and the thumb jumps at double speed;
-      the touch path calls preventDefault, because `touch-action: none` — what
-        stops the page scrolling out from under the drag — landed in Safari 13
-        as well. Without it the first vertical wobble hands the gesture to the
-        scroller.
-    """
-    body = strip_comments(script_body)
-
-    assert "PointerEvent" in body, (
-        "nothing detects Pointer Events any more, so the binding cannot choose "
-        "a path and one engine or the other gets no Stop gesture"
-    )
-
-    init = strip_comments(extract_function(body, "initStopMode"))
-    assert "_bindStopPointer" in init and "_bindStopLegacy" in init, (
-        "the Stop control no longer binds both input models"
-    )
-    assert re.search(r"if\s*\(\s*_HAS_POINTER\s*\)", init), (
-        "the two binding paths are no longer exclusive — a device that reports "
-        "both touch and pointer will run the drag twice"
-    )
-
-    legacy = strip_comments(extract_function(body, "_bindStopLegacy"))
-    for evt in ("touchstart", "touchmove", "touchend"):
-        assert evt in legacy, f"the legacy path does not listen for {evt}"
-    assert legacy.count("preventDefault") >= 2, (
-        "the touch path no longer cancels the default action, so on an engine "
-        "without touch-action the page scrolls instead of the thumb moving"
-    )
-    assert "passive: false" in legacy, (
-        "preventDefault is registered on a passive listener, where the browser "
-        "ignores it — which is the same as not calling it at all"
-    )
-
-
 def test_transport_bar_reserves_space_without_flex_gap() -> None:
     """`gap` in a flex container is a no-op on the engine this must run on.
 
@@ -2654,7 +2310,7 @@ def test_transport_bar_reserves_space_without_flex_gap() -> None:
         "the transport bar is spacing itself with flex `gap` again — it "
         "resolves to zero on the tablet this has to run on"
     )
-    assert re.search(r"\.tr-row\s*>\s*\.t-btn\s*\{[^{}]*margin-right", bar_css), (
+    assert re.search(r"\.app-transport\s*>\s*\.t-btn\s*\{[^{}]*margin-right", bar_css), (
         "nothing reserves the space between the transport controls"
     )
 
@@ -2790,3 +2446,176 @@ def test_shorthands_older_webkit_drops_carry_a_longhand() -> None:
             "aspect-ratio with no height fallback — the box has no height at "
             "all on an engine that drops it"
         )
+
+
+# ── The transport bar, AbleSet-shaped ───────────────────────────────────────
+# Previous · Play/Pause · Loop · Next, and nothing else. Every control removed
+# from here was removed for the same reason: a bar in a musician's peripheral
+# vision can hold about four things, and two of the six were not played.
+
+
+def test_transport_bar_carries_only_what_is_played() -> None:
+    """Four controls, and Stop is not one of them.
+
+    Stop and pause both halt playback and differ only in what they silently
+    throw away — Stop discards the queue and the cue, and rewinds. Two controls
+    for one intent, distinguished by their side effects, is the shape of a
+    mistake made in the dark. RECONNECT was worse: a permanent target for
+    something useless during all but a few seconds of a show.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    bar = re.search(r'<div class="app-transport">(.*?)\n        </div>', html, re.S)
+    assert bar, "the transport bar is gone"
+    ids = re.findall(r'<button[^>]*\bid="([^"]+)"', bar.group(1))
+    assert ids == ["footer-prev-btn", "main-play-btn", "footer-loop-btn", "footer-next-btn"], (
+        f"the transport bar is no longer Previous / Play / Loop / Next: {ids}"
+    )
+
+    for gone, why in [
+        ("stop-ctl", "the Stop control"),
+        ("reconnect-btn", "the RECONNECT button"),
+        ("ss-thumb", "the slide-to-stop thumb"),
+    ]:
+        assert gone not in html, f"{why} is back on the bar"
+
+
+def test_removing_the_stop_button_did_not_remove_stopping(script_body: str) -> None:
+    """Auto-Stop, a stop-after marker and the MIDI stop action still stop.
+
+    The button went; the capability did not. Deleting smartStop() with it would
+    silently break the end-of-song behaviour the whole epic is about — a song
+    marked "stop here" would chain into the next one instead, which is a worse
+    failure than any the Stop button ever caused.
+    """
+    body = strip_comments(script_body)
+    assert re.search(r"\bfunction smartStop\s*\(", body), (
+        "smartStop() is gone — Auto-Stop and stop-after markers have nothing "
+        "left to call"
+    )
+
+    # The boundary executor stops through REAPER's action id directly; that path
+    # must survive too, or a stop-after marker plays on.
+    assert '1016, "song-stop-after"' in body, (
+        "the stop-after boundary no longer stops the transport"
+    )
+    assert '1016, "auto-stop-fallback"' in body, "Auto-Stop no longer stops the transport"
+
+
+def test_one_navigation_path_for_every_surface(script_body: str) -> None:
+    """Four surfaces offer Previous / Next. One function serves them.
+
+    liveNav and canvasNav were literal duplicates of each other, and the footer
+    would have been a third caller. This file has already lost two afternoons
+    to copies of a control drifting apart.
+
+    The MIDI module has its own pair and they are routed here as well, but that
+    module is inside a /* */ block — Safari has no Web MIDI on any Apple
+    platform — so nothing there runs, and nothing here asserts on it. It is
+    kept in step so re-enabling it cannot resurrect a third behaviour.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    body = strip_comments(script_body)
+
+    for dead in ("function liveNav", "function canvasNav"):
+        assert dead not in body, f"{dead}() is back — that is a second navigation path"
+
+    nav = strip_comments(extract_function(body, "navSong"))
+    assert "findNextValidSong" in nav and "findPrevValidSong" in nav, (
+        "navSong() no longer walks the setlist"
+    )
+    assert "cueRegion" in nav, (
+        "navSong() no longer goes through cueRegion, which is what makes the "
+        "stop-and-reposition one compound request and records the target as an "
+        "explicit selection"
+    )
+    # PREVIOUS restarts the current song rather than stepping back, when more
+    # than a moment into it. Losing this makes a mis-timed press skip a song.
+    assert re.search(r"currentPos\s*-\s*displayList\[activeIdx\]\.start\s*>\s*2", nav), (
+        "Previous no longer restarts the current song when past its opening — "
+        "a press meant as 'take that again' now loses the song you are on"
+    )
+
+    # The three LIVE surfaces. Counted in the markup rather than the script,
+    # because that is where the wiring is and where a fourth copy would appear.
+    assert html.count('onclick="navSong(\'prev\', event)"') == 3, (
+        "the footer, Live View and Canvas do not all reach navSong() for Previous"
+    )
+    assert html.count('onclick="navSong(\'next\', event)"') == 3, (
+        "the footer, Live View and Canvas do not all reach navSong() for Next"
+    )
+
+
+def test_reconnecting_is_offered_only_when_the_link_is_down(script_body: str) -> None:
+    """A link that is up needs no affordance; one that is down needs a loud one.
+
+    The banner is now the only place reconnecting is offered, so it has to be
+    driven by the failure that actually happens on a stage — REAPER going quiet
+    while the wifi is fine. It used to hang off the browser's `offline` event
+    alone, which does not fire for that at all.
+    """
+    body = strip_comments(script_body)
+
+    badge = strip_comments(extract_function(body, "_refreshConnBadge"))
+    assert "_connIsLive" in badge, "the badge no longer reads the connection"
+    assert "_setConnBanner" in badge, (
+        "the connection notice is no longer driven by the poll, so it can only "
+        "appear when the browser itself goes offline — not when REAPER stops "
+        "answering, which is the failure that happens at a show"
+    )
+
+    banner = strip_comments(extract_function(body, "_setConnBanner"))
+    assert "wwr_start" in banner, (
+        "the notice does not reconnect — with the button gone from the bar, "
+        "nothing on screen restarts polling"
+    )
+    assert "pointer-events:auto" in banner and "cursor:pointer" in banner, (
+        "the notice is not tappable, so it names a fix it does not offer"
+    )
+    assert "t(" in banner, "the notice text bypasses the translation table"
+
+
+def test_every_element_the_script_reaches_for_still_exists() -> None:
+    """An edit that deletes markup no test names is invisible until it throws.
+
+    Removing the Slide-to-Stop switch took SEVEN other sidebar toggles with it —
+    Auto-Stop, Hide Skips, auto-scroll, queue mode — because the cut searched
+    back to `<div class="toggle-row"`, which does not match
+    `class="toggle-row director-only"`, so it skipped its own row and started
+    from an earlier one. The whole suite stayed green. The page threw a
+    TypeError on load and stopped initialising.
+
+    So: every id the script reads without a null guard must be in the markup.
+    That is the invariant the deletion actually broke, and it is checkable.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    present = set(re.findall(r'id="([\w-]+)"', html))
+    body = strip_comments(inline_scripts(html)[0])
+
+    # getElementById(...) whose result is dereferenced on the same line — no
+    # `var x = ...; if (x)` guard can save these.
+    unguarded = re.findall(
+        r"""document\.getElementById\(\s*["']([\w-]+)["']\s*\)\s*\.""", body
+    )
+    missing = sorted({el for el in unguarded if el not in present})
+    assert not missing, (
+        f"the script dereferences {len(missing)} element(s) that no longer "
+        f"exist in the markup, which throws on load: {missing}"
+    )
+
+
+def test_the_sidebar_switches_survived_the_stop_removal() -> None:
+    """The four that were collateral damage, named so they cannot vanish quietly.
+
+    These are settings, not decorations: Auto-Stop decides whether a song ends
+    the block, Hide Skips decides what the setlist even shows. Losing the
+    switch loses the only way to reach them.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    for toggle, what in [
+        ("hideSkippedToggle", "Hide Skips"),
+        ("autoStopToggle", "Auto-Stop"),
+        ("autoScrollToggle", "auto-scroll"),
+        ("queueModeToggle", "queue mode"),
+    ]:
+        assert f'id="{toggle}"' in html, f"the {what} switch is gone from the sidebar"

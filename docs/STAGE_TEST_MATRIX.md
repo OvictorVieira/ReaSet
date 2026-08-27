@@ -302,28 +302,41 @@ nobody else in the room, and the banner named a takeover that never happened.
 
 ### The transport bar
 
-PLAY was 17% of the bar and a full-red Stop slide was 48%: the loudest colour
-and the largest target belonged to the one action nobody wants to trigger by
-accident. Stop now takes its own row **above** Play — on a propped device the
-bottom edge is the shortest reach, and the control reached for blind is PLAY.
-Loop dropped U+21BB, which is the reload mark, for the media repeat mark plus
-the word.
+**Previous · Play/Pause · Loop · Next.** Stop is gone: pause is what a musician
+reaches for when a show has to hold, and it holds the position, the queue and
+the cue where Stop discarded all three and rewound. Two controls that both halt
+playback, differing in what they silently throw away, is one more thing to get
+wrong in the dark. RECONNECT is gone from the bar too — it is a status, not a
+transport control, so it now appears only when the link drops.
 
-Measured in Chromium at 320/390/768/1024/1400px in three languages before
-shipping; these cases confirm it on hardware, where font metrics and the
-safe-area inset are not the same.
+`smartStop()` stays. Auto-Stop, a stop-after marker and the Enter key all still
+stop the transport; what went is the button.
 
 | ID | Scenario | Expected | Result | Notes |
 |---|---|---|---|---|
-| **P01** | Open ReaSet on the phone, Stop set to Slide. | Two rows. Upper: a dark track with a red thumb at the left and the words on **one line**. Lower: a large green PLAY, then LOOP, then the plug. Nothing overflows. | | |
-| **P02** | Stand back and glance at the bar without reading it. | The green PLAY is what your eye lands on. If the red bar is, the hierarchy has regressed. | | |
-| **P03** | Drag the STOP thumb slowly to the far right. | Follows the finger the whole way, label changes to RELEASE TO STOP, stops on release. It has ~314px of travel now; it had 23. | | |
-| **P04** | Press PLAY, then look at the bar again. | PLAY became ▮▮ and did **not** change width. The bar does not re-lay-out. | | |
-| **P05** | Look at the LOOP button. | Two arrows with heads at opposite ends, plus the word LOOP. It must not be a single circular arrow — that is the reload mark and it sits beside a reconnect button. | | |
-| **P06** | Switch Stop to Tap in the sidebar. | The upper row **disappears** and Stop becomes a plain button beside PLAY. PLAY is still the widest thing on the row. Switch back: the row returns. | | |
-| **P07** | Set the language to Português and repeat P01. | "DESLIZE PARA PARAR" on one line. On a 320px-class phone it may end in an ellipsis; never wrapped, never cut mid-letter. | | |
-| **P08** | Open Live View and Canvas and look at their Stop. | Same slider, same proportions, same label as the footer's. | | |
-| **P09** | Rotate the phone to landscape. | Re-lays out, slider keeps a usable track, label still one line. | | |
+| **P01** | Open ReaSet and look at the bar. | Four controls: ⏮, a large green PLAY, LOOP, ⏭. Nothing else. | | |
+| **P02** | Stand back and glance without reading. | The green PLAY is what your eye lands on. | | |
+| **P03** | Look at the LOOP button. | A circular arrow plus the word LOOP. | | |
+| **P04** | Press PLAY, then look again. | PLAY became ▮▮ and did **not** change width. | | |
+| **P05** | Playing a song, past its opening. Press ⏮. | **Restarts the song you are on** — it does not step back. That is the press a musician means most of the time. | | |
+| **P06** | Within the first two seconds of a song, press ⏮. | Goes to the **previous** song. | | |
+| **P07** | Press ⏭ mid-song. | Jumps to the next song. Skipped songs are passed over. | | |
+| **P08** | Repeat P05–P07 from Live View and from Canvas. | Identical. All three go through one function now. | | |
+| **P09** | Rotate the phone to landscape. | Bar shrinks, all four still at least 44px tall, setlist still readable. | | |
+| **P10** | Language in Português, repeat P01. | Nothing clipped. | | |
+
+### Losing the connection
+
+The bar no longer carries a reconnect button. The notice **is** the affordance.
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **N01** | Everything connected. Look at the top of the screen. | **No** connection notice at all, and no reconnect button on the bar. | | |
+| **N02** | Quit REAPER (or stop its web server) with ReaSet open. | Within ~2s an orange notice appears saying REAPER is not answering. | | |
+| **N03** | Tap that notice. | It says "Reconnecting…" and polling restarts. | | |
+| **N04** | Bring REAPER back. | The notice disappears on its own. | | |
+| **N05** | Same as N02 but pull the **wifi** instead. | Same notice. Both failures look the same to a musician, and should. | | |
+| **N06** | With the notice showing, check the sidebar. | The Reconnect action is still there — the notice is not the only way back. | | |
 
 ### The iPad that no longer updates
 

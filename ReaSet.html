@@ -1701,7 +1701,7 @@
             box-shadow: 0 -2px 30px rgba(0, 0, 0, 0.6);
             padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
             display: flex;
-            flex-direction: column;
+            align-items: stretch;
             flex-shrink: 0;
         }
         /* Not `gap`. WebKit did not support gap in flex containers until
@@ -1709,15 +1709,8 @@
            well before that — there, every gap in the file silently resolves to
            zero and the controls fuse into one bar-shaped slab. Margins are
            what actually reserves the space, on every engine. */
-        .tr-row {
-            display: flex;
-            align-items: stretch;
-        }
-        .tr-row > .t-btn { margin-right: 6px; }
-        .tr-row > .t-btn:last-child { margin-right: 0; }
-        .tr-row-stop:empty { display: none; }
-        .tr-row-stop { margin-bottom: 8px; }
-        .tr-row-stop > .t-btn { flex: 1 1 auto; margin-right: 0; }
+        .app-transport > .t-btn { margin-right: 6px; }
+        .app-transport > .t-btn:last-child { margin-right: 0; }
 
         /* Pill text buttons for transport */
         .t-btn {
@@ -1737,7 +1730,7 @@
             -webkit-tap-highlight-color: transparent;
         }
 
-        /* Not `gap` — see .tr-row. This is the space between a control's glyph
+        /* Not `gap` — see .app-transport. The space between a glyph
            and its word, and on WebKit before 14.1 gap leaves them touching. */
         .t-btn .t-lbl { margin-left: 6px; }
 
@@ -1768,149 +1761,18 @@
             box-shadow: 0 6px 24px rgba(30, 215, 96, 0.5);
         }
 
-        .t-btn-stop {
-            background: var(--color-active);
-            color: #fff;
-            box-shadow: 0 4px 16px rgba(252, 60, 68, 0.4);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .t-btn-stop:hover {
-            background: #ff453a;
-            box-shadow: 0 4px 22px rgba(252, 60, 68, 0.55);
-        }
-
-        /* Hold fill overlay — mismo mecanismo que la app */
-        .t-btn-stop::before {
-            content: '';
-            position: absolute;
-            top: 0; right: 0; bottom: 0; left: 0;
-            background: rgba(255, 255, 255, 0.28);
-            width: 0%;
-            border-radius: inherit;
-            pointer-events: none;
-        }
-
-        
-
-        /* ── Slide to Stop ──────────────────────────────────────────────
-           Stop is the one transport control whose mistake is unrecoverable in
-           front of an audience, and it sits between PLAY and Loop on a phone
-           where a thumb reaching for either can land on it.
-
-           The old guard was a three-second HOLD, and holding is the wrong
-           gesture for it: it is invisible until it completes, indistinguishable
-           from a tap that did not register, and a musician who presses and lets
-           go has no way to tell whether the app is broken or whether they
-           simply did not press long enough. That is exactly the "I pressed Stop
-           and it did not stop" report this replaces.
-
-           A slide cannot be performed by accident, shows its own progress, and
-           is abandoned by doing nothing — the same reasoning macOS uses for
-           slide-to-power-off. Tap mode stays available for anyone who wants a
-           plain button, and the sidebar switch chooses.
-
-           Rules are written against .stop-ctl so the footer, Live View and
-           Canvas copies cannot drift apart again — the last time each carried
-           its own markup, two of the three never updated their label at all. */
-        .stop-ctl .ss-thumb { display: none; }
-        /* A wrapped label is what broke this control on a phone: "SLIDE TO
-           STOP" took three lines, the button grew to ~70px tall, and the thumb
-           — which stretches top-to-bottom — became a 46x62 blob that reads as
-           an oversized circle spilling out of the track. One rule prevents the
-           whole cascade. */
-        .stop-ctl .stop-label { white-space: nowrap; }
-        .stop-ctl.is-slide {
-            justify-content: center;
-            background: rgba(252, 60, 68, 0.20);
-            color: rgba(255, 255, 255, 0.66);
-            box-shadow: none;
-            cursor: grab;
-            /* The drag belongs to this control, not to the page scroller.
-               Without it the first vertical wobble hands the gesture to Safari
-               and the thumb stops following the finger. */
-            touch-action: none;
-        }
-        .stop-ctl.is-slide .ss-icon { display: none; }
-        /* The thumb is absolutely positioned, so it takes no space in the flex
-           row: the padding is what reserves its lane. Centring the label in
-           what is left keeps it clear of the thumb at every width, which the
-           old auto-margins plus a 42px label padding did not — they fought
-           each other for the same pixels and the text lost. */
-        .stop-ctl.is-slide {
-            padding-left: 54px;
-            padding-right: 12px;
-        }
-        .stop-ctl.is-slide .stop-label {
-            /* The sentence is 13 characters in English and 18 in Portuguese
-               ("DESLIZE PARA PARAR"), and on a 320px phone the widest of them
-               does not fit beside the thumb at any readable size. It degrades
-               to an ellipsis rather than a hard mid-letter cut: truncation the
-               eye reads as truncation, not as the control being broken —
-               which is what the wrapped label looked like. Every phone from
-               360px up shows the whole sentence in all three languages. */
-            min-width: 0; overflow: hidden;
-            text-overflow: ellipsis;
-            font-size: 11.5px; letter-spacing: 0.07em;
-        }
-        .stop-ctl.is-slide .ss-thumb {
-            display: flex; align-items: center; justify-content: center;
-            position: absolute; left: 4px; top: 4px; bottom: 4px;
-            width: 46px;
-            /* Nothing is allowed to stretch it past a squircle, whatever the
-               button's height turns out to be. */
-            max-height: 46px; margin: auto 0;
-            border-radius: var(--radius-pill);
-            background: var(--color-active); color: #fff;
-            font-size: 14px; line-height: 1;
-            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
-            transition: transform 0.24s cubic-bezier(.2, .9, .3, 1);
-            will-change: transform;
-        }
-        /* While the finger is down the thumb must track it exactly — an easing
-           curve here reads as lag, not as polish. */
-        .stop-ctl.is-slide.is-dragging { cursor: grabbing; }
-        .stop-ctl.is-slide.is-dragging .ss-thumb { transition: none; }
-        .stop-ctl.is-slide.is-armed {
-            background: var(--color-active);
-            color: #fff;
-        }
-        /* The Live View and Canvas copies are sized by their content, so
-           without this the travel available to the gesture would be however
-           wide the word STOP happens to render — and a slide with 40px of
-           travel is a tap with extra steps. The footer copy is flex:1 and
-           already has room. */
-        .lt-stop.is-slide { min-width: 210px; }
-        /* Tap mode keeps Stop beside PLAY, and there it must not out-weigh it:
-           fixed and narrow, not flex:1. */
-        .tr-row-main > .t-btn-stop { flex: 0 0 auto; width: 92px; }
-        /* The slide row is dark, not red. A full-width red bar reads as the
-           subject of the screen; this one has to be legible without being the
-           thing your eye lands on. The red lives on the thumb, which is the
-           part you actually have to find. */
-        .tr-row-stop > .stop-ctl.is-slide {
-            padding-top: 15px; padding-bottom: 15px;
-            background: rgba(252, 60, 68, 0.11);
-            border: 1px solid rgba(252, 60, 68, 0.22);
-        }
-
-        /* The hold fill has no meaning once nothing holds. */
-        .stop-ctl.is-slide::before { display: none; }
-
         /* ── Sizing, from the far end of a stage ───────────────────────
            A drummer reaches this with one hand, from a stand, in the dark,
            without leaning in to read it. Everything here is at least 44pt in
            both axes, and PLAY is far past it. */
-        .tr-row-main > .t-btn { padding-top: 20px; padding-bottom: 20px; }
-        .tr-row-main > .t-btn-sync { flex: 0 0 auto; width: 64px; }
+        .app-transport > .t-btn { padding-top: 20px; padding-bottom: 20px; }
         /* Icon over word, so a fixed-width square still says what it is. */
-        .t-btn-loop, .tr-row-main > .t-btn-sync {
+        .t-btn-loop {
             flex-direction: column;
             padding-left: 2px; padding-right: 2px;
         }
         /* Stacked, so the word sits under the glyph rather than beside it. */
-        .t-btn-loop .t-lbl, .tr-row-main > .t-btn-sync .t-lbl { margin-left: 0; }
+        .t-btn-loop .t-lbl { margin-left: 0; }
         .t-btn-loop .t-lbl {
             font-size: 9.5px; letter-spacing: 0.1em;
             margin-top: 3px; opacity: 0.85;
@@ -1920,20 +1782,18 @@
 
         @media (max-width: 600px) {
             .app-transport { padding-left: 10px; padding-right: 10px; }
-            .tr-row > .t-btn { margin-right: 5px; }
-            .tr-row-main > .t-btn { padding-top: 18px; padding-bottom: 18px; }
-            .tr-row-main > .t-btn-loop { width: 74px; }
-            .tr-row-main > .t-btn-sync { width: 56px; }
-            .tr-row-main > .t-btn-stop { width: 80px; }
+            .app-transport > .t-btn { margin-right: 5px; }
+            .app-transport > .t-btn { padding-top: 18px; padding-bottom: 18px; }
+            .app-transport > .t-btn-loop { width: 72px; }
+            .app-transport > .t-btn-nav { width: 54px; }
             .t-btn-play { font-size: 16px; }
         }
 
         @media (max-width: 360px) {
             .app-transport { padding-left: 8px; padding-right: 8px; }
-            .tr-row > .t-btn { margin-right: 4px; }
-            .tr-row-main > .t-btn-loop { width: 64px; }
-            .tr-row-main > .t-btn-sync { width: 50px; }
-            .tr-row-main > .t-btn-stop { width: 70px; }
+            .app-transport > .t-btn { margin-right: 4px; }
+            .app-transport > .t-btn-loop { width: 58px; }
+            .app-transport > .t-btn-nav { width: 46px; }
             .t-btn-play .t-lbl { display: none; }
         }
 
@@ -1946,15 +1806,13 @@
            one song visible. */
         @media (min-width: 700px) and (min-height: 600px) {
             .app-transport { padding: 14px 18px calc(14px + env(safe-area-inset-bottom)); }
-            .tr-row > .t-btn { margin-right: 10px; }
-            .tr-row-main > .t-btn { padding-top: 26px; padding-bottom: 26px; }
-            .tr-row-stop > .stop-ctl.is-slide { padding-top: 18px; padding-bottom: 18px; }
+            .app-transport > .t-btn { margin-right: 10px; }
+            .app-transport > .t-btn { padding-top: 26px; padding-bottom: 26px; }
             .t-btn-play { font-size: 20px; }
             .t-btn-play .t-ico { font-size: 24px; }
-            .tr-row-main > .t-btn-loop { width: 118px; }
-            .tr-row-main > .t-btn-sync { width: 84px; }
-            .tr-row-main > .t-btn-loop .t-lbl { font-size: 11px; }
-            .stop-ctl.is-slide .stop-label { font-size: 13px; }
+            .app-transport > .t-btn-loop { width: 118px; }
+            .app-transport > .t-btn-nav { width: 84px; }
+            .app-transport > .t-btn-loop .t-lbl { font-size: 11px; }
         }
 
         /* Short viewport — a phone in landscape, or a small window. The bar
@@ -1963,14 +1821,28 @@
            for. */
         @media (max-height: 560px) {
             .app-transport { padding-top: 6px; padding-bottom: calc(6px + env(safe-area-inset-bottom)); }
-            .tr-row-main > .t-btn { padding-top: 10px; padding-bottom: 10px; }
-            .tr-row-stop { margin-bottom: 5px; }
-            .tr-row-stop > .stop-ctl.is-slide { padding-top: 15px; padding-bottom: 15px; }
+            .app-transport > .t-btn { padding-top: 12px; padding-bottom: 12px; }
             .t-btn-play { font-size: 15px; }
             .t-btn-play .t-ico { font-size: 17px; }
-            .tr-row-main > .t-btn-loop { width: 68px; }
-            .tr-row-main > .t-btn-sync { width: 54px; }
+            .app-transport > .t-btn-loop { width: 68px; }
+            .app-transport > .t-btn-nav { width: 54px; }
         }
+
+        /* Previous and Next are pure navigation, so they are drawn as such:
+           quiet, matched, one on each side of PLAY. Nothing on this bar is
+           allowed to compete with the green. */
+        .t-btn-nav {
+            flex: 0 0 auto;
+            width: 64px;
+            background: rgba(255, 255, 255, 0.07);
+            color: rgba(255, 255, 255, 0.72);
+            border: 1.5px solid rgba(255, 255, 255, 0.12);
+        }
+        .t-btn-nav:hover {
+            background: rgba(255, 255, 255, 0.13);
+            color: #fff;
+        }
+        .t-btn-nav .t-ico { display: flex; align-items: center; }
 
         .t-btn-loop {
             flex: 0 0 auto;
@@ -1990,85 +1862,6 @@
             color: var(--color-loop);
             border-color: rgba(191, 90, 242, 0.4);
             box-shadow: 0 0 16px rgba(191, 90, 242, 0.3);
-        }
-
-        /* The one button here that is not a transport control, and the only one
-           whose label did not fit: .t-btn is flex:1, so RECONNECT was given the
-           same width as PLAY and overflowed it on a phone. It is also the only
-           one you press when something is already wrong, so it takes a fixed,
-           smaller footprint and gives the space back to the three controls that
-           are used during a show.
-
-           The glyph is a PLUG, not the ↻ it used to be. ↻ is the loop icon —
-           it sits two buttons away on the same bar, on .t-btn-loop, drawn from
-           the identical &#8635; codepoint. Two controls with the same symbol on
-           one transport bar is a coin flip mid-show between "repeat this song"
-           and "restart the network connection", and those are not neighbouring
-           mistakes. A plug says connection and cannot be read as repeat. */
-        .t-btn-sync {
-            flex: 0 0 auto;
-            width: 52px;
-            padding: 16px 0;
-            font-size: 19px;
-            line-height: 1;
-            background: rgba(255, 255, 255, 0.07);
-            color: rgba(255, 255, 255, 0.45);
-            border: 1.5px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .t-btn-sync .rc-ico { display: none; }
-        /* Connected: a status light, not a control. Disabled on purpose — there
-           is nothing to repair, and a pressable button invites a mid-show press
-           that restarts polling for no reason. */
-        /* Connected: a READOUT. Everything that suggests "press me" is off —
-           no hover repaint, no press scale, no pointer cursor, no focus ring
-           to tab into. What stays is the green plug, which says the one thing
-           worth saying: REAPER is answering. */
-        .t-btn-sync.is-live {
-            cursor: default;
-            color: var(--color-brand);
-            border-color: rgba(30, 215, 96, 0.34);
-            background: rgba(30, 215, 96, 0.09);
-            opacity: 1;
-            box-shadow: none;
-        }
-        .t-btn-sync.is-live:hover,
-        .t-btn-sync.is-live:active {
-            background: rgba(30, 215, 96, 0.09);
-            color: var(--color-brand);
-            transform: none;
-            filter: none;
-        }
-        .t-btn-sync.is-live .rc-ok { display: block; }
-
-        /* Lost: the one thing on this bar that moves. */
-        .t-btn-sync.is-down {
-            cursor: pointer;
-            color: #fff;
-            background: var(--color-active);
-            border-color: transparent;
-            animation: reconnectPulse 1.15s ease-in-out infinite;
-        }
-        .t-btn-sync.is-down .rc-bad { display: block; }
-        .t-btn-sync.is-down:hover { background: #ff453a; }
-        @keyframes reconnectPulse {
-            0%, 100% { box-shadow: 0 0 0 0 rgba(252, 60, 68, 0.55); }
-            70%      { box-shadow: 0 0 0 11px rgba(252, 60, 68, 0); }
-        }
-        /* Respected here specifically: this button pulses to be noticed, and a
-           viewer who asked for less motion still has the colour and the icon. */
-        @media (prefers-reduced-motion: reduce) {
-            .t-btn-sync.is-down { animation: none; }
-        }
-        /* :not(:disabled) is load-bearing, not defensive. This rule has the
-           SAME specificity as .t-btn-sync.is-live and sits LATER in the file,
-           so without the guard it wins and repaints the connected button on
-           hover — which is exactly the affordance the disabled state exists to
-           remove. `disabled` stops the click; only CSS stops it looking
-           pressable, and the two have to agree. */
-        .t-btn-sync:not(:disabled):hover {
-            background: rgba(255, 255, 255, 0.12);
-            color: var(--text-primary);
         }
 
         /* ══════════════════════════════════════════════
@@ -5032,34 +4825,21 @@
         </div>
 
         <!-- TRANSPORT FOOTER -->
+        <!-- Previous · Play/Pause · Loop · Next, and nothing else.
+             Stop is gone: pause is what a musician reaches for when a show has
+             to hold, and a second control that also halts playback — but
+             discards the queue and rewinds — was one more thing to get wrong in
+             the dark. smartStop() stays: Auto-Stop, a stop-after marker and the
+             MIDI stop action all still need it. What is removed is the button.
+             RECONNECT is gone too; it is a status, not a transport control, so
+             it lives in the banner that appears only when the link drops. -->
         <div class="app-transport">
-            <!-- The Stop row sits ABOVE Play, and that is the whole point of
-                 splitting them. On a tablet propped on a stand the bottom edge
-                 is the easiest thing to reach, and the control reached for
-                 blind, mid-song, between fills, is PLAY. Stop is the one whose
-                 mistake is unrecoverable in front of an audience, so it takes
-                 the harder reach and the full width a real slide needs. In tap
-                 mode this row is empty and the button moves down beside PLAY. -->
-            <div class="tr-row tr-row-stop" id="tr-row-stop"></div>
-            <div class="tr-row tr-row-main" id="tr-row-main">
+            <button class="t-btn t-btn-nav" id="footer-prev-btn" onclick="navSong('prev', event)"
+                title="Previous song" aria-label="Previous song"><span class="t-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18 5.2v13.6L8.2 12 18 5.2Z" fill="currentColor"/><rect x="5" y="5.2" width="2.3" height="13.6" rx="1.15" fill="currentColor"/></svg></span></button>
             <button class="t-btn t-btn-play" id="main-play-btn" onclick="togglePlay()"><span class="t-ico">▶</span><span class="t-lbl">PLAY</span></button>
-            <button class="t-btn t-btn-stop stop-ctl" id="main-stop-btn"
-                style="user-select:none;-webkit-user-select:none"><span class="ss-icon">■</span>
-                <span class="stop-label">STOP</span><span class="ss-thumb" aria-hidden="true">■</span></button>
-            <!-- The glyph was U+21BB, the RELOAD mark, on a bar that also
-                 carries a reconnect button — which is exactly why nobody could
-                 tell what it was. This is the media REPEAT mark: two runs with
-                 arrowheads at opposite ends. It carries its word too, because a
-                 symbol nobody can name is not an icon. -->
-            <button id="footer-loop-btn" class="t-btn t-btn-loop" onclick="toggleCurrentLoop()"><span class="t-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 10V8.5A2.5 2.5 0 0 1 6.5 6H18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="m15 3 3 3-3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 14v1.5a2.5 2.5 0 0 1-2.5 2.5H6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="m9 21-3-3 3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="t-lbl">LOOP</span></button>
-            <!-- wwr_start() restarts REAPER's polling loop. This said SYNC,
-                 which beside PLAY / STOP / Loop reads as "sync the setlist" —
-                 the one thing it does not do. It is the recovery a musician has
-                 when a venue's wifi drops mid-show, so it is named for that. -->
-            <button class="t-btn t-btn-sync is-live" id="reconnect-btn" disabled
-                onclick="wwr_start(); _refreshReconnectBtn();"
-                title="Connected to REAPER"><svg class="rc-ico rc-ok" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 2v6M15 2v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6 8h12v2.5a6 6 0 0 1-12 0V8Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 16.5V22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><svg class="rc-ico rc-bad" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 2v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M15 2v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6 7.5h12v2a6 6 0 0 1-3.2 5.3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 3l18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
-            </div>
+            <button class="t-btn t-btn-loop" id="footer-loop-btn" onclick="toggleCurrentLoop()"><span class="t-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20.5 2.8v4.4h-4.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="t-lbl">LOOP</span></button>
+            <button class="t-btn t-btn-nav" id="footer-next-btn" onclick="navSong('next', event)"
+                title="Next song" aria-label="Next song"><span class="t-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 5.2v13.6L15.8 12 6 5.2Z" fill="currentColor"/><rect x="16.7" y="5.2" width="2.3" height="13.6" rx="1.15" fill="currentColor"/></svg></span></button>
         </div>
     </div>
 
@@ -5169,16 +4949,6 @@
                 <button class="help-btn" style="margin-left:auto" onclick="showHelp('initsongmidi')">?</button>
             </div>
 
-            <div class="toggle-row director-only">
-                <label class="n-switch"><input type="checkbox" id="stopSlideToggle"
-                        onchange="setStopMode(this.checked ? 'slide' : 'tap')">
-                    <div class="n-track">
-                        <div class="n-thumb"></div>
-                    </div>
-                </label>
-                Slide to Stop
-                <button class="help-btn" style="margin-left:auto" onclick="showHelp('stopslide')">?</button>
-            </div>
 
             <div class="toggle-row" style="border:none">
                 <label class="n-switch"><input type="checkbox" id="gridViewToggle" onchange="setGridView(this.checked)">
@@ -5723,13 +5493,10 @@
             <p class="live-next" style="margin-top:0;">Up Next: <span id="live-next-name">—</span></p>
         </div>
         <div class="live-transport" id="live-transport-bar">
-            <button class="lt-btn lt-ghost" onclick="liveNav('prev')">⏮</button>
-            <button class="lt-btn lt-stop stop-ctl"
-                style="user-select:none;-webkit-user-select:none"><span class="ss-icon">■</span>
-                <span class="stop-label">STOP</span><span class="ss-thumb" aria-hidden="true">■</span></button>
+            <button class="lt-btn lt-ghost" onclick="navSong('prev', event)" aria-label="Previous song">⏮</button>
             <button class="lt-btn lt-play" id="live-play-btn" onclick="togglePlay()">▶ PLAY</button>
-            <button class="lt-btn lt-ghost" onclick="liveNav('next', event)">⏭</button>
             <button class="lt-btn lt-ghost" id="live-loop-btn" onclick="toggleCurrentLoop(event)">↻ Loop</button>
+            <button class="lt-btn lt-ghost" onclick="navSong('next', event)" aria-label="Next song">⏭</button>
         </div>
         <!-- Live View config panel -->
         <div id="live-config-panel">
@@ -5870,18 +5637,10 @@
             <div class="canvas-widget" id="cw-transport" style="left: 52%; top: 72%; width: 43%; height: 24%;">
                 <div class="cw-content" id="cw-content-transport">
                     <div class="cw-transport-wrapper" style="display: flex; gap: 8px; justify-content: center;">
-                        <button class="lt-btn lt-ghost" onclick="canvasNav('prev')">⏮</button>
-                        <button class="lt-btn lt-stop stop-ctl" id="cw-stop-btn"
-                            style="user-select:none;-webkit-user-select:none"><span class="ss-icon">■</span>
-                            <span class="stop-label">STOP</span><span class="ss-thumb" aria-hidden="true">■</span></button>
+                        <button class="lt-btn lt-ghost" onclick="navSong('prev', event)" aria-label="Previous song">⏮</button>
                         <button class="lt-btn lt-play" id="cw-play-btn" onclick="togglePlay()">▶ PLAY</button>
-                        <button class="lt-btn lt-ghost" onclick="canvasNav('next')">⏭</button>
+                        <button class="lt-btn lt-ghost" onclick="navSong('next', event)" aria-label="Next song">⏭</button>
                     </div>
-                </div>
-                <div class="cw-toolbar">
-                    <button class="cw-tool-btn" id="cw-stop-mode-btn" onclick="toggleStopMode()"
-                        title="Stop button mode">Mode:
-                        Hold</button>
                 </div>
             </div>
         </div>
@@ -7014,20 +6773,46 @@
             'box-shadow:0 2px 8px rgba(0,0,0,.35);pointer-events:none;' +
             'border-bottom:1px solid rgba(0,0,0,.35);';
 
-        // Minimal "reconnecting" banner, created lazily so no HTML markup changes.
+        // The connection notice, and the only place reconnecting is offered.
+        //
+        // A permanent RECONNECT button on the transport bar spent a target on
+        // a control that is useless for all but a few seconds of a show, and
+        // read as a fifth transport button while doing it. A link that is up
+        // needs no affordance at all; a link that is down needs to say so
+        // loudly and be tappable. So the bar carries only what is played, and
+        // this appears when replies stop.
+        //
+        // It is driven by _connIsLive() — the same _lastReplyTs evidence as the
+        // badge dot, so the two cannot disagree. It used to hang off the
+        // browser's `offline` event alone, which does not fire for the failure
+        // that actually happens on a stage: the wifi is fine and REAPER is the
+        // thing that went quiet.
         function _setConnBanner(show) {
             var el = document.getElementById('reaset-conn-banner');
             if (show) {
                 if (!el) {
                     el = document.createElement('div');
                     el.id = 'reaset-conn-banner';
-                    el.textContent = '⚠ Reconectando con REAPER — control automático en pausa';
-                    el.style.cssText = BANNER_CSS + 'background:#b45309;';
+                    el.style.cssText = BANNER_CSS + 'background:#b45309;'
+                        + 'pointer-events:auto;cursor:pointer;';
+                    el.setAttribute('role', 'button');
+                    el.onclick = function () {
+                        el.textContent = t('Reconnecting…');
+                        wwr_start();
+                    };
                     _bannerHost().appendChild(el);
+                }
+                // Rewritten every time it is shown, so a previous tap's
+                // "Reconnecting…" cannot be left standing over a link that
+                // dropped again.
+                if (el.style.display === 'none' || !el.dataset.shown) {
+                    el.textContent = t('⚠ REAPER is not answering — tap to reconnect');
+                    el.dataset.shown = '1';
                 }
                 el.style.display = '';
             } else if (el) {
                 el.style.display = 'none';
+                el.dataset.shown = '';
             }
             _bannerMeasure();
         }
@@ -7238,33 +7023,9 @@
                 el.style.color = live ? 'var(--color-brand)' : '#ff453a';
                 el.title = live ? t('Connected to REAPER') : t('No reply from REAPER');
             }
-            _refreshReconnectBtn(live);
+            _setConnBanner(!live);
         }
 
-        // The RECONNECT button STATES the connection; it does not merely offer
-        // to repair it.
-        //
-        // A button that looks identical whether or not anything is wrong asks
-        // the musician to remember what it is for and to guess whether now is
-        // the moment. On a dark stage neither happens. So: while the stream is
-        // flowing it is a quiet, disabled plug — a status light, not a control —
-        // and the moment replies stop it turns red, swaps to a broken plug and
-        // pulses, which is the one thing on that bar that moves.
-        //
-        // Driven by the SAME evidence as the badge dot (_lastReplyTs), so the
-        // two can never disagree about whether REAPER is answering.
-        function _refreshReconnectBtn(live) {
-            var b = document.getElementById('reconnect-btn');
-            if (!b) return;
-            if (live === undefined) live = _connIsLive();
-            b.classList.toggle('is-live', live);
-            b.classList.toggle('is-down', !live);
-            b.disabled = live;
-            b.title = live
-                ? t('Connected to REAPER')
-                : t('No reply from REAPER — tap to reconnect');
-            b.setAttribute('aria-label', b.title);
-        }
         setInterval(_refreshConnBadge, 1000);
 
         // Sends the current setlist to Reaset.lua for writing into the shared
@@ -13353,15 +13114,41 @@
             reader.readAsText(file); input.value = '';
         }
 
-        // F12: Canvas navigation helper
-        function canvasNav(dir) {
-            var activeIdx = -1;
-            activeIdx = activeInstanceIdx();
+        // Previous / Next, for every surface that offers them: the footer, Live
+        // View and Canvas. One function, because this file has already been
+        // bitten twice by copies of a control drifting apart — liveNav and
+        // canvasNav were literal duplicates of each other.
+        //
+        // The MIDI module has its own pair, routed here too, but that whole
+        // module sits inside a /* */ block: Safari has never implemented the
+        // Web MIDI API on any Apple platform, so on the iPad a musician is
+        // most likely to use, it could map a pedal and then watch it do
+        // nothing. Nothing there runs today; it is kept in step so switching
+        // it back on cannot resurrect a third behaviour.
+        //
+        // PREVIOUS restarts the current song when more than two seconds into
+        // it, and only steps back when pressed at the top. That is the media
+        // convention every player uses, and on a stage it is the difference
+        // between "take that verse again" and losing the song you are on.
+        //
+        // Both go through cueRegion, which stops and repositions in ONE
+        // compound request and records the target as an explicit selection —
+        // so the Play that usually follows is deterministic. Tapping a ROW
+        // still queues while playing (#9): a row tap is ambiguous, since the
+        // finger may have been reading, and a press on a button drawn as an
+        // arrow is not.
+        function navSong(dir, e) {
+            if (e && e.stopPropagation) e.stopPropagation();
+            var activeIdx = activeInstanceIdx();
             var target = null;
-            if (dir === 'next') { target = findNextValidSong(activeIdx); }
-            else if (dir === 'prev') {
-                if (activeIdx !== -1 && currentPos - displayList[activeIdx].start > 2) target = displayList[activeIdx];
-                else target = findPrevValidSong(activeIdx);
+            if (dir === 'next') {
+                target = findNextValidSong(activeIdx);
+            } else if (dir === 'prev') {
+                if (activeIdx !== -1 && currentPos - displayList[activeIdx].start > 2) {
+                    target = displayList[activeIdx];
+                } else {
+                    target = findPrevValidSong(activeIdx);
+                }
             }
             if (target) cueRegion(target.start, target.id);
         }
@@ -13389,224 +13176,19 @@
             saveCanvasPrefs();
         }
 
-        // ── Stop: slide, or plain tap ───────────────────────────────────
-        // 'slide' is the default and the guard; 'tap' is a plain button for
-        // anyone who does not want one. HOLD is retired — see the CSS note for
-        // why a three-second press was the wrong shape for this control.
+        // Slide to Stop is gone, and so is the Stop button it guarded.
         //
-        // 'hold' is migrated rather than honoured, so a device that stored it
-        // does not come back with a gesture nothing implements any more.
-        var STOP_SLIDE_COMMIT = 0.82;   // fraction of travel that arms the stop
-        var _stopMode = (function () {
-            var v = localStorage.getItem('reaset_stop_mode');
-            if (v === 'hold' || !v) return 'slide';
-            return (v === 'tap' || v === 'slide') ? v : 'slide';
-        })();
-
-        function toggleStopMode() {
-            setStopMode(_stopMode === 'slide' ? 'tap' : 'slide');
-        }
-
-        function setStopMode(mode) {
-            _stopMode = (mode === 'tap') ? 'tap' : 'slide';
-            localStorage.setItem('reaset_stop_mode', _stopMode);
-            _stopSlideCancel();
-            _refreshStopLabels();
-        }
-
-        // EVERY Stop button says what it wants from you.
+        // It existed to make an irreversible control deliberate. But the show
+        // never needed the control: pause is what a musician reaches for when
+        // things have to hold, and it holds the position, the queue and the
+        // cue — where Stop discarded all three and rewound. Two controls that
+        // both halt playback, differing in what they silently throw away, is
+        // one more thing to get wrong on a dark stage.
         //
-        // The label was a literal "STOP" in the markup of the main transport
-        // and of Live View, and nothing ever updated either — so on a fresh
-        // device the button said STOP, wanted three seconds, and did nothing at
-        // all for a tap. Silently. No error, no feedback, just a transport that
-        // would not stop. Only the Canvas copy relabelled itself, and it did
-        // that by overwriting innerText, which also threw away the ■ in front.
-        // Hence a label span per button: the icon is markup and stays put.
-        function _stopLabelFor(btn) {
-            if (_stopMode === 'tap') return t('STOP');
-            if (_slideDrag && _slideDrag.btn === btn && _slideDrag.armed) return t('RELEASE TO STOP');
-            return t('SLIDE TO STOP');
-        }
-        // The footer's Stop lives on its own row in slide mode and beside PLAY
-        // in tap mode. One button, re-parented — not two in the markup, because
-        // two would need two of everything that keeps a Stop control honest:
-        // the label, the class, the gesture, the diagnostics. Listeners survive
-        // re-parenting, and the mode cannot change mid-drag.
-        function _placeStopControl() {
-            var btn = document.getElementById('main-stop-btn');
-            var stopRow = document.getElementById('tr-row-stop');
-            var mainRow = document.getElementById('tr-row-main');
-            if (!btn || !stopRow || !mainRow) return;
-            var want = (_stopMode === 'slide') ? stopRow : mainRow;
-            if (btn.parentNode === want) return;
-            if (want === mainRow) {
-                var play = document.getElementById('main-play-btn');
-                mainRow.insertBefore(btn, play ? play.nextSibling : mainRow.firstChild);
-            } else {
-                stopRow.appendChild(btn);
-            }
-        }
-
-        function _refreshStopLabels() {
-            var els = document.querySelectorAll('.stop-ctl');
-            for (var i = 0; i < els.length; i++) {
-                els[i].classList.toggle('is-slide', _stopMode === 'slide');
-                var lab = els[i].querySelector('.stop-label');
-                if (lab) lab.textContent = _stopLabelFor(els[i]);
-            }
-            var cwBtn = document.getElementById('cw-stop-mode-btn');
-            if (cwBtn) cwBtn.innerText = 'Mode: ' + (_stopMode === 'slide' ? 'Slide' : 'Tap');
-            var sidebarToggle = document.getElementById('stopSlideToggle');
-            if (sidebarToggle) sidebarToggle.checked = (_stopMode === 'slide');
-            _placeStopControl();
-        }
-
-        // ── The gesture ─────────────────────────────────────────────────────
-        // Pointer events where they exist: the mouse/touch pairs this used to
-        // carry inline fired twice on a touchscreen that also reports mouse
-        // events, and the drag has to survive the finger leaving the button —
-        // which is the normal way this gesture ends, since the thumb is at the
-        // far edge by then. Capture keeps the stream coming to us.
-        //
-        // But WebKit shipped no Pointer Events at all until Safari 13, and an
-        // iPad that has stopped receiving updates never gets that engine —
-        // Chrome on iOS is the same WebKit underneath, so installing a
-        // different browser changes nothing. On those devices `pointerdown`
-        // never fires and Stop is not merely ugly, it is INERT: the one
-        // control whose failure mode is "the show does not stop". So the
-        // fallback is real touch and mouse handlers, chosen exclusively so
-        // nothing ever runs the gesture twice.
-        var _HAS_POINTER = (typeof window.PointerEvent === 'function');
-        var _slideDrag = null;
-
-        function _stopSlideTravel(btn) {
-            var thumb = btn.querySelector('.ss-thumb');
-            if (!thumb) return 0;
-            return Math.max(0, btn.clientWidth - thumb.offsetWidth - 8);
-        }
-
-        function _stopSlideCancel() {
-            if (!_slideDrag) return;
-            var btn = _slideDrag.btn;
-            _slideDrag = null;
-            btn.classList.remove('is-dragging', 'is-armed');
-            var thumb = btn.querySelector('.ss-thumb');
-            if (thumb) thumb.style.transform = '';
-            _refreshStopLabels();
-        }
-
-        // The three below take a button and an x, never an event, so one body
-        // serves pointer, touch and mouse. Every engine difference is confined
-        // to the binding below.
-        function _stopCtlBegin(btn, clientX) {
-            // Tap mode keeps the old behaviour exactly: act on press.
-            if (_stopMode !== 'slide') { smartStop(); return; }
-            _slideDrag = { btn: btn, x0: clientX, travel: _stopSlideTravel(btn), armed: false };
-            btn.classList.add('is-dragging');
-            _refreshStopLabels();
-        }
-
-        function _stopCtlDrag(btn, clientX) {
-            if (!_slideDrag || _slideDrag.btn !== btn) return;
-            var dx = Math.max(0, Math.min(_slideDrag.travel, clientX - _slideDrag.x0));
-            var thumb = _slideDrag.btn.querySelector('.ss-thumb');
-            if (thumb) thumb.style.transform = 'translateX(' + dx + 'px)';
-            var armed = _slideDrag.travel > 0 && (dx / _slideDrag.travel) >= STOP_SLIDE_COMMIT;
-            if (armed === _slideDrag.armed) return;
-            _slideDrag.armed = armed;
-            _slideDrag.btn.classList.toggle('is-armed', armed);
-            _refreshStopLabels();
-        }
-
-        function _stopCtlEnd(btn) {
-            if (!_slideDrag || _slideDrag.btn !== btn) return;
-            var fire = _slideDrag.armed;
-            _stopSlideCancel();
-            // Fired on RELEASE, not on crossing the threshold: a finger that
-            // reaches the end and slides back has changed its mind, and the
-            // whole point of this control is that it can be abandoned.
-            if (fire) smartStop();
-        }
-
-        (function initStopMode() {
-            var els = document.querySelectorAll('.stop-ctl');
-            for (var i = 0; i < els.length; i++) {
-                if (_HAS_POINTER) _bindStopPointer(els[i]);
-                else              _bindStopLegacy(els[i]);
-            }
-            _refreshStopLabels();
-        })();
-
-        function _bindStopPointer(btn) {
-            btn.addEventListener('pointerdown', function (e) {
-                if (_stopMode === 'slide') e.preventDefault();
-                _stopCtlBegin(btn, e.clientX);
-                try { btn.setPointerCapture(e.pointerId); } catch (err) { /* older Safari */ }
-            });
-            btn.addEventListener('pointermove',   function (e) { _stopCtlDrag(btn, e.clientX); });
-            btn.addEventListener('pointerup',     function ()  { _stopCtlEnd(btn); });
-            btn.addEventListener('pointercancel', _stopSlideCancel);
-        }
-
-        // Touch and mouse, for WebKit before 13. Two things this has to do that
-        // the pointer path gets for free:
-        //
-        //   preventDefault, because `touch-action: none` — which is what stops
-        //   the page scrolling out from under the drag — also arrived in
-        //   Safari 13. Without it the first vertical wobble hands the gesture
-        //   to the scroller and the thumb stops following the finger. That
-        //   needs {passive:false}, or the call is ignored.
-        //
-        //   document-level move/end, because setPointerCapture does not exist:
-        //   the thumb is at the far edge of the button when this gesture ends,
-        //   so the finger is usually off the element by then and a listener
-        //   bound to the button alone would simply never see the release.
-        function _bindStopLegacy(btn) {
-            btn.addEventListener('touchstart', function (e) {
-                if (_stopMode === 'slide') e.preventDefault();
-                _stopCtlBegin(btn, e.touches[0].clientX);
-            }, { passive: false });
-            btn.addEventListener('touchmove', function (e) {
-                if (!_slideDrag) return;
-                e.preventDefault();
-                _stopCtlDrag(btn, e.touches[0].clientX);
-            }, { passive: false });
-            btn.addEventListener('touchend',    function () { _stopCtlEnd(btn); });
-            btn.addEventListener('touchcancel', _stopSlideCancel);
-
-            btn.addEventListener('mousedown', function (e) {
-                // A touchscreen that also synthesises mouse events fires this
-                // ~300ms after touchend. Ignoring it while a drag is live is
-                // not enough — the drag is already over — so tap mode is
-                // guarded by touchend having just run.
-                if (_legacyTouchJustFired()) return;
-                e.preventDefault();
-                _stopCtlBegin(btn, e.clientX);
-            });
-        }
-
-        // Set by any touch on a Stop control; a mouse event within 500ms of one
-        // is the browser's synthetic echo, not a second user.
-        var _lastStopTouchAt = 0;
-        function _legacyTouchJustFired() { return (Date.now() - _lastStopTouchAt) < 500; }
-        if (!_HAS_POINTER) {
-            document.addEventListener('touchstart', function (e) {
-                if (e.target && e.target.closest && e.target.closest('.stop-ctl')) {
-                    _lastStopTouchAt = Date.now();
-                }
-            }, true);
-            document.addEventListener('touchend', function () {
-                if (_slideDrag) _lastStopTouchAt = Date.now();
-            }, true);
-            document.addEventListener('mousemove', function (e) {
-                if (_slideDrag) _stopCtlDrag(_slideDrag.btn, e.clientX);
-            });
-            document.addEventListener('mouseup', function () {
-                if (_slideDrag) _stopCtlEnd(_slideDrag.btn);
-            });
-        }
-
+        // smartStop() itself stays. Auto-Stop, a stop-after marker, the MIDI
+        // stop action and the Enter key all still stop the transport; what
+        // went is the button, its gesture, its per-device mode and the three
+        // copies of its label.
         // Canvas widget prefs persistence
         function saveCanvasPrefs() {
             var prefs = {};
@@ -13771,18 +13353,6 @@
             // Loop btn
             var ll = document.getElementById("live-loop-btn");
             if (ll) { if (isLooping) ll.classList.add("active"); else ll.classList.remove("active"); }
-        }
-        function liveNav(dir, e) {
-            if (e) e.stopPropagation();
-            var activeIdx = -1;
-            activeIdx = activeInstanceIdx();
-            var target = null;
-            if (dir === "next") { target = findNextValidSong(activeIdx); }
-            else if (dir === "prev") {
-                if (activeIdx !== -1 && currentPos - displayList[activeIdx].start > 2) { target = displayList[activeIdx]; }
-                else { target = findPrevValidSong(activeIdx); }
-            }
-            if (target) cueRegion(target.start, target.id);
         }
         function adjustLiveSize(delta) {
             liveFontScale = Math.max(0.4, Math.min(2.0, liveFontScale + delta * 0.15));
@@ -14216,17 +13786,9 @@
         // ── Navigation helpers ─────────────────────────────────────
         function midiGetActiveIdx() { return activeInstanceIdx(); }
 
-        function midiNextSong() {
-            var idx  = midiGetActiveIdx();
-            var next = findNextValidSong(idx);
-            if (next) cueRegion(next.start, next.id);
-        }
+        function midiNextSong() { navSong('next'); }
 
-        function midiPrevSong() {
-            var idx  = midiGetActiveIdx();
-            var prev = findPrevValidSong(idx);
-            if (prev) cueRegion(prev.start, prev.id);
-        }
+        function midiPrevSong() { navSong('prev'); }
 
         function midiNextSection() {
             var idx = midiGetActiveIdx();

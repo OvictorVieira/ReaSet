@@ -80,81 +80,46 @@ async function openPage(browser, { mode = 'slide', lang = 'en', noPointer = fals
     return { ctx, page, errors };
 }
 
-// ── 1. The Stop gesture, on an engine with no Pointer Events ───────────────
+// ── 1. The transport, on an engine with no Pointer Events ─────────────────
 //
-// Four cases, and each one is a different way for this control to be wrong:
-// a completed slide must stop exactly once, an abandoned one must not stop at
-// all, a tap on a slider must do nothing, and a tap in tap mode must stop —
-// once, not twice when the synthetic mouse event lands 300ms later.
-async function gestureMatrix(browser) {
-    console.log('\n1. Stop gesture with no Pointer Events');
-    const cases = [
-        ['slide', 'full',    1, 'a completed slide stops'],
-        ['slide', 'abandon', 0, 'a slide taken back is abandoned'],
-        ['slide', 'tap',     0, 'a tap on the slider does nothing'],
-        ['tap',   'tap',     1, 'tap mode stops on press'],
-    ];
-    for (const [mode, gesture, want, label] of cases) {
-        const { ctx, page, errors } = await openPage(browser, { mode, noPointer: true });
-        await page.evaluate(() => {
-            window.__stops = 0;
-            window.smartStop = function () { window.__stops++; };
-        });
-        const out = await page.evaluate((g) => {
-            const btn = document.getElementById('main-stop-btn');
-            const r = btn.getBoundingClientRect();
-            const y = r.top + r.height / 2;
-            const fire = (type, x) => {
-                const t = new Touch({ identifier: 1, target: btn, clientX: x, clientY: y });
-                const empty = type === 'touchend';
-                const e = new TouchEvent(type, {
-                    touches: empty ? [] : [t], targetTouches: empty ? [] : [t],
-                    changedTouches: [t], bubbles: true, cancelable: true,
-                });
-                btn.dispatchEvent(e);
-                return e.defaultPrevented;
-            };
-            const x0 = r.left + 27;
-            let cancelled = 0, fired = 0;
-            const step = (type, x) => { if (fire(type, x)) cancelled++; fired++; };
-            step('touchstart', x0);
-            let travelled = false;
-            if (g !== 'tap') {
-                for (let i = 1; i <= 10; i++) step('touchmove', x0 + (r.width - 60) * (i / 10));
-                travelled = !!btn.querySelector('.ss-thumb').style.transform;
-                if (g === 'abandon') for (let i = 5; i >= 0; i--) step('touchmove', x0 + 10 * i);
-            }
-            step('touchend', x0);
-            return { stops: window.__stops, travelled, cancelled, fired };
-        }, gesture);
+// This section used to drive Slide to Stop, which was the one control here
+// bound to pointer events and therefore inert on WebKit before 13. Stop is
+// gone — pause is what a show needs — and with it the gesture. What is left is
+// four plain buttons, and the thing worth proving about them on that engine is
+// the unglamorous one: a touch actually reaches them.
+//
+// It is thinner than what it replaces and says so. The interesting failure
+// moved out of the transport when the gesture did.
+async function transportResponds(browser) {
+    console.log('\n1. Transport buttons with no Pointer Events');
+    const { ctx, page, errors } = await openPage(browser, { noPointer: true });
 
-        // The mouse event a touchscreen synthesises ~300ms after touchend. If
-        // the fallback does not suppress it, every stop happens twice — and in
-        // tap mode every tap does.
-        await page.evaluate(() => {
-            const btn = document.getElementById('main-stop-btn');
-            const r = btn.getBoundingClientRect();
-            btn.dispatchEvent(new MouseEvent('mousedown', {
-                bubbles: true, cancelable: true,
-                clientX: r.left + r.width / 2, clientY: r.top + r.height / 2,
-            }));
-        });
-        const after = await page.evaluate(() => window.__stops);
+    await page.evaluate(() => {
+        window.__calls = [];
+        for (const fn of ['togglePlay', 'navSong', 'toggleCurrentLoop']) {
+            const real = window[fn];
+            window[fn] = function () { window.__calls.push(fn + (arguments[0] ? ':' + arguments[0] : '')); };
+            window['__real_' + fn] = real;
+        }
+    });
 
-        check(`${label} (${mode}/${gesture})`, out.stops === want && after === want,
-              `stops=${out.stops} afterMouseEcho=${after} want=${want}`);
-        if (gesture !== 'tap') {
-            check(`  the thumb follows the finger (${mode}/${gesture})`, out.travelled);
-        }
-        if (mode === 'slide') {
-            // Without this the page scrolls out from under the drag: the engine
-            // that has no Pointer Events has no touch-action either.
-            check(`  the drag is not handed to the scroller (${mode}/${gesture})`,
-                  out.cancelled >= out.fired - 1, `cancelled ${out.cancelled}/${out.fired}`);
-        }
-        check(`  no page errors (${mode}/${gesture})`, errors.length === 0, errors[0] || '');
-        await ctx.close();
+    for (const [id, want] of [
+        ['footer-prev-btn', 'navSong:prev'],
+        ['main-play-btn',   'togglePlay'],
+        ['footer-loop-btn', 'toggleCurrentLoop'],
+        ['footer-next-btn', 'navSong:next'],
+    ]) {
+        const el = await page.$('#' + id);
+        check(`${id} exists`, !!el);
+        if (!el) continue;
+        await el.tap().catch(async () => { await el.click(); });
+        const calls = await page.evaluate(() => window.__calls);
+        check(`${id} responds to a touch`, calls.includes(want),
+              `calls=${JSON.stringify(calls)} want=${want}`);
+        await page.evaluate(() => { window.__calls = []; });
     }
+    check('no page errors', errors.length === 0, errors[0] || '');
+    await ctx.close();
 }
 
 // ── 2. Spacing, on an engine with no flex gap ─────────────────────────────
@@ -210,52 +175,57 @@ async function gapEmulation(browser) {
 
 // ── 3. Every target stays a target ────────────────────────────────────────
 //
-// 44pt in both axes is the floor for a finger, and a slider needs travel on
-// top of that. Both were lost once already: a phone on its side is 844px wide
-// and 390px tall, and a width-only media query read that as a tablet — the bar
-// took 46% of the screen and left about one song visible. Fixing that by
-// compressing it then took the Stop track down to 32px, which is thin enough
-// that a thumb landing slightly high misses the one control that has to work.
+// 44pt in both axes is the floor for a finger. It was lost once already: a
+// phone on its side is 844px wide and 390px tall, and a width-only media query
+// read that as a tablet — the bar took 46% of the screen and left about one
+// song visible.
 //
-// So both directions are checked at once, at every size that matters.
+// The bar is also checked for what it is NOT: four controls, no more. Every
+// button here costs a target a thumb can land on by mistake, and the two that
+// were removed — Stop and RECONNECT — were the two nobody presses during a
+// song.
 async function touchTargets(browser) {
-    console.log('\n3. Touch targets and slider travel');
+    console.log('\n3. Touch targets');
     const sizes = [
         [844, 390, 'phone landscape'], [390, 844, 'phone portrait'],
         [1024, 768, 'iPad landscape'], [768, 1024, 'iPad portrait'],
         [320, 568, 'small phone'],     [1400, 900, 'desktop'],
     ];
+    const IDS = ['footer-prev-btn', 'main-play-btn', 'footer-loop-btn', 'footer-next-btn'];
     for (const [w, h, label] of sizes) {
         const ctx = await browser.newContext({ viewport: { width: w, height: h } });
         const page = await ctx.newPage();
-        await page.addInitScript(() => {
-            localStorage.setItem('reaset_stop_mode', 'slide');
-            localStorage.setItem('reaset_lang', 'pt');   // the longest labels
-        });
+        // Portuguese: the longest labels this app has to fit.
+        await page.addInitScript(() => localStorage.setItem('reaset_lang', 'pt'));
         await page.goto(FILE);
         await page.waitForTimeout(600);
-        const r = await page.evaluate(() => {
-            const box = id => {
-                const b = document.getElementById(id).getBoundingClientRect();
+        const r = await page.evaluate((ids) => {
+            const bar = document.querySelector('.app-transport');
+            const boxes = ids.map(id => {
+                const el = document.getElementById(id);
+                if (!el) return null;
+                const b = el.getBoundingClientRect();
                 return [Math.round(b.width), Math.round(b.height)];
-            };
-            const stop = document.getElementById('main-stop-btn');
-            const thumb = stop.querySelector('.ss-thumb');
-            const label = stop.querySelector('.stop-label');
-            const bar = document.querySelector('.app-transport').getBoundingClientRect();
+            });
             return {
-                heights: ['main-play-btn', 'main-stop-btn', 'footer-loop-btn', 'reconnect-btn'].map(i => box(i)[1]),
-                travel: stop.clientWidth - thumb.offsetWidth - 8,
-                clipped: label.scrollWidth > label.clientWidth + 1,
-                row: stop.parentElement.id,
-                barShare: Math.round(bar.height / window.innerHeight * 100),
+                boxes,
+                count: bar.querySelectorAll(':scope > button').length,
+                barShare: Math.round(bar.getBoundingClientRect().height / window.innerHeight * 100),
+                playWidest: (() => {
+                    const w = boxes.map(b => b ? b[0] : 0);
+                    return w[1] === Math.max.apply(null, w);
+                })(),
             };
-        });
-        const shortest = Math.min(...r.heights);
+        }, IDS);
+
+        check(`${label}: all four controls present`, r.boxes.every(Boolean) && r.count === 4,
+              `count=${r.count}`);
+        if (!r.boxes.every(Boolean)) { await ctx.close(); continue; }
+        const shortest = Math.min.apply(null, r.boxes.map(b => b[1]));
         check(`${label}: every control is at least 44px tall`, shortest >= 44, `shortest ${shortest}px`);
-        check(`${label}: the slider has real travel`, r.travel >= 80, `${r.travel}px`);
-        check(`${label}: the label is not clipped`, !r.clipped);
-        check(`${label}: the bar does not eat the setlist`, r.barShare <= 35, `${r.barShare}% of the screen`);
+        check(`${label}: PLAY is the widest control`, r.playWidest,
+              r.boxes.map((b, i) => IDS[i].replace('footer-', '').replace('-btn', '') + '=' + b[0]).join(' '));
+        check(`${label}: the bar does not eat the setlist`, r.barShare <= 32, `${r.barShare}% of the screen`);
         await ctx.close();
     }
 }
@@ -276,7 +246,7 @@ async function probeBehaviour(browser) {
     const browser = await chromium.launch(EXE ? { executablePath: EXE } : {});
     try {
         console.log('ReaSet legacy engine harness —', FILE);
-        await gestureMatrix(browser);
+        await transportResponds(browser);
         await gapEmulation(browser);
         await touchTargets(browser);
         await probeBehaviour(browser);
