@@ -181,25 +181,32 @@ const snap = () => ({
 
     const appliedColour = await page.evaluate('(function(){' + `
         enterEditMode();
-        _ctxPickColor('1_1', '#00ff00', false);
-        _ctxPickColor('2_2', '#0000ff', false);
+        // Upper case, the way SONG_COLOR_PALETTE is written — the mismatch
+        // against REAPER's lower-case reply is the bug this models.
+        _ctxPickColor('1_1', '#00FF00', false);
+        _ctxPickColor('2_2', '#0000FF', false);
         window.__sent = [];
         applyEdits();
         var wrote = window.__sent.filter(function (c) { return c.indexOf('regionColor') !== -1; });
         var stillStaged = JSON.stringify(g_stagedColors);
-        // REAPER answers: the next REGION poll reports the new colours.
-        g_regionReaperColor['1'] = '#00ff00';
-        g_regionReaperColor['2'] = '#0000ff';
+        // REAPER answers: the next REGION poll reports the new colours — in
+        // LOWER CASE, because they come back through Number.toString(16),
+        // while the palette is written in upper case. Comparing them with ===
+        // meant a colour the project HAD taken was never recognised, the
+        // staging never cleared, and the watchdog cried "REAPER did not
+        // confirm" every single time. Seeded lower-case on purpose.
+        g_regionReaperColor['1'] = '#00FF00'.toLowerCase();
+        g_regionReaperColor['2'] = '#0000FF'.toLowerCase();
         _confirmStagedColors();
         return { wrote: wrote, stillStaged: stillStaged, afterConfirm: JSON.stringify(g_stagedColors) };
     ` + '})()');
     check('Apply writes every staged colour in ONE request',
           appliedColour.wrote.length === 1, appliedColour.wrote[0] || '(nothing)');
     check('each region gets its own colour',
-          /1:00ff00/.test(appliedColour.wrote[0] || '') && /2:0000ff/.test(appliedColour.wrote[0] || ''),
+          /1:00FF00/i.test(appliedColour.wrote[0] || '') && /2:0000FF/i.test(appliedColour.wrote[0] || ''),
           appliedColour.wrote[0]);
     check('the colour stays on screen while REAPER catches up',
-          appliedColour.stillStaged.indexOf('00ff00') !== -1, appliedColour.stillStaged);
+          appliedColour.stillStaged.indexOf('00FF00') !== -1, appliedColour.stillStaged);
     check('and the staging clears once the project agrees',
           appliedColour.afterConfirm === '{}', appliedColour.afterConfirm);
 

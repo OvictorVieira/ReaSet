@@ -8784,13 +8784,25 @@
 
         // Called from syncRegions once g_regionReaperColor is fresh. A staged
         // colour the project now agrees with has served its purpose.
+        // CASE-INSENSITIVE, and that is not a nicety. The palette is written
+        // '#0A84FF' and the colour REAPER reports comes back through
+        // Number.toString(16), which is lower case — '#0a84ff'. A === compare
+        // therefore never matched, so a colour the project HAD taken was never
+        // recognised as confirmed: the staging never cleared and the watchdog
+        // cried "REAPER did not confirm" six seconds later, every time.
+        // applyChordsColor() already lower-cased both sides for exactly this
+        // reason; this did not, and that is the whole bug.
+        function _sameColour(a, b) {
+            return String(a || '').toLowerCase() === String(b || '').toLowerCase();
+        }
+
         function _confirmStagedColors() {
             var changed = false;
             for (var rid in g_stagedColors) {
                 if (!g_stagedColors.hasOwnProperty(rid)) continue;
                 var want = g_stagedColors[rid];
                 var have = g_regionReaperColor.hasOwnProperty(rid) ? g_regionReaperColor[rid] : null;
-                if ((want || null) === (have || null)) { delete g_stagedColors[rid]; changed = true; }
+                if (_sameColour(want, have)) { delete g_stagedColors[rid]; changed = true; }
             }
             return changed;
         }
