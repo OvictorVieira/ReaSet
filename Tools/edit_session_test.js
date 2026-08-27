@@ -216,8 +216,13 @@ const snap = () => ({
     check('colouring a block stages every song in it, including the one above',
           /"1":"#abcdef"/.test(blockColour.staged) && /"2":"#abcdef"/.test(blockColour.staged),
           blockColour.staged);
+    // Comma, not semicolon: `;` separates COMMANDS in REAPER's web interface,
+    // so a `;`-joined value was read as several commands and all but the first
+    // were dropped. That is what made colouring a block colour one song.
     check('and the block is still one write',
-          /1:abcdef;2:abcdef/.test(blockColour.wrote), blockColour.wrote);
+          /1:abcdef,2:abcdef/.test(blockColour.wrote), blockColour.wrote);
+    check('the payload is one command, not several',
+          (blockColour.wrote.match(/;/g) || []).length === 0, blockColour.wrote);
 
     // ── 3b. The block-scope switch ──────────────────────────────────────
     // It used to be read only at the instant a swatch was tapped, so picking a
