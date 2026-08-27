@@ -3180,9 +3180,20 @@ def test_every_control_in_the_row_panel_is_sized_for_a_finger(script_body: str) 
     still being handed 32px buttons and 20px switches. The same finger.
     """
     html = REASET_HTML.read_text(encoding="utf-8")
-    touch = re.search(r"@media\s*\(hover:\s*none\)\s*\{(.*?)\n        \}", html, re.S)
-    assert touch, "the touch sizing block is gone"
-    block = touch.group(1)
+    # There is more than one touch block in the file now, so pick the one that
+    # sizes THIS panel rather than whichever comes first.
+    blocks = [
+        m.group(1)
+        for m in re.finditer(
+            r"@media\s*\(hover:\s*none\)\s*\{(.*?)\n        \}", html, re.S
+        )
+        if ".song-ctx-panel" in m.group(1)
+    ]
+    assert blocks, "the row panel's touch sizing block is gone"
+    assert len(blocks) == 1, (
+        f"{len(blocks)} touch blocks size the row panel — they can disagree"
+    )
+    block = blocks[0]
 
     # Substrings are too loose here: deleting the rule that SIZES the switch
     # leaves ".song-ctx-toggle" behind in the :checked rule right under it, and
@@ -3262,3 +3273,79 @@ def test_the_lyrics_popover_uses_the_app_controls() -> None:
         assert "n-switch" in block.split(tag)[0][-220:], (
             f"a checkbox is not inside the app's switch: {tag[:80]}"
         )
+
+
+# ── The sidebar ─────────────────────────────────────────────────────────────
+
+
+def test_the_sidebar_buttons_use_the_app_palette() -> None:
+    """They were Material gradients — slate #37474f→#546e7a, red
+    #B71C1C→#D32F2F, teal #004D40→#00796B, orange #BF360C→#E64A19 — and not one
+    of those colours appears anywhere else in the file.
+
+    The app's idiom is a translucent surface with a hairline border, with the
+    meaning carried by the icon's colour: .n-btn-new, .ea-btn, .m-btn all do
+    this. A gradient slab in the middle of that reads as a different product.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    base = _css_decls(html, ".sidebar-action-btn")
+    assert "linear-gradient" not in base, "the buttons are filled slabs again"
+    assert "border" in base, "the hairline that makes them app surfaces is gone"
+
+    for variant in (".sab-slate", ".sab-teal", ".sab-orange", ".sab-red"):
+        rules = re.findall(
+            r"(?m)^ {8}" + re.escape(variant) + r"[^{}]*\{([^}]*)\}", html
+        )
+        assert "linear-gradient" not in " ".join(rules), (
+            f"{variant} is a gradient again"
+        )
+        # Specifically the icon rule: joining every rule for the variant lets
+        # a deleted one hide behind its siblings, which is how the first
+        # version of this check passed with the whole declaration removed.
+        # Whitespace-tolerant: the source aligns these selectors in a column,
+        # so `.sab-teal  .sab-icon` carries two spaces and an exact-string
+        # selector match reports it as missing.
+        icon = re.search(
+            r"(?m)^ {8}" + re.escape(variant) + r"\s+\.sab-icon\s*\{([^}]*)\}",
+            html,
+        )
+        icon = icon.group(1) if icon else ""
+        assert "color" in icon, (
+            f"{variant} no longer colours its icon, so the button carries no "
+            "meaning at all"
+        )
+
+
+def test_the_sidebar_icons_are_drawn_not_typed() -> None:
+    """Emoji render as whatever the device has: 🏷️ and 🔒 come out in full
+    colour on an iPhone and as flat glyphs elsewhere, so a row of them is never
+    one set. The rest of this app draws its icons as inline SVG in currentColor.
+    """
+    # HTML comments first: the MIDI sidebar section is commented out, and its
+    # icon should not be held to a standard for markup that cannot render.
+    html = re.sub(
+        r"<!--.*?-->", "", REASET_HTML.read_text(encoding="utf-8"), flags=re.S
+    )
+    icons = re.findall(r'<span class="sab-icon">(.*?)</span>', html, re.S)
+    assert icons, "the sidebar buttons lost their icons"
+    for body in icons:
+        assert "<svg" in body, (
+            f"a sidebar icon is a glyph rather than an SVG: {body.strip()[:40]!r}"
+        )
+        assert "currentColor" in body, (
+            "a sidebar icon hardcodes its colour, so it cannot follow the "
+            "button variant"
+        )
+
+
+def test_the_help_buttons_look_pressable() -> None:
+    """A flat disc with no border and no hover reads as decoration."""
+    html = REASET_HTML.read_text(encoding="utf-8")
+    base = _css_decls(html, ".toggle-row .help-btn")
+    assert "border" in base, "the help button lost its edge"
+    hover = _css_decls(html, ".toggle-row .help-btn:hover")
+    assert hover.strip(), "nothing happens when you point at it"
+    assert "30, 215, 96" in hover, (
+        "the hover is not the app's green, so it does not read as this app's "
+        "control"
+    )

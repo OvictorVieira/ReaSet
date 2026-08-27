@@ -297,20 +297,38 @@
             border-bottom: none;
         }
 
+        /* A flat grey disc with no border and no hover read as decoration
+           rather than as something you could press — and it opens the app's
+           own help dialog, so it should look like the app. */
         .toggle-row .help-btn {
-            width: 16px;
-            height: 16px;
+            width: 19px;
+            height: 19px;
             border-radius: 50%;
-            background: rgba(255, 255, 255, 0.10);
-            border: none;
-            color: var(--text-subdued);
-            font-size: 10px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: rgba(255, 255, 255, 0.45);
+            font-family: var(--font-ui);
+            font-size: 11px;
             font-weight: 700;
+            line-height: 1;
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
+            transition: background 0.15s, border-color 0.15s, color 0.15s;
+        }
+
+        .toggle-row .help-btn:hover {
+            background: rgba(30, 215, 96, 0.14);
+            border-color: rgba(30, 215, 96, 0.42);
+            color: var(--color-brand);
+        }
+
+        /* No hover on a touch screen, so it has to be big enough to hit
+           without one. */
+        @media (hover: none) {
+            .toggle-row .help-btn { width: 26px; height: 26px; font-size: 12px; }
         }
 
         /* ══════════════════════════════════════════════
@@ -2819,21 +2837,34 @@
             .ea-btn .ea-label { display: none; }
         }
 
+        /* These were Material gradients — slate #37474f→#546e7a, red
+           #B71C1C→#D32F2F, teal #004D40→#00796B — none of which appear
+           anywhere else in this file. The app's own idiom is a translucent
+           surface with a hairline border, and the MEANING carried by the icon
+           rather than by a filled slab: see .n-btn-new, .ea-btn, .m-btn. The
+           class names are kept so the markup does not have to move. */
         .sidebar-action-btn {
             display: flex;
             align-items: center;
             gap: 12px;
             width: 100%;
-            padding: 12px 16px;
+            padding: 12px 14px;
             border-radius: 12px;
-            border: none;
+            background: rgba(255, 255, 255, 0.055);
+            border: 1px solid rgba(255, 255, 255, 0.10);
             cursor: pointer;
             font-family: var(--font-ui);
             font-size: 13px;
             font-weight: 700;
-            color: #fff;
+            color: var(--text-primary);
+            text-align: left;
             margin-bottom: 8px;
-            transition: all 0.18s;
+            transition: background 0.18s, border-color 0.18s;
+        }
+
+        .sidebar-action-btn:hover {
+            background: rgba(255, 255, 255, 0.09);
+            border-color: rgba(255, 255, 255, 0.18);
         }
 
         .sidebar-action-btn:last-child {
@@ -2842,24 +2873,33 @@
 
         .sidebar-action-btn .sab-icon {
             font-size: 18px;
-            width: 24px;
-            text-align: center;
+            width: 22px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            /* The icons draw with currentColor, so the variant below is the
+               only thing that decides their colour. */
+            color: var(--color-brand);
         }
 
-        .sab-teal {
-            background: linear-gradient(135deg, #004D40, #00796B);
+        .sab-teal  .sab-icon { color: var(--color-brand); }
+        .sab-slate .sab-icon { color: var(--color-brand); }
+        /* Import REPLACES every setting on this device, so it is the one
+           button here that should give you pause. Amber, the same amber the
+           app already uses for a timer and a queued row — not a red slab,
+           which reads as "delete". */
+        .sab-orange .sab-icon { color: var(--color-timer); }
+        .sab-orange { border-color: rgba(255, 159, 10, 0.32); }
+        .sab-orange:hover {
+            background: rgba(255, 159, 10, 0.12);
+            border-color: rgba(255, 159, 10, 0.48);
         }
-
-        .sab-red {
-            background: linear-gradient(135deg, #B71C1C, #D32F2F);
-        }
-
-        .sab-slate {
-            background: linear-gradient(135deg, #37474f, #546e7a);
-        }
-
-        .sab-orange {
-            background: linear-gradient(135deg, #BF360C, #E64A19);
+        .sab-red .sab-icon { color: var(--color-active); }
+        .sab-red { border-color: rgba(252, 60, 68, 0.32); }
+        .sab-red:hover {
+            background: rgba(252, 60, 68, 0.12);
+            border-color: rgba(252, 60, 68, 0.48);
         }
 
         /* Font buttons */
@@ -3215,26 +3255,6 @@
             font-weight: 700;
             border-radius: var(--radius-pill);
             transition: all 0.18s ease;
-        }
-
-        .lt-stop {
-            background: var(--color-active);
-            color: #fff;
-            padding: 12px 22px;
-            font-size: 14px;
-            box-shadow: 0 4px 16px rgba(252, 60, 68, 0.4);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .lt-stop::before {
-            content: '';
-            position: absolute;
-            top: 0; right: 0; bottom: 0; left: 0;
-            background: rgba(255, 255, 255, 0.34);
-            width: 0%;
-            border-radius: inherit;
-            pointer-events: none;
         }
 
         
@@ -3965,57 +3985,7 @@
             justify-content: center;
         }
 
-        .live-btn {
-            padding: 16px 22px;
-            font-size: 18px;
-            font-weight: 900;
-            border: none;
-            border-radius: 12px;
-            cursor: pointer;
-            color: #fff;
-            transition: all 0.2s;
-        }
-
-        .live-btn:active {
-            transform: scale(0.95);
-        }
-
-        .lb-prev {
-            background: linear-gradient(135deg, #37474f, #546e7a);
-        }
-
-        .lb-play {
-            background: linear-gradient(135deg, #1b5e20, #2e7d32);
-            min-width: 110px;
-        }
-
-        .lb-stop {
-            background: linear-gradient(135deg, #b71c1c, #d32f2f);
-            position: relative;
-            overflow: hidden;
-            transition: color 0.1s;
-        }
-
         /* Fill animation overlay for Hold mode */
-        .lb-stop::before {
-            content: '';
-            position: absolute;
-            top: 0; right: 0; bottom: 0; left: 0;
-            background: rgba(255, 255, 255, 0.34);
-            width: 0%;
-            left: 0;
-            top: 0;
-            bottom: 0;
-            transform-origin: left;
-            border-radius: inherit;
-            pointer-events: none;
-            transition: none;
-        }
-
-
-        .lb-next {
-            background: linear-gradient(135deg, #1565C0, #2196F3);
-        }
 
         /* === CANVAS MODE === */
         #canvas-mode {
@@ -4139,12 +4109,6 @@
             justify-content: center;
             width: 100%;
             padding: 8px;
-        }
-
-        .cw-transport-wrapper .live-btn {
-            flex: 1;
-            min-width: 60px;
-            font-size: 14px; font-size: clamp(11px, 1.5vw, 16px);
         }
 
         /* Canvas widget toolbar (edit mode) */
@@ -4292,9 +4256,6 @@
             cursor: pointer;
         }
 
-        .lb-loop {
-            background: linear-gradient(135deg, #424242, #616161);
-        }
         /* ══════════════════════════════════════════════
    APPEARANCE MODAL
 ══════════════════════════════════════════════ */
@@ -5327,9 +5288,9 @@
             <button class="sidebar-action-btn sab-slate" onclick="openAppearanceModal()">
                 <span class="sab-icon">
                     <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <circle cx="9" cy="9" r="7.5" stroke="white" stroke-opacity="0.85" stroke-width="1.5"/>
-                        <path d="M9 1.5C9 1.5 13.5 5.5 13.5 9C13.5 12.5 9 16.5 9 16.5" stroke="white" stroke-opacity="0.85" stroke-width="1.5"/>
-                        <line x1="1.5" y1="9" x2="16.5" y2="9" stroke="white" stroke-opacity="0.85" stroke-width="1.5"/>
+                        <circle cx="9" cy="9" r="7" stroke="currentColor" stroke-width="1.6"/>
+                        <path d="M9 2C9 2 13 5.6 13 9C13 12.4 9 16 9 16" stroke="currentColor" stroke-width="1.6"/>
+                        <line x1="2" y1="9" x2="16" y2="9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
                     </svg>
                 </span>
                 Appearance
@@ -5345,10 +5306,10 @@
         <div class="sidebar-section">
             <div class="sidebar-section-title">Data &mdash; Backup</div>
             <button class="sidebar-action-btn sab-slate" onclick="exportAllData()">
-                <span class="sab-icon">↓</span> Export Settings JSON
+                <span class="sab-icon"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2.5v8.2m0 0 3-3m-3 3-3-3"/><path d="M3 12v2.2a1.3 1.3 0 0 0 1.3 1.3h9.4a1.3 1.3 0 0 0 1.3-1.3V12"/></svg></span> Export Settings JSON
             </button>
             <button class="sidebar-action-btn sab-orange" onclick="document.getElementById('importAllInput').click()">
-                <span class="sab-icon">↑</span> Import Settings JSON
+                <span class="sab-icon"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 10.7V2.5m0 0 3 3m-3-3-3 3"/><path d="M3 12v2.2a1.3 1.3 0 0 0 1.3 1.3h9.4a1.3 1.3 0 0 0 1.3-1.3V12"/></svg></span> Import Settings JSON
             </button>
             <input type="file" id="importAllInput" style="display:none" accept=".json" onchange="importAllData(this)">
         </div>
@@ -5366,20 +5327,20 @@
             <!-- Not mode-gated: naming a device is useful before it's ever a
                  Director, so the name is already meaningful once it becomes one. -->
             <button class="sidebar-action-btn sab-slate" onclick="renameDevice();closeSidebar()">
-                <span class="sab-icon">🏷️</span> This device: <span id="deviceNameBtnLabel"></span>
+                <span class="sab-icon"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8.4 2.6h5.5a1.5 1.5 0 0 1 1.5 1.5v5.5a1 1 0 0 1-.29.71l-5.4 5.4a1 1 0 0 1-1.42 0l-5.5-5.5a1 1 0 0 1 0-1.42l5.4-5.4a1 1 0 0 1 .71-.29Z"/><circle cx="12.1" cy="5.9" r="1.05"/></svg></span> This device: <span id="deviceNameBtnLabel"></span>
             </button>
             <!-- Push is meaningless on a Controller — its publish-class writes
                  are already no-ops — so it's hidden there rather than left to
                  fail silently. -->
             <button class="sidebar-action-btn sab-slate" id="syncPushBtn" onclick="_syncPushNow();closeSidebar()">
-                <span class="sab-icon">⇪</span> Push setlist to shared
+                <span class="sab-icon"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 3.2h11.6"/><path d="M9 15.6V6.6m0 0 3.2 3.2M9 6.6 5.8 9.8"/></svg></span> Push setlist to shared
             </button>
             <button class="sidebar-action-btn sab-slate" onclick="_syncPullNow(true);closeSidebar()">
-                <span class="sab-icon">⇩</span> Pull setlist from shared
+                <span class="sab-icon"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 3.2h11.6"/><path d="M9 6.6v9m0 0 3.2-3.2M9 15.6 5.8 12.4"/></svg></span> Pull setlist from shared
             </button>
             <!-- Meaningless on a Controller for the same reason as Push above. -->
             <button class="sidebar-action-btn sab-slate" id="directorPinBtn" onclick="setDirectorPin();closeSidebar()">
-                <span class="sab-icon">🔒</span> Set/Change Director PIN
+                <span class="sab-icon"><svg width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.9" y="7.9" width="10.2" height="7.4" rx="1.6"/><path d="M6.4 7.9V6.1a2.6 2.6 0 0 1 5.2 0v1.8"/></svg></span> Set/Change Director PIN
             </button>
         </div>
     </div>
