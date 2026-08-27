@@ -3405,3 +3405,70 @@ def test_the_chord_sits_in_a_column_with_its_syllable() -> None:
     )
     chord = _css_decls(html, ".lyr-chord")
     assert chord.strip(), "the chord has no styling of its own"
+
+
+# ── CSS Grid, and the iPad that stopped at iOS 9.3.5 ────────────────────────
+
+
+def test_every_grid_has_a_fallback_for_the_ipad() -> None:
+    """CSS Grid is Safari 10.1. The target iPad mini stopped at iOS 9.3.5.
+
+    There `display: grid` is not a partial implementation — it is an unknown
+    value, so the declaration is dropped and the element becomes a block.
+
+    For the colour palettes that is not graceful. A swatch is `width: 100%`
+    with `padding-bottom` for its height, and percentage padding resolves
+    against the CONTAINING BLOCK: the grid area when there is a grid, the whole
+    panel when there is not. Measured with grid forced off and no fallback,
+    each swatch rendered 239x239 across 18 rows. With the fallback, 36x36
+    across 4.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    css = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
+
+    # Selector lists that declare display:grid, excluding the fallbacks
+    # themselves.
+    grids: list[str] = []
+    for match in re.finditer(r"(?m)^ {8}((?:[^{}\n]+,\s*\n {8})*[^{}\n]+)\{([^}]*)\}", css):
+        selectors, body = match.group(1), match.group(2)
+        if "display: grid" not in body:
+            continue
+        for sel in selectors.split(","):
+            sel = sel.strip()
+            if sel and not sel.startswith("html.no-grid"):
+                grids.append(sel)
+
+    assert grids, "no grid rules found — this test is no longer looking at anything"
+
+    # The fallback has to give the CONTAINER a display of its own. Matching
+    # the selector alone passes on a child rule like
+    # `html.no-grid .grid-mode > *`, which leaves the container a grid.
+    missing = []
+    for sel in grids:
+        rule = re.search(
+            r"html\.no-grid\s+" + re.escape(sel) + r"\s*(?:,[^{]*)?\{([^}]*)\}", css
+        )
+        if not rule or "display" not in rule.group(1):
+            missing.append(sel)
+    assert not missing, (
+        f"declared display:grid with no html.no-grid fallback: {missing}. On "
+        "iOS 9.3.5 these collapse to blocks."
+    )
+
+
+def test_the_grid_probe_exists_and_is_a_probe() -> None:
+    """Sniffing the UA cannot answer this: Chrome on iOS reports Chrome and
+    runs the system WebKit, which is exactly the engine that fails.
+    """
+    body = strip_comments(REASET_HTML.read_text(encoding="utf-8"))
+    # Exact, and invoked. "detectGrid" as a substring also matches a renamed
+    # `detectGridDisabled` sitting next to a probe nobody calls.
+    assert re.search(r"\(function detectGrid\(\)\s*\{", body), (
+        "the grid probe is gone or is no longer the self-invoking probe"
+    )
+    probe = body[body.index("function detectGrid()") :][:600]
+    assert "style.display = 'grid'" in probe and "!== 'grid'" in probe, (
+        "the probe no longer asks the engine whether it understands grid"
+    )
+    assert "no-grid" in probe, "the probe sets no class, so every fallback is inert"
+    assert "userAgent" not in probe, "the probe sniffs the UA instead of measuring"

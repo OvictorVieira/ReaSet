@@ -20,6 +20,12 @@
 //      including the synthetic mouse echo a touchscreen sends after touchend,
 //      which is the thing that would otherwise stop the show twice.
 //
+//   3. NO CSS GRID. `display: grid` is Safari 10.1, and the iPad this targets
+//      stopped at iOS 9.3.5 — Safari 9. There the declaration is dropped and
+//      the element is a block. Forced here by overriding every grid container
+//      to `display: block`, which is exactly what that engine does, and then
+//      measuring what the page makes of it.
+//
 //   2. NO FLEX GAP. Every gap is forced to zero, which is what WebKit before
 //      14.1 does in a flex container, and the class the real probe would set is
 //      applied. Spacing is then compared against the same page unforced.
@@ -54,12 +60,25 @@ function check(name, pass, detail) {
 
 // Deleting the constructor is what the app actually branches on, so this
 // reproduces the engine's behaviour rather than imitating it.
+// Overrides every grid container the stylesheet declares, the way an engine
+// that has never heard of grid would. Applied as a stylesheet rather than by
+// deleting the declarations so the fallback rules still get their chance —
+// the point is to check the FALLBACK, not to check that grid is gone.
+const KILL_GRID = () => {
+    document.documentElement.className += ' no-grid';
+    const st = document.createElement('style');
+    st.textContent =
+        '.song-ctx-palette, .ap-swatches, .ls-swatches, .grid-mode,' +
+        '.sview-grid, .two-col, .three-col { display: block !important; }';
+    document.head.appendChild(st);
+};
+
 const KILL_POINTER = () => {
     try { delete window.PointerEvent; } catch (e) {}
     Object.defineProperty(window, 'PointerEvent', { value: undefined, configurable: true });
 };
 
-async function openPage(browser, { mode = 'slide', lang = 'en', noPointer = false, noGap = false } = {}) {
+async function openPage(browser, { mode = 'slide', lang = 'en', noPointer = false, noGap = false, noGrid = false } = {}) {
     const ctx = await browser.newContext({
         viewport: { width: 768, height: 1024 }, hasTouch: true, isMobile: true,
     });
@@ -76,6 +95,7 @@ async function openPage(browser, { mode = 'slide', lang = 'en', noPointer = fals
         await page.addStyleTag({ content: '*{gap:0 !important;row-gap:0 !important;column-gap:0 !important}' });
         await page.evaluate(() => { document.documentElement.className += ' no-flexgap'; });
     }
+    if (noGrid) await page.evaluate(KILL_GRID);
     await page.waitForTimeout(700);
     return { ctx, page, errors };
 }
@@ -238,6 +258,50 @@ async function touchTargets(browser) {
 
 // ── 4. The probe itself ───────────────────────────────────────────────────
 async function probeBehaviour(browser) {
+    // ── 5. The colour palette on an engine with no CSS Grid ──────────────
+    // A swatch is `width: 100%` with `padding-bottom` for its height, and a
+    // percentage padding resolves against the CONTAINING BLOCK — the grid area
+    // when there is a grid, the whole panel when there is not. Measured with
+    // grid forced off and the fallback removed, each swatch came out 239x239
+    // across 18 rows. This is the check that would have caught it.
+    {
+        console.log('\n5. The colour palette with no CSS Grid');
+        const { ctx, page, errors } = await openPage(browser, { noGrid: true });
+        const m = await page.evaluate(() => {
+            displayList = [{ id: '1', uid: 'u1', name: 'X', displayName: 'X', start: 0,
+                             end: 200, duration: 200, chain: false, skipped: false,
+                             loop: false, color: null }];
+            REASET_MODE = 'director';
+            document.body.classList.remove('reaset-controller');
+            REASET_EDITING = true;
+            document.body.classList.add('reaset-editing');
+            renderSetlist();
+            openSongMenu({ stopPropagation: function () {},
+                           currentTarget: document.querySelector('.song-dotmenu-btn') }, 'u1');
+            var cb = document.getElementById('_ctx_coloron_u1');
+            if (cb) { cb.checked = true; _ctxToggleColor('u1', true); }
+            var sw = document.querySelectorAll('.ctx-color-swatch');
+            if (!sw.length) return { n: 0 };
+            var r = sw[0].getBoundingClientRect();
+            var panel = document.querySelector('.song-ctx-panel').getBoundingClientRect();
+            var rows = {};
+            for (var i = 0; i < sw.length; i++) rows[Math.round(sw[i].getBoundingClientRect().top)] = 1;
+            return { n: sw.length, w: Math.round(r.width), h: Math.round(r.height),
+                     rows: Object.keys(rows).length,
+                     panelBottom: Math.round(panel.bottom), vh: window.innerHeight };
+        });
+        check('the palette still has its swatches', m.n > 0, `${m.n} swatches`);
+        check('a swatch is a swatch, not a slab', m.w > 0 && m.w <= 60 && m.h <= 60,
+              `${m.w}x${m.h}`);
+        check('it is round, not an oval', Math.abs(m.w - m.h) <= 1, `${m.w}x${m.h}`);
+        check('they lay out in rows, not one per line', m.rows > 0 && m.rows <= 6,
+              `${m.rows} rows for ${m.n} swatches`);
+        check('the panel still fits the screen', m.panelBottom <= m.vh + 1,
+              `bottom ${m.panelBottom} of ${m.vh}`);
+        check('no page errors', errors.length === 0, errors[0] || '');
+        await ctx.close();
+    }
+
     console.log('\n4. The flex-gap probe');
     const { ctx, page, errors } = await openPage(browser, {});
     const cls = await page.evaluate(() => document.documentElement.className);

@@ -576,6 +576,33 @@ Chords can be written inline in the lyric in the ChordPro convention —
 | **L12** | Move to the next verse. | The neighbouring verses show their chords too, dimmer — they do not appear only in the middle slot. | | |
 | **L13** | The `Chords` track, same rules. | Same. | | |
 
+### The iPad that stopped at iOS 9.3.5
+
+The floor was written as iOS 10.3. The actual device is an **iPad mini on iOS
+9.3.5** — Safari 9 — which is a whole major version further back, and it takes
+**CSS Grid** with it. Grid is Safari 10.1.
+
+There `display: grid` is not a partial implementation. It is an unknown value:
+the declaration is dropped and the element becomes a block. Five rules in the
+file declared it, none with a fallback.
+
+The colour palette was the one that did not degrade gracefully. A swatch is
+`width: 100%` with `padding-bottom` for its height, and percentage padding
+resolves against the **containing block** — the grid area when there is a grid,
+the whole panel when there is not. Measured with grid forced off: each swatch
+**239×239**, 18 rows. With the fallback: 36×36, 4 rows.
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **W01** | On the iPad, open a song's `⋮` and turn Colour on. | A grid of small round swatches, several per row. Not one enormous circle per line. | | |
+| **W02** | Count the rows. | Three or four. Eighteen means the fallback is not applying. | | |
+| **W03** | Tap a swatch. | It takes the colour, same as anywhere else. | | |
+| **W04** | Appearance → Lyrics → Colour, and the Lyrics popover's colour row. | Same palette, same swatches, same size. They are one CSS rule now. | | |
+| **W05** | Turn on **Grid View** on the iPad. | Cards two per row, not one per row. | | |
+| **W06** | Open the sidebar on a phone: the view switcher (SHOW / LYRICS / CHORDS…). | Three per row. | | |
+| **W07** | Any modal using two or three columns. | Still in columns, not stacked. | | |
+| **W08** | The whole app, generally, on that iPad. | Nothing else moved: the transport, the rows and the panels do not use grid. | | |
+
 ### The role modal
 
 | ID | Scenario | Expected | Result | Notes |

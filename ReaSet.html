@@ -1311,7 +1311,14 @@
         .song-ctx-toggle input:checked + .song-ctx-track .song-ctx-thumb { transform: translateX(16px); background: #fff; }
 
         /* Color palette grid */
-        .song-ctx-palette {
+        /* Every colour palette in the app — the song row's ⋮ menu, the
+           Appearance modal, the Lyrics popover — is ONE rule listing all three
+           selectors rather than three rules carrying the same numbers. They
+           looked like different products because they were three rules, and
+           three rules drift. */
+        .song-ctx-palette,
+        .ap-swatches,
+        .ls-swatches {
             display: grid;
             grid-template-columns: repeat(6, 1fr);
             grid-gap: 6px;
@@ -1319,7 +1326,29 @@
             margin-top: 8px;
         }
 
-        .ctx-color-swatch {
+        /* No grid: the swatches lay out as a wrapping flex row at a FIXED
+           size. They cannot keep the percentage-padding trick here — without a
+           grid area to resolve against, `padding-bottom: 100%` measures the
+           whole palette. */
+        html.no-grid .song-ctx-palette,
+        html.no-grid .ap-swatches,
+        html.no-grid .ls-swatches {
+            display: block;
+            font-size: 0;            /* kills the whitespace between inline-blocks */
+            margin-top: 8px;
+        }
+        html.no-grid .ctx-color-swatch,
+        html.no-grid .ls-swatch {
+            display: inline-block;
+            width: 38px;
+            height: 38px;
+            padding-bottom: 0;
+            margin: 0 6px 6px 0;
+            vertical-align: top;
+        }
+
+        .ctx-color-swatch,
+        .ls-swatch {
             width: 100%;
             /* Square by padding, not by aspect-ratio. Setting width AND height
                makes an engine ignore aspect-ratio entirely, so these rendered
@@ -1337,7 +1366,8 @@
             transition: transform 0.12s, border-color 0.12s;
         }
 
-        .ctx-color-swatch:hover { transform: scale(1.18); }
+        .ctx-color-swatch:hover,
+        .ls-swatch:hover { transform: scale(1.18); }
 
         /* Spacing only. This used to carry .song-ctx-toggle as well, which is
            the 36x20 SWITCH: it sized the whole label to 36px and hid the
@@ -1354,10 +1384,23 @@
             letter-spacing: 0;
         }
 
-        .ctx-color-swatch.selected {
+        .ctx-color-swatch.selected,
+        .ls-swatch.active {
             border-color: #fff;
             transform: scale(1.12);
             box-shadow: 0 0 0 1px rgba(0,0,0,0.6) inset;
+        }
+
+        /* The custom-colour swatch holds a native <input type=color>, which has
+           to fill it without being seen. */
+        .ls-swatch input[type="color"] {
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+            border: 0;
+            padding: 0;
+            margin: 0;
         }
 
         .ctx-clear-btn {
@@ -1824,6 +1867,15 @@
         }
 
         /* GRID VIEW */
+        html.no-grid .grid-mode { display: block; font-size: 0; }
+        html.no-grid .grid-mode > * {
+            display: inline-block;
+            width: 48%;
+            margin: 0 1% 8px 1%;
+            vertical-align: top;
+            font-size: 13px;
+        }
+
         .grid-mode {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
@@ -2229,6 +2281,15 @@
            five stay reachable without scrolling the sidebar. */
         #sidebar-views { display: none; }
 
+        html.no-grid .sview-grid { display: block; font-size: 0; }
+        html.no-grid .sview-grid > * {
+            display: inline-block;
+            width: 31.33%;
+            margin: 0 1% 8px 1%;
+            vertical-align: top;
+            font-size: 11px;
+        }
+
         .sview-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -2479,17 +2540,6 @@
         }
 
         /* Colour swatches, evenly spread across the modal width. */
-        /* Distribution only — the swatches keep their own .ls-swatch look
-           (22px circles). An earlier version also set flex/height/radius here,
-           which stretched them into ovals; spacing them out is the whole job. */
-        .ap-swatches {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: nowrap;
-            gap: 6px;
-        }
-
         /* Toggle row — same switch the sidebar uses, with the modal's own
            label typography rather than the odd small-caps it had before. */
         .ap-toggle-row {
@@ -3375,6 +3425,11 @@
         /* ══════════════════════════════════════════════
    DEMO PAGE LAYOUT
 ══════════════════════════════════════════════ */
+        html.no-grid .two-col,
+        html.no-grid .three-col { display: block; font-size: 0; }
+        html.no-grid .two-col > *   { display: inline-block; width: 48%;    margin: 0 1% 12px 1%; vertical-align: top; font-size: 13px; }
+        html.no-grid .three-col > * { display: inline-block; width: 31.33%; margin: 0 1% 12px 1%; vertical-align: top; font-size: 13px; }
+
         .two-col {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -3702,7 +3757,6 @@
         /* WebKit before 14.1 drops flex gap: without these the weight buttons
            and the colour swatches sit flush against each other. */
         html.no-flexgap .ls-btn-group > * + * { margin-left: 6px; }
-        html.no-flexgap .ls-swatches > * + * { margin-left: 7px; }
 
         .ls-btn {
             flex: 1;
@@ -3726,33 +3780,6 @@
             border-color: rgba(30, 215, 96, 0.45);
             color: var(--color-brand);
             font-weight: 700;
-        }
-
-        .ls-swatches {
-            display: flex;
-            gap: 7px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-
-        .ls-swatch {
-            width: 22px;
-            height: 22px;
-            border-radius: 50%;
-            cursor: pointer;
-            border: 2px solid transparent;
-            box-shadow: 0 0 0 1px var(--border);
-        }
-
-        .ls-swatch.active { border-color: var(--text-primary); }
-
-        .ls-swatch input[type="color"] {
-            opacity: 0;
-            width: 100%;
-            height: 100%;
-            cursor: pointer;
-            border: 0;
-            padding: 0;
         }
 
         .ls-toggle {
@@ -5032,7 +5059,6 @@
         html.no-flexgap .sview-btn > * + * { margin-top: 4px; }
         html.no-flexgap .ap-tabs > * + * { margin-left: 4px; }
         html.no-flexgap .ap-tick > * + * { margin-top: 3px; }
-        html.no-flexgap .ap-swatches > * + * { margin-left: 6px; }
         html.no-flexgap .ap-toggle-row > * + * { margin-left: 12px; }
         html.no-flexgap .ap-step > * + * { margin-left: 8px; }
         html.no-flexgap .sidebar-action-btn > * + * { margin-left: 12px; }
@@ -5043,7 +5069,6 @@
         html.no-flexgap .lt-btn > * + * { margin-left: 5px; }
         html.no-flexgap .modal-actions > * + * { margin-left: 8px; }
         html.no-flexgap .lyrics-hdr-actions > * + * { margin-left: 14px; }
-        html.no-flexgap .ls-swatches > * { margin-right: 7px; margin-bottom: 7px; }
         html.no-flexgap #live-sub-region > * + * { margin-left: 12px; }
         html.no-flexgap .live-controls > * { margin-right: 10px; margin-bottom: 10px; }
         html.no-flexgap .canvas-header > * + * { margin-left: 10px; }
@@ -5542,12 +5567,9 @@
 
                 <div class="ap-group">
                     <div class="ap-group-title">Colour</div>
-                    <div class="ap-swatches js-lyr-swatches">
-                        <span class="ls-swatch" data-color="#ffffff" style="background:#ffffff" onclick="applyLyricsColor('#ffffff')"></span>
-                        <span class="ls-swatch" data-color="#ffd166" style="background:#ffd166" onclick="applyLyricsColor('#ffd166')"></span>
-                        <span class="ls-swatch" data-color="#8ecae6" style="background:#8ecae6" onclick="applyLyricsColor('#8ecae6')"></span>
-                        <span class="ls-swatch" data-color="#a7f3d0" style="background:#a7f3d0" onclick="applyLyricsColor('#a7f3d0')"></span>
-                        <span class="ls-swatch" data-color="#f4978e" style="background:#f4978e" onclick="applyLyricsColor('#f4978e')"></span>
+                    <!-- Filled from SONG_COLOR_PALETTE by _buildPalettes(), so
+                         this is the same set of colours the song rows offer. -->
+                    <div class="ap-swatches js-lyr-swatches" data-palette="applyLyricsColor">
                         <span class="ls-swatch" title="Color personalizado" style="background:linear-gradient(135deg,#f00,#0f0,#00f)">
                             <input type="color" class="js-lyr-color-custom" oninput="applyLyricsColor(this.value)">
                         </span>
@@ -6016,6 +6038,32 @@
         //
         // This runs before anything else in the file because the class it sets
         // decides layout; the stylesheet's fallback rules are inert without it.
+        // CSS GRID DOES NOT EXIST ON THE TARGET iPAD.
+        //
+        // Grid is Safari 10.1; that iPad mini stopped at iOS 9.3.5, which is
+        // Safari 9. `display: grid` there is not a partial implementation, it
+        // is an unknown value: the declaration is dropped and the element
+        // falls back to `display: block`.
+        //
+        // For the colour palettes that is not a graceful degradation. A swatch
+        // is sized `width: 100%` with `padding-bottom` for its height, and a
+        // percentage padding resolves against the CONTAINING BLOCK — which is
+        // the grid area when there is a grid, and the whole panel when there
+        // is not. So the swatches do not merely stack: each one becomes a
+        // circle as wide and as tall as the entire palette.
+        //
+        // Probed rather than sniffed, same as flex gap above and for the same
+        // reason: Chrome on iOS reports Chrome and runs the system WebKit.
+        (function detectGrid() {
+            try {
+                var probe = document.createElement('div');
+                probe.style.display = 'grid';
+                if (probe.style.display !== 'grid') {
+                    document.documentElement.className += ' no-grid';
+                }
+            } catch (e) { /* if the probe cannot run, assume the modern path */ }
+        })();
+
         (function detectFlexGap() {
             try {
                 var probe = document.createElement('div');
