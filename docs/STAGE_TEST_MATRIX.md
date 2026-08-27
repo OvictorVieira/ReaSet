@@ -300,29 +300,53 @@ nobody else in the room, and the banner named a takeover that never happened.
 | **K06** | Open a different REAPER project. | Clock at 0:00. | | |
 | **K07** | Long-press the clock on the Director. | Zeroes on every device. On a Controller the long-press still does nothing. | | |
 
-### The phone transport bar
+### The transport bar
 
-Four controls share about 340px on a phone. Split by flex weight, STOP landed
-at ~75px: "SLIDE TO STOP" wrapped to three lines, the button grew to ~70px
-tall, the absolutely-positioned thumb stretched with it into a blob that read
-as an oversized circle spilling out of its track, and the gesture was left with
-23px of travel. PLAY and Loop are unambiguous as glyphs, so on a phone their
-words come off and the space goes to the slider. STOP keeps its word.
+PLAY was 17% of the bar and a full-red Stop slide was 48%: the loudest colour
+and the largest target belonged to the one action nobody wants to trigger by
+accident. Stop now takes its own row **above** Play — on a propped device the
+bottom edge is the shortest reach, and the control reached for blind is PLAY.
+Loop dropped U+21BB, which is the reload mark, for the media repeat mark plus
+the word.
 
-Measured in Chromium at each width before shipping; these cases confirm it on
-real hardware, where the font metrics and the safe-area inset are not the same.
+Measured in Chromium at 320/390/768/1024/1400px in three languages before
+shipping; these cases confirm it on hardware, where font metrics and the
+safe-area inset are not the same.
 
 | ID | Scenario | Expected | Result | Notes |
 |---|---|---|---|---|
-| **P01** | Open ReaSet on the phone in Controller mode, Stop set to Slide. | STOP is a track with a red thumb at the left and the words beside it on **one line**. Nothing overflows the button. | | |
-| **P02** | Same screen, look at PLAY and Loop. | Glyphs only — ▶ and ↻, no words. Both still obviously themselves. | | |
-| **P03** | Drag the STOP thumb slowly to the right. | It follows the finger the whole way, reaches the far end, and the label changes to RELEASE TO STOP. Transport stops on release. | | |
-| **P04** | Press PLAY, then look at the bar again. | PLAY became ▮▮ — still a glyph, still the same width. The bar does **not** re-cram. This is the regression a flat label string caused. | | |
-| **P05** | Rotate the phone to landscape. | Bar re-lays out, slider keeps a usable track, label still one line. | | |
-| **P06** | Switch Stop to Tap in the sidebar, on the phone. | STOP is a plain red button reading STOP, no thumb, and a tap stops. The setting is **per device** — the desktop keeps whatever it had. | | |
-| **P07** | Set the language to Português and repeat P01. | "DESLIZE PARA PARAR" on one line. On a 320px-class phone it may end in an ellipsis; it must never wrap or cut mid-letter. | | |
+| **P01** | Open ReaSet on the phone, Stop set to Slide. | Two rows. Upper: a dark track with a red thumb at the left and the words on **one line**. Lower: a large green PLAY, then LOOP, then the plug. Nothing overflows. | | |
+| **P02** | Stand back and glance at the bar without reading it. | The green PLAY is what your eye lands on. If the red bar is, the hierarchy has regressed. | | |
+| **P03** | Drag the STOP thumb slowly to the far right. | Follows the finger the whole way, label changes to RELEASE TO STOP, stops on release. It has ~314px of travel now; it had 23. | | |
+| **P04** | Press PLAY, then look at the bar again. | PLAY became ▮▮ and did **not** change width. The bar does not re-lay-out. | | |
+| **P05** | Look at the LOOP button. | Two arrows with heads at opposite ends, plus the word LOOP. It must not be a single circular arrow — that is the reload mark and it sits beside a reconnect button. | | |
+| **P06** | Switch Stop to Tap in the sidebar. | The upper row **disappears** and Stop becomes a plain button beside PLAY. PLAY is still the widest thing on the row. Switch back: the row returns. | | |
+| **P07** | Set the language to Português and repeat P01. | "DESLIZE PARA PARAR" on one line. On a 320px-class phone it may end in an ellipsis; never wrapped, never cut mid-letter. | | |
 | **P08** | Open Live View and Canvas and look at their Stop. | Same slider, same proportions, same label as the footer's. | | |
-| **P09** | Widen a desktop window past 600px. | The words PLAY and Loop come back. | | |
+| **P09** | Rotate the phone to landscape. | Re-lays out, slider keeps a usable track, label still one line. | | |
+
+### The iPad that no longer updates
+
+Chrome on iOS is the system WebKit with a different icon, so the engine is
+whatever the last iOS for that device shipped — installing another browser
+changes nothing. None of what these cases look for is a crash: the engine
+drops the declaration it cannot read and renders something plausible-but-wrong,
+which is exactly why it has to be looked at rather than reasoned about.
+
+**Do this on the iPad mini, in whatever browser is on it.**
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **V01** | Open ReaSet and look at the transport bar. | Space between every control. If PLAY, LOOP and the plug are touching, the flex-gap fallback did not engage. | | |
+| **V02** | Drag the STOP thumb. | It moves, and the page behind it does **not** scroll. This is the case with no Pointer Events at all — if Stop is dead here, nothing else in this section matters. | | |
+| **V03** | Same drag, but wobble vertically on the way. | The thumb keeps following. The gesture must not be handed to the scroller. | | |
+| **V04** | Open the sidebar, then a modal (rename a setlist, say). | The dark backdrop covers the **whole screen**, not a small rectangle in the top-left corner. | | |
+| **V05** | Open Live View. | The song title is large — stage-readable, not body text. | | |
+| **V06** | Open Canvas. | Same: the widget text is sized for a stage. | | |
+| **V07** | Open a song's colour palette. | The swatches are round and evenly spaced, not collapsed to zero height. | | |
+| **V08** | Scroll the setlist, tap a song, press PLAY. | Everything responds. Any dead control here is a JS error — check whether the console is reachable, and if not, report which control. | | |
+| **V09** | Rotate the iPad. | Both rows re-lay-out, nothing overlaps the setlist. | | |
+| **V10** | Run the whole of §3 (transport) on the iPad. | Identical outcomes to the Mac. This is the point of the exercise. | | |
 
 ---
 
