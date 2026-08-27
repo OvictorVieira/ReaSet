@@ -1665,3 +1665,197 @@ def test_membership_actions(script_body: str) -> None:
     # Last instance gone: now it goes back to the picker.
     assert got["removed-last"] == [["B#1", "C#101"], ["A"]], got["removed-last"]
     assert got["intent-cleared"] == [[None, None, None]], got["intent-cleared"]
+
+
+# ── Sections, loop, and the panels that read them ────────────────────────────
+# The identity refactor moved every song DOM id to a uid and scoped every
+# section id by its parent row. Four subsystems read those: Live View, Canvas,
+# the lyrics/chords panels, and the per-section loop. Three regressions got
+# through and hit EVERY setlist, not only repeats — these lock all of it.
+
+def test_uids_are_valid_css_identifiers(script_body: str) -> None:
+    """A uid ends up inside a DOM id, and a DOM id ends up inside a selector.
+
+    `#` opens a new id token and `.` opens a class token, so a uid built with
+    either does not make querySelector *miss* — it makes it THROW. getElementById
+    tolerates both, which is exactly why it hid: every lookup worked except the
+    one that used a selector, and that one was `flashRow`, whose only job is a
+    200ms colour flash nobody would report.
+    """
+    body = strip_comments(script_body)
+    for name, pat in (("UID_SEP", r"var\s+UID_SEP\s*=\s*'([^']*)'"),
+                      ("SUB_UID_SEP", r"var\s+SUB_UID_SEP\s*=\s*'([^']*)'")):
+        m = re.search(pat, body)
+        assert m, f"{name} is gone — the separator is back to a literal"
+        sep = m.group(1)
+        assert re.fullmatch(r"[_a-zA-Z0-9-]+", sep), (
+            f"{name} is {sep!r}, which cannot appear in a CSS identifier. "
+            f"Any selector built from a uid will throw SyntaxError."
+        )
+    # And a whole uid, prefix included, must still parse as one.
+    for sample in ("row-12_3", "subrow-12_3__7", "loop-counter-sub-12_3__7"):
+        assert re.fullmatch(r"-?[_a-zA-Z][_a-zA-Z0-9-]*", sample), sample
+
+
+def test_no_selector_is_built_from_a_uid(script_body: str) -> None:
+    """Belt and braces on top of the separator.
+
+    Even with safe separators, interpolating an id into a selector is a trap
+    waiting for the next separator change. Resolve by id, then search within.
+    """
+    body = strip_comments(script_body)
+    for m in re.finditer(r"querySelector(?:All)?\(\s*[\"']#[^\"']*[\"']\s*\+", body):
+        raise AssertionError(
+            f"a selector is built by concatenating onto an id: "
+            f"{body[m.start():m.start()+90]!r}"
+        )
+    flash = strip_comments(extract_function(body, "flashRow"))
+    assert "getElementById" in flash, (
+        "flashRow builds a selector from a uid again — that is the call that "
+        "threw SyntaxError on every Next/Previous"
+    )
+
+
+def test_auto_expand_reads_and_writes_the_same_key(script_body: str) -> None:
+    """The guard read expandedSongs[uid] while the call wrote expandedSongs[id].
+
+    The key was therefore never set, so auto-expand re-fired on every song
+    change and toggleExpand looked up slist-/chev-/row- ids built from a region
+    id — none of which are rendered. Auto-expand was dead for every setlist,
+    repeat or not, and silently.
+    """
+    body = strip_comments(script_body)
+    m = re.search(r"expandedSongs\[activeRegion\.(\w+)\]\)\s*\{\s*toggleExpand\(activeRegion\.(\w+)",
+                  body, re.S)
+    assert m, "the auto-expand block is gone or reshaped — re-check it by hand"
+    assert m.group(1) == m.group(2) == "uid", (
+        f"auto-expand guards on .{m.group(1)} but calls with .{m.group(2)}. "
+        f"toggleExpand has no region-id fallback, so a mismatch here is not a "
+        f"degraded lookup, it is a dead feature."
+    )
+
+
+def test_section_tap_carries_both_identities(script_body: str) -> None:
+    """A section belongs to a ROW, and the two identities do different jobs.
+
+    The highlight paints on the section row (`subrow-<parentUid>__<subId>`); the
+    active-instance hint must name the PARENT row, because activeInstanceIdx()
+    only ever matches uids of displayList rows. Handing it a bare sub id means
+    the hint is dropped as stale on the very next tick.
+    """
+    body = strip_comments(script_body)
+    resolve = strip_comments(extract_function(body, "_resolveTapTarget"))
+    assert "SUB_UID_SEP" in resolve, (
+        "_resolveTapTarget no longer recognises a scoped section uid, so a "
+        "section tap falls through to the raw g_subRegionMap object — which has "
+        "no uid, so nothing highlights"
+    )
+    assert "ownerUid" in resolve, "the parent row is not recorded"
+    assert re.search(r"for\s*\(var\s+key\s+in\s+found\)", resolve), (
+        "_resolveTapTarget mutates the shared g_subRegionMap entry instead of "
+        "copying it — both instances of a repeat read that object"
+    )
+    for fn in ("selectRegionForCue", "cueRegion", "togglePlay"):
+        src = strip_comments(extract_function(body, fn))
+        if "noteActiveInstance" not in src:
+            continue
+        assert "_ownerUidOf" in src, (
+            f"{fn}() hints activeInstanceIdx() with _uidOf instead of "
+            f"_ownerUidOf — for a section tap that is a uid no row carries"
+        )
+
+
+def test_position_keyed_dedups_reset_on_section_change(script_body: str) -> None:
+    """Two instances of one song occupy the IDENTICAL positions.
+
+    `_lastSpecialTriggerPos` is keyed on an absolute position, so in a set
+    containing A, A the SONG END / STOP marker fired for the first copy and was
+    then suppressed forever for the second — which ran straight past it.
+    """
+    body = strip_comments(script_body)
+    m = re.search(r"window\._prevActiveSubId\s*!==\s*(\w+)\)\s*\{(.*?)\n\s{20}\}", body, re.S)
+    assert m, "the section-change reset block is gone or reshaped"
+    reset = m.group(2)
+    for flag in ("_lastPauseTriggerPos", "_lastTransitionTriggerPos",
+                 "_lastLoopFireKey", "_lastSpecialTriggerPos"):
+        assert flag in reset, (
+            f"{flag} is no longer reset on a section change. If it is keyed on "
+            f"a position or a bare sub id, the second instance of a repeat "
+            f"inherits the first's spent state."
+        )
+    # Scoped to the block, not the file: `_subUid(activeRegion, activeSub)`
+    # appears elsewhere for the section DOM ids, so a file-wide search is
+    # satisfied by those and never sees this key revert.
+    key_var = m.group(1)
+    assign = re.search(r"var\s+" + re.escape(key_var) + r"\s*=\s*([^;]+);", body)
+    assert assign, (
+        f"_prevActiveSubId is compared against {key_var!r}, which is not "
+        f"assigned nearby — check the block by hand"
+    )
+    assert "_subUid(" in assign.group(1), (
+        f"the section-change key is {assign.group(1).strip()!r}, a bare sub id. "
+        f"A song whose sections cover it end to end with ONE section re-enters "
+        f"the same id when playback crosses from one instance to the next, so "
+        f"loopCount and _loopExhausted never reset and the second copy starts "
+        f"with the first's spent loop."
+    )
+
+
+def test_every_row_control_passes_the_row(script_body: str) -> None:
+    """Every playRegion call site rendered into a row must carry its uid.
+
+    The one in the expanded 'Play Song' button did not, so pressing it inside
+    the second instance cued the FIRST — and then hinted the wrong row, which
+    is the half that makes the show jump.
+    """
+    body = strip_comments(script_body)
+    calls = re.findall(r"playRegion\((?:'\s*\+\s*)?[^)]*?\)", body)
+    rendered = [c for c in calls if "r.start" in c or "sub.start" in c]
+    assert rendered, "no rendered playRegion call sites found — check the pattern"
+    for c in rendered:
+        assert c.count("+") >= 4 and ("r.uid" in c or "_subUid" in c), (
+            f"a rendered playRegion call omits the row: {c[:110]!r}"
+        )
+
+
+@requires_node
+def test_section_tap_resolution(script_body: str) -> None:
+    """Runs the real _resolveTapTarget against a repeated song's section."""
+    fns = "\n".join(extract_function(script_body, f)
+                    for f in ("_resolveTapTarget", "_ownerUidOf", "_uidOf",
+                              "_findInstanceByUid", "_findRegionById", "_subUid"))
+    harness = textwrap.dedent(
+        """
+        var UID_SEP = '_', SUB_UID_SEP = '__';
+        var CHORUS = { id: 'sub9', name: 'Chorus', start: 4, end: 8 };
+        var displayList = [
+            { id: 'A', uid: 'A_1', start: 0, end: 10 },
+            { id: 'B', uid: 'B_2', start: 10, end: 20 },
+            { id: 'A', uid: 'A_3', start: 0, end: 10 }
+        ];
+        var g_subRegionMap = { 'Song A': [CHORUS] };
+        __FNS__
+
+        // Tapping the Chorus inside the SECOND instance of Song A.
+        var t = _resolveTapTarget('sub9', 'A_3__sub9', 4);
+        console.log(JSON.stringify({
+            // paints on the section row of the second instance...
+            paintUid: _uidOf(t),
+            // ...but the active-instance hint names that instance's ROW
+            hintUid:  _ownerUidOf(t),
+            keptCoords: [t.start, t.end],
+            // and the shared section object was not mutated
+            sourceClean: CHORUS.uid === undefined && CHORUS.ownerUid === undefined,
+            // a plain song tap still resolves to the row itself
+            songUid: _ownerUidOf(_resolveTapTarget('A', 'A_3', 0))
+        }));
+        """
+    ).replace("__FNS__", fns)
+    got = json.loads(run_node(harness))
+    assert got == {
+        "paintUid": "A_3__sub9",
+        "hintUid": "A_3",
+        "keptCoords": [4, 8],
+        "sourceClean": True,
+        "songUid": "A_3",
+    }, got

@@ -215,6 +215,32 @@ network path and a localStorage origin, and will pass tests that a phone fails.
 | **E18** | Open ReaSet on a brand-new project with no setlist. | The whole project is listed — the empty-set bootstrap. | | |
 | **E19** | Remove **every** song, then reload. | Known limitation: the project comes back. See plan §18. | | |
 
+### Loop, sections and the panels that read them
+
+Three of these caught regressions from the identity refactor that affected
+**every** setlist, not only repeats. They are cheap and worth running first.
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **L01** | Play a song that has sections. | Its section list **auto-expands**. (This was dead: the guard read one key and the call wrote another.) | | |
+| **L02** | Tap a section row while stopped. | The section row highlights as cued. (This painted nothing before the fix.) | | |
+| **L03** | Press Next / Previous, or use MIDI next/prev song. | No `SyntaxError` in the console. (`flashRow` built an invalid CSS selector out of the uid and threw on every call.) | | |
+| **L04** | Expand a song, press **▶ Play Song** inside it. | Cues that song. With a repeat, cues **the copy you pressed it in**. | | |
+| **L05** | Name a marker `> Chorus +LOOP`. Play into it. | Loops the section forever. The label reads **Chorus** — the flag is stripped. Loop icon lit. | | |
+| **L06** | With `+LOOP` running, queue another song. | The loop **releases** and the queued song plays. | | |
+| **L07** | Name a marker `> Chorus +LOOPFULL`. Queue another song while it loops. | The loop **keeps priority**; the queued song waits. | | |
+| **L08** | Name a marker `> Chorus +LOOP:4`. | Plays four times, shows a `2/4` counter on both the song and section rows, then moves on by itself. | | |
+| **L09** | After an `+LOOP:4` finishes, play that song again. | It loops four times **again** — the count re-arms per pass. | | |
+| **L10** | Same marker tests with `Reaset.lua` **stopped**. | Still loops, via a fallback seek. The seam may be audibly less tight — that is expected, note it. | | |
+| **L11** | Put the same song in the set **twice**, with `+LOOP:2` on a section. Play the first copy through, then the second. | The second copy loops twice too. It must not inherit a spent count from the first. | | |
+| **L12** | Set `A, A` back to back, with a `SONG END` or `STOP` marker in A. | The marker fires for **both** copies. (It fired only for the first — the dedup is keyed on absolute position, which both copies share.) | | |
+| **L13** | Toggle a section's loop with the `↻` button, then reload the page. | The toggle is **lost**. Known: section state is memory-only. Use a marker if it must survive. | | |
+| **L14** | Toggle a section's loop on the Director; watch a Controller. | The Controller does **not** see it. Known: section state is not in the sync payload. Marker-driven loop *does* reach it, because each device parses the marker itself. | | |
+| **L15** | Live View, on a song with sections. | The section map draws, the active segment highlights, and a looping segment pulses. | | |
+| **L16** | Canvas mode, during playback. | Song title, current section and "next" all track the transport. With a repeat, "next" names what follows **the copy that is playing**. | | |
+| **L17** | Lyrics and Chords panels during playback. | Both follow. The "next song" label under the lyrics names what follows the **playing** instance. | | |
+| **L18** | Expand a song, open a section's `⋮` menu, set a note and a colour. | Applies. With a repeat, **both** copies show it — sections belong to the song. | | |
+
 ---
 
 ## 5. Visual block scenarios

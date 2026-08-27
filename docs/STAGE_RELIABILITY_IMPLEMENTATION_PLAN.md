@@ -1360,3 +1360,118 @@ assertion that only checked `g_offSetlist` was mentioned *somewhere* in
 #13's acceptance tests 1–6 and 8–15. In particular 6 (add/remove/reorder reach
 followers) and 14 (a follower renders both instances in the right order) are
 multi-device and cannot be reasoned about here.
+
+---
+
+## 19. What the identity refactor broke, and how it was found
+
+§17 moved every song DOM id onto a uid and scoped every section id by its
+parent row. An audit of the four subsystems that read those — Live View,
+Canvas, the lyrics/chords panels, and the per-section loop — found **five**
+defects. Three of them affected **every setlist**, not only repeats, and all
+three failed silently.
+
+Worth recording as a process point: the automated suite was green throughout.
+These are not the kind of defect a static assertion finds unless somebody first
+asks "what else reads this?" — the tests were locking the *new* contract, and
+these were places the old contract survived untouched.
+
+### The three that hit everyone
+
+**Auto-expand was dead.** The guard read `expandedSongs[activeRegion.uid]`
+while the call wrote `toggleExpand(activeRegion.id, ...)`. The key was
+therefore never set, so it re-fired on every song change, and `toggleExpand`
+looked up `slist-` / `chev-` / `row-` ids built from a region id — none of
+which are rendered. Unlike the other row actions, `toggleExpand` has no
+region-id fallback, so nothing rescued it.
+
+**Tapping a section painted no highlight.** A section's uid is scoped as
+`<parentUid>__<subId>`, which no `displayList` row carries, so
+`_resolveTapTarget` missed and fell through to the raw `g_subRegionMap` object
+— which has no uid at all. Two things then broke at once: `_rowElFor` looked
+for `subrow-<bareSubId>` and found nothing, and `noteActiveInstance` was handed
+a bare sub id that `activeInstanceIdx()` can never match, so the hint was
+dropped as stale on the next tick.
+
+**`flashRow` threw on every call.** `_newUid` produced `12#3`, and while
+`getElementById("row-12#3")` is fine, `querySelector("#row-12#3 .load-btn")` is
+an **invalid selector** — `#` opens a new id token — so it raised
+`SyntaxError` on every Next / Previous and every MIDI navigation.
+
+That last one is the instructive one. The uid was fine everywhere it was used
+with `getElementById`, and broken in the single place a selector was built from
+it. **The separators are now `_` and `__`**, chosen so a uid is always a valid
+CSS identifier, and a test asserts it — because fixing only `flashRow` would
+have left the next selector to rediscover the same bug.
+
+### The two that need a repeat
+
+**"▶ Play Song" dropped the row.** The expanded-controls button called
+`playRegion(start, id)` without the uid, so pressing it inside the second
+instance cued the first — and then hinted the wrong row, which is the half that
+makes the show jump.
+
+**`SONG END` / `STOP` was suppressed on an adjacent repeat.**
+`_lastSpecialTriggerPos` is keyed on an **absolute position**, and two
+instances of one song occupy identical positions. In a set containing `A, A`
+the marker fired for the first copy and was then suppressed forever for the
+second, which ran straight past it. It is now reset on a section change,
+alongside the two dedup flags that already were.
+
+### One more, tightened while there
+
+`_prevActiveSubId` held a bare sub id. A song whose sections cover it end to
+end with a **single** section re-enters the same id when playback crosses from
+one instance to the next, so `loopCount` and `_loopExhausted` never reset and
+the second copy started with the first's spent loop. It is now scoped by the
+parent row.
+
+### What was checked and is genuinely fine
+
+- **Live View's section map** writes `seg.dataset.subid` and reads it back
+  against the same bare id, inside a container it rebuilds itself. These are
+  `data-*` attributes on freshly created nodes, not global DOM ids — there is
+  no collision to have. Its `_lrmLastSongId` cache keys on the region id
+  *deliberately*: segment geometry is identical for two instances, so keying on
+  the uid would force a rebuild producing a byte-identical track.
+- **Canvas** uses only static element ids from markup and inherits `activeIdx`
+  and `activeSub` from `updatePlaybackUI`, so it names the correct instance's
+  successor for free.
+- **Lyrics and chords** build no DOM id from a region or sub id, and cache on
+  text content rather than identity. The one identity-dependent thing they do —
+  `findNextValidSong(_lyActiveIdx)` for the "next song" label — is a case the
+  refactor *fixes*.
+- **The loop counter badges** round-trip correctly: written scoped, stored
+  scoped in `_loopCounterSongId` / `_loopCounterSubId`, read back verbatim.
+
+### Two pre-existing gaps, not caused by this work
+
+`window.subStates` — where a manually toggled section loop or skip lives — is
+neither **persisted** nor **synced**. Toggling a section loop on the Director
+does not reach a Controller, and does not survive a reload.
+
+Marker-driven loop (`+LOOP`, `+LOOPFULL`, `+LOOP:N`) has neither problem,
+because every device parses the marker names out of REAPER itself. That makes
+the marker the robust path and the button a rehearsal tool, which is worth
+saying out loud in the docs rather than leaving users to discover.
+
+### Locked by tests
+
+`test_uids_are_valid_css_identifiers`, `test_no_selector_is_built_from_a_uid`,
+`test_auto_expand_reads_and_writes_the_same_key`,
+`test_section_tap_carries_both_identities`,
+`test_position_keyed_dedups_reset_on_section_change`,
+`test_every_row_control_passes_the_row`, and `test_section_tap_resolution` —
+the last **executes** the real `_resolveTapTarget` against a section of a
+repeated song and asserts both identities come back: the section row for the
+highlight, the parent row for the hint.
+
+Ten mutations run, ten caught. One initially passed and forced a scoped
+assertion: reverting the section-change key to a bare sub id was invisible to a
+file-wide search for `_subUid(activeRegion, activeSub)`, since that call also
+appears where the section DOM ids are built.
+
+### Still requires a real-device test
+
+**L01–L18** in `docs/STAGE_TEST_MATRIX.md`. L01, L02 and L03 are the three
+regressions above and are cheap to check first.

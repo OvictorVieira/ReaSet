@@ -10128,7 +10128,7 @@
                     // Expanded bottom controls
                     if (hasSubs) {
                         slHtml += '<div class="expanded-controls">'
-                            + '<button class="btn-play-song" onclick="playRegion(' + r.start + ',\'' + r.id + '\')">&#9654; Play Song</button>'
+                            + '<button class="btn-play-song" onclick="playRegion(' + r.start + ',\'' + r.id + '\',\'' + r.uid + '\')">&#9654; Play Song</button>'
                             + '</div>';
                     }
 
@@ -10553,8 +10553,12 @@
             for (var i = startIdx - 1; i >= 0; i--) { if (!displayList[i].skipped) return displayList[i]; }
             return null;
         }
+        // Resolved by id and THEN searched, rather than by one selector built
+        // from a uid. Even with selector-safe uids, interpolating an id into a
+        // selector is a trap waiting for the next separator change.
         function flashRow(uid) {
-            var btn = document.querySelector("#row-" + uid + " .load-btn");
+            var row = document.getElementById("row-" + uid);
+            var btn = row ? row.querySelector(".load-btn") : null;
             if (btn) { btn.style.backgroundColor = "#2196F3"; btn.style.color = "#fff"; setTimeout(function () { btn.style.backgroundColor = ""; btn.style.color = ""; }, 200); }
         }
 
@@ -10647,8 +10651,14 @@
                         lastActiveID = activeRegion.uid;
                         // Auto-expand active song if it has sections
                         var subs2 = g_subRegionMap[activeRegion.name] || [];
+                        // .uid, not .id. The guard reads expandedSongs[uid] while
+                        // this call used to write expandedSongs[id], so the key was
+                        // never set: auto-expand re-fired on every song change and
+                        // toggleExpand then looked up slist-/chev-/row- ids built
+                        // from a region id, which nothing renders. It failed for
+                        // every setlist, repeat or not, and failed silently.
                         if (subs2.length > 0 && !expandedSongs[activeRegion.uid]) {
-                            toggleExpand(activeRegion.id, true);
+                            toggleExpand(activeRegion.uid, true);
                         }
                         if (document.getElementById('autoScrollToggle').checked && row.scrollIntoView) {
                             row.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -10775,8 +10785,14 @@
 
                 // ── Section-change detection: reset per-section counters ─────────
                 if (activeSub) {
-                    if (window._prevActiveSubId !== activeSub.id) {
-                        window._prevActiveSubId = activeSub.id;
+                    // Scoped by the parent row. A song whose sections cover it
+                    // end to end with ONE section would otherwise re-enter the
+                    // same bare sub id when playback crossed from one instance
+                    // to the next, so loopCount and _loopExhausted never reset
+                    // and the second copy started with the first's spent loop.
+                    var _sectionKey = _subUid(activeRegion, activeSub);
+                    if (window._prevActiveSubId !== _sectionKey) {
+                        window._prevActiveSubId = _sectionKey;
 
                         // Cancel native loop when genuinely entering a DIFFERENT section.
                         // _nativeLoopSubId stays set while still inside the looping section
@@ -10814,6 +10830,13 @@
                         window._lastPauseTriggerPos      = undefined;
                         window._lastTransitionTriggerPos = undefined;
                         window._lastLoopFireKey          = null;
+                        // Reset here too, not only on stop and reconnect.
+                        // It is keyed on an ABSOLUTE POSITION, and two instances
+                        // of one song occupy the identical positions — so in a
+                        // set containing A, A the SONG END / STOP marker fired
+                        // for the first copy and was then suppressed forever for
+                        // the second, which ran straight past it.
+                        window._lastSpecialTriggerPos    = undefined;
                     }
                 } else {
                     // Playhead is outside every sub-section (gap, song-level space, or
@@ -11340,7 +11363,10 @@
         // list being rebuilt under it. One constructor, so the shape cannot
         // drift between the four places that build one.
         function _selectionOf(region) {
-            return { id: region.id, uid: _uidOf(region), start: region.start, end: region.end, at: Date.now() };
+            return {
+                id: region.id, uid: _uidOf(region), ownerUid: _ownerUidOf(region),
+                start: region.start, end: region.end, at: Date.now()
+            };
         }
 
         // A tap identifies a ROW. Resolve by uid first; fall back to the region
@@ -11349,7 +11375,38 @@
         function _resolveTapTarget(id, uid, start) {
             var inst = uid ? _findInstanceByUid(uid) : null;
             if (inst) return inst;
-            return _findRegionById(id) || { id: id, uid: uid || id, start: start, end: start };
+
+            // A SECTION tap. Its uid is scoped as '<parentUid>__<subId>', which
+            // no displayList row carries, so the lookup above misses and the
+            // old code fell straight through to the raw g_subRegionMap object —
+            // which has no uid at all. Two things then broke at once, for every
+            // setlist: _rowElFor looked for 'subrow-<bareSubId>' and found
+            // nothing, so tapping a section painted no .cued highlight; and
+            // noteActiveInstance was handed a bare sub id that activeInstanceIdx
+            // can never match against a displayList row, so the hint was dropped
+            // as stale on the very next tick.
+            //
+            // The two identities are genuinely different and both are needed:
+            // the HIGHLIGHT belongs on the section row, the ACTIVE-INSTANCE hint
+            // belongs on the parent row.
+            var found = _findRegionById(id);
+            if (!found) return { id: id, uid: uid || id, start: start, end: start };
+            if (!uid || uid.indexOf(SUB_UID_SEP) === -1) return found;
+
+            var owner = _findInstanceByUid(uid.slice(0, uid.indexOf(SUB_UID_SEP)));
+            // Copied, never mutated: `found` is the shared g_subRegionMap entry
+            // and both instances of a repeat read it.
+            var target = {};
+            for (var key in found) { if (found.hasOwnProperty(key)) target[key] = found[key]; }
+            target.uid      = uid;
+            target.ownerUid = owner ? owner.uid : null;
+            return target;
+        }
+
+        // Which ROW an intent belongs to. For a song that is the row itself; for
+        // a section it is the song row containing it.
+        function _ownerUidOf(region) {
+            return (region && region.ownerUid) || _uidOf(region);
         }
 
         // ── Instance identity ───────────────────────────────────────────────
@@ -11376,8 +11433,16 @@
         // The uid is stable for the life of the page, not across reloads:
         // persistence stores region ids and order, and uids are handed out again
         // on the next build. Nothing durable is keyed on a uid.
+        // The separators are '_' and '__' and NOT '#' / '.', which is not
+        // cosmetic: a uid ends up inside a DOM id, and a DOM id ends up inside
+        // a CSS selector. '#' opens a new id token and '.' opens a class token,
+        // so querySelector('#row-12#3 .load-btn') does not miss — it THROWS
+        // SyntaxError. getElementById tolerates both, which is exactly why the
+        // bug hid: every lookup worked until the one that used a selector.
+        var UID_SEP     = '_';
+        var SUB_UID_SEP = '__';
         var _uidSeq = 0;
-        function _newUid(regionId) { return String(regionId) + '#' + (++_uidSeq); }
+        function _newUid(regionId) { return String(regionId) + UID_SEP + (++_uidSeq); }
 
         // Falls back to the region id so any path not yet carrying a uid still
         // resolves to something, rather than to 'undefined' shared by every row.
@@ -11385,7 +11450,7 @@
         // Sections belong to a song by NAME, so two instances share one section
         // list. Their rows must not share DOM ids, hence the parent's uid.
         function _subUid(r, sub) {
-            return _uidOf(r) + '.' + ((sub && sub.id !== undefined) ? sub.id : sub);
+            return _uidOf(r) + SUB_UID_SEP + ((sub && sub.id !== undefined) ? sub.id : sub);
         }
 
         // A row is its OWN object. Two instances of one region need independent
@@ -11546,7 +11611,7 @@
             // An explicit cue is a new user command and outranks the guard.
             clearManualTransportGuard('user-cue');
             selectedRegion = _selectionOf(region);
-            noteActiveInstance(_uidOf(region), 'cue');
+            noteActiveInstance(_ownerUidOf(region), 'cue');
             RSDiag.log('USER_SELECT', { song: region.id, uid: _uidOf(region), start: _fmtPos(region.start), reason: reason || 'tap' });
             // The cue lands on the EXACT region start, with no MIDI-init
             // pre-roll. Pre-roll exists so plugins receive MIDI before the song
@@ -11667,7 +11732,7 @@
             // the SET/POS reply has come back yet.
             clearManualTransportGuard('user-cue-nav');
             selectedRegion = _selectionOf(region);
-            noteActiveInstance(_uidOf(region), 'cue-nav');
+            noteActiveInstance(_ownerUidOf(region), 'cue-nav');
             RSDiag.log('USER_SELECT', { song: region.id, uid: _uidOf(region), start: _fmtPos(region.start), reason: 'cue-nav' });
             window._playRegionLocked = Date.now() + 500;
             window._pendingCuePos    = null;
@@ -11783,7 +11848,7 @@
                 // The user chose a ROW and this request seeks to it. Recording
                 // which one is what lets activeInstanceIdx() answer correctly
                 // once the transport arrives inside a region two rows share.
-                noteActiveInstance(_uidOf(target.region), 'play-selected');
+                noteActiveInstance(_ownerUidOf(target.region), 'play-selected');
                 window._playRegionLocked = Date.now() + 500;
                 window._pendingCuePos    = null;
                 wwr_req('SET/POS/' + midiInitPreroll(target.region.start) + ';1007',
@@ -11792,7 +11857,7 @@
                 // Playing from wherever the cursor is: no row-level intent to
                 // record, so activeInstanceIdx() falls back to the first
                 // matching instance and says so in the diagnostics.
-                noteActiveInstance(target.region ? _uidOf(target.region) : null, 'play-' + target.via);
+                noteActiveInstance(target.region ? _ownerUidOf(target.region) : null, 'play-' + target.via);
                 // The cursor is already where playback should begin — inside a
                 // region, or wherever the user last left it. Play from there and
                 // do NOT seek to the region start: pause mid-song then Play must
