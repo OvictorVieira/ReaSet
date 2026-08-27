@@ -211,6 +211,7 @@ async function touchTargets(browser) {
                 boxes,
                 count: bar.querySelectorAll(':scope > button').length,
                 barShare: Math.round(bar.getBoundingClientRect().height / window.innerHeight * 100),
+                barH: Math.round(bar.getBoundingClientRect().height),
                 playWidest: (() => {
                     const w = boxes.map(b => b ? b[0] : 0);
                     return w[1] === Math.max.apply(null, w);
@@ -226,6 +227,11 @@ async function touchTargets(browser) {
         check(`${label}: PLAY is the widest control`, r.playWidest,
               r.boxes.map((b, i) => IDS[i].replace('footer-', '').replace('-btn', '') + '=' + b[0]).join(' '));
         check(`${label}: the bar does not eat the setlist`, r.barShare <= 32, `${r.barShare}% of the screen`);
+        // A hard ceiling in pixels, not just a share of the screen. The bar has
+        // grown twice — once to 147px for a two-row layout, once to 120px on a
+        // tablet — and both times it was reported as the app looking wrong
+        // before any check noticed. 77px is what it was before either.
+        check(`${label}: the bar is no taller than it ever was`, r.barH <= 82, `${r.barH}px`);
         await ctx.close();
     }
 }

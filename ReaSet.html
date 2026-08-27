@@ -1699,7 +1699,7 @@
             -webkit-backdrop-filter: blur(40px) saturate(140%);
             border-top: 1px solid rgba(255, 255, 255, 0.07);
             box-shadow: 0 -2px 30px rgba(0, 0, 0, 0.6);
-            padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+            padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
             display: flex;
             align-items: stretch;
             flex-shrink: 0;
@@ -1765,25 +1765,21 @@
            A drummer reaches this with one hand, from a stand, in the dark,
            without leaning in to read it. Everything here is at least 44pt in
            both axes, and PLAY is far past it. */
-        .app-transport > .t-btn { padding-top: 20px; padding-bottom: 20px; }
-        /* Icon over word, so a fixed-width square still says what it is. */
-        .t-btn-loop {
-            flex-direction: column;
-            padding-left: 2px; padding-right: 2px;
-        }
+
         /* Stacked, so the word sits under the glyph rather than beside it. */
-        .t-btn-loop .t-lbl { margin-left: 0; }
         .t-btn-loop .t-lbl {
-            font-size: 9.5px; letter-spacing: 0.1em;
-            margin-top: 3px; opacity: 0.85;
+            font-size: 11px; letter-spacing: 0.06em;
+            opacity: 0.9;
         }
-        .t-btn-loop .t-ico { display: flex; align-items: center; }
-        .t-btn-play .t-ico { font-size: 20px; }
+        /* Inline-block leaves a text baseline gap under an svg, and that gap
+           is enough to make one button taller than the rest. */
+        .t-btn-loop .t-ico, .t-btn-nav .t-ico { display: flex; align-items: center; }
+        .t-btn svg { display: block; }
+        .t-btn-play .t-ico { font-size: 16px; }
 
         @media (max-width: 600px) {
             .app-transport { padding-left: 10px; padding-right: 10px; }
             .app-transport > .t-btn { margin-right: 5px; }
-            .app-transport > .t-btn { padding-top: 18px; padding-bottom: 18px; }
             .app-transport > .t-btn-loop { width: 72px; }
             .app-transport > .t-btn-nav { width: 54px; }
             .t-btn-play { font-size: 16px; }
@@ -1805,14 +1801,11 @@
            took the tablet's bar, which is 46% of that screen and leaves about
            one song visible. */
         @media (min-width: 700px) and (min-height: 600px) {
-            .app-transport { padding: 14px 18px calc(14px + env(safe-area-inset-bottom)); }
+            .app-transport { padding: 12px 18px calc(12px + env(safe-area-inset-bottom)); }
             .app-transport > .t-btn { margin-right: 10px; }
-            .app-transport > .t-btn { padding-top: 26px; padding-bottom: 26px; }
-            .t-btn-play { font-size: 20px; }
-            .t-btn-play .t-ico { font-size: 24px; }
-            .app-transport > .t-btn-loop { width: 118px; }
-            .app-transport > .t-btn-nav { width: 84px; }
-            .app-transport > .t-btn-loop .t-lbl { font-size: 11px; }
+            .t-btn-play { font-size: 16px; }
+            .app-transport > .t-btn-loop { width: 104px; }
+            .app-transport > .t-btn-nav { width: 68px; }
         }
 
         /* Short viewport — a phone in landscape, or a small window. The bar
@@ -1821,10 +1814,7 @@
            for. */
         @media (max-height: 560px) {
             .app-transport { padding-top: 6px; padding-bottom: calc(6px + env(safe-area-inset-bottom)); }
-            .app-transport > .t-btn { padding-top: 12px; padding-bottom: 12px; }
-            .t-btn-play { font-size: 15px; }
-            .t-btn-play .t-ico { font-size: 17px; }
-            .app-transport > .t-btn-loop { width: 68px; }
+            .app-transport > .t-btn-loop { width: 84px; }
             .app-transport > .t-btn-nav { width: 54px; }
         }
 
@@ -1833,7 +1823,7 @@
            allowed to compete with the green. */
         .t-btn-nav {
             flex: 0 0 auto;
-            width: 64px;
+            width: 58px;
             background: rgba(255, 255, 255, 0.07);
             color: rgba(255, 255, 255, 0.72);
             border: 1.5px solid rgba(255, 255, 255, 0.12);
@@ -1846,7 +1836,7 @@
 
         .t-btn-loop {
             flex: 0 0 auto;
-            width: 86px;
+            width: 92px;
             background: transparent;
             color: rgba(255, 255, 255, 0.45);
             border: 1.5px solid rgba(255, 255, 255, 0.18);
@@ -4835,11 +4825,11 @@
              it lives in the banner that appears only when the link drops. -->
         <div class="app-transport">
             <button class="t-btn t-btn-nav" id="footer-prev-btn" onclick="navSong('prev', event)"
-                title="Previous song" aria-label="Previous song"><span class="t-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18 5.2v13.6L8.2 12 18 5.2Z" fill="currentColor"/><rect x="5" y="5.2" width="2.3" height="13.6" rx="1.15" fill="currentColor"/></svg></span></button>
+                title="Previous song" aria-label="Previous song"><span class="t-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18 5.2v13.6L8.2 12 18 5.2Z" fill="currentColor"/><rect x="5" y="5.2" width="2.3" height="13.6" rx="1.15" fill="currentColor"/></svg></span></button>
             <button class="t-btn t-btn-play" id="main-play-btn" onclick="togglePlay()"><span class="t-ico">▶</span><span class="t-lbl">PLAY</span></button>
-            <button class="t-btn t-btn-loop" id="footer-loop-btn" onclick="toggleCurrentLoop()"><span class="t-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20.5 2.8v4.4h-4.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="t-lbl">LOOP</span></button>
+            <button class="t-btn t-btn-loop" id="footer-loop-btn" onclick="toggleCurrentLoop()"><span class="t-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20.5 2.8v4.4h-4.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="t-lbl">LOOP</span></button>
             <button class="t-btn t-btn-nav" id="footer-next-btn" onclick="navSong('next', event)"
-                title="Next song" aria-label="Next song"><span class="t-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 5.2v13.6L15.8 12 6 5.2Z" fill="currentColor"/><rect x="16.7" y="5.2" width="2.3" height="13.6" rx="1.15" fill="currentColor"/></svg></span></button>
+                title="Next song" aria-label="Next song"><span class="t-ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 5.2v13.6L15.8 12 6 5.2Z" fill="currentColor"/><rect x="16.7" y="5.2" width="2.3" height="13.6" rx="1.15" fill="currentColor"/></svg></span></button>
         </div>
     </div>
 
