@@ -2678,29 +2678,44 @@ def test_flex_gap_has_a_fallback_for_every_container() -> None:
     touching the next one, and on a touch UI two adjacent targets with no space
     between them is a mis-tap waiting to happen.
 
-    So every flex container that uses gap needs a margin fallback, and the
-    fallback must be gated: if it could apply on an engine that also honours
-    gap, the spacing doubles everywhere.
+    The burden is inverted on purpose. The first version of this test asked
+    "is this rule a flex container?" by looking for `display: flex` in the same
+    rule, and five containers walked straight through it: each was
+    `display: none` in its own rule and became flex from a state rule or a
+    shared class somewhere else. A test that has to recognise flex cannot be
+    trusted to, because the stylesheet is free to say it anywhere.
+
+    So instead: a gap declaration must ANNOUNCE itself as grid in its own rule,
+    or carry a fallback. Anything else fails. A new flex gap with no fallback
+    fails, and so does a grid gap that does not say it is one — which is a
+    convention, not a burden.
     """
     html = REASET_HTML.read_text(encoding="utf-8")
     css = html[html.index("<style>"):html.index("</style>")]
 
-    flex_gap = []
+    unguarded = []
     for m in re.finditer(r"([^{}]*)\{([^{}]*)\}", css):
         sel = m.group(1).strip().split("\n")[-1].strip()
         body = m.group(2)
         if not re.search(r"^\s*gap\s*:", body, re.M):
             continue
-        disp = re.search(r"display:\s*([\w-]+)", body)
-        if disp and disp.group(1) in ("flex", "inline-flex"):
-            flex_gap.append(sel)
+        if sel.startswith("html.no-flexgap"):
+            continue
+        if "display: grid" in body or "display: inline-grid" in body:
+            # Grid gap works on the target engine. grid-gap takes it back
+            # further still, and costs one line.
+            assert "grid-gap" in body, (
+                f"{sel} uses grid gap with no grid-gap twin, so it collapses "
+                f"on anything before Safari 12"
+            )
+            continue
+        if ("html.no-flexgap " + sel + " >") not in css:
+            unguarded.append(sel)
 
-    assert flex_gap, "no flex container uses gap any more — this test is obsolete"
-
-    missing = [s for s in flex_gap if ("html.no-flexgap " + s + " >") not in css]
-    assert not missing, (
-        f"{len(missing)} flex container(s) use gap with no margin fallback, so "
-        f"their children touch on the tablet this has to run on: {missing[:5]}"
+    assert not unguarded, (
+        f"{len(unguarded)} gap rule(s) neither declare themselves grid nor "
+        f"carry a margin fallback, so their children touch on the tablet this "
+        f"has to run on: {unguarded}"
     )
 
     # The gate. Without it the fallback and a working gap both apply.
@@ -2713,6 +2728,32 @@ def test_flex_gap_has_a_fallback_for_every_container() -> None:
     )
     assert "no-flexgap" in detect, "the detect no longer sets the class it exists to set"
     assert "removeChild" in detect, "the probe element is left in the document"
+
+
+def test_ios12_vendor_prefixes_are_present() -> None:
+    """Three properties that need -webkit- on the engine this has to run on.
+
+    `position: sticky` is the one that matters: unprefixed alone it is not
+    degraded, it is ignored, so the element is plain `static` and the topbar
+    scrolls away with the setlist. The other two are cosmetic by comparison —
+    an unblurred panel, a label that selects when a finger drags across it.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    css = html[html.index("<style>"):html.index("</style>")]
+
+    for prop in ("position: sticky", "backdrop-filter", "user-select"):
+        pat = r"^\s*" + re.escape(prop.split(":")[0]) + r"\s*:"
+        if prop == "position: sticky":
+            pat = r"^\s*position:\s*sticky"
+        for m in re.finditer(pat, css, re.M):
+            block_start = css.rfind("{", 0, m.start())
+            block_end = css.find("}", m.start())
+            block = css[block_start:block_end]
+            twin = "-webkit-sticky" if prop == "position: sticky" else "-webkit-" + prop
+            assert twin in block, (
+                f"a rule uses {prop} with no {twin} — on iOS 12 that "
+                f"declaration is dropped: {block.strip()[:90]!r}"
+            )
 
 
 def test_shorthands_older_webkit_drops_carry_a_longhand() -> None:

@@ -98,10 +98,12 @@
    DEMO CHROME
 ══════════════════════════════════════════════ */
         .demo-header {
+            position: -webkit-sticky;
             position: sticky;
             top: 0;
             z-index: 9000;
             background: rgba(18, 18, 18, 0.96);
+            -webkit-backdrop-filter: blur(24px);
             backdrop-filter: blur(24px);
             border-bottom: 1px solid rgba(255, 255, 255, 0.08);
             padding: 0 28px;
@@ -780,6 +782,7 @@
             padding: 0 10px;
             cursor: pointer;
             transition: background 0.2s, box-shadow 0.2s;
+            -webkit-user-select: none;
             user-select: none;
         }
 
@@ -1104,6 +1107,7 @@
         .song-ctx-palette {
             display: grid;
             grid-template-columns: repeat(6, 1fr);
+            grid-gap: 6px;
             gap: 6px;
             margin-top: 8px;
         }
@@ -1592,6 +1596,7 @@
         .grid-mode {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            grid-gap: 8px;
             gap: 8px;
             padding: 8px 0;
         }
@@ -2051,6 +2056,7 @@
 ══════════════════════════════════════════════ */
         .sidebar-preview {
             background: #111111;
+            -webkit-backdrop-filter: blur(32px) saturate(180%);
             backdrop-filter: blur(32px) saturate(180%);
             border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 18px;
@@ -2125,6 +2131,7 @@
         .sview-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
+            grid-gap: 8px;
             gap: 8px;
         }
 
@@ -2840,6 +2847,7 @@
 ══════════════════════════════════════════════ */
         .lyrics-panel-preview {
             background: #111111;
+            -webkit-backdrop-filter: blur(28px) saturate(180%);
             backdrop-filter: blur(28px) saturate(180%);
             border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 18px;
@@ -2901,6 +2909,7 @@
 ══════════════════════════════════════════════ */
         .chords-panel-preview {
             background: #111111;
+            -webkit-backdrop-filter: blur(28px) saturate(180%);
             backdrop-filter: blur(28px) saturate(180%);
             border: 1px solid rgba(191, 90, 242, 0.2);
             border-radius: 18px;
@@ -3225,6 +3234,7 @@
         .two-col {
             display: grid;
             grid-template-columns: 1fr 1fr;
+            grid-gap: 20px;
             gap: 20px;
             align-items: start;
         }
@@ -3232,6 +3242,7 @@
         .three-col {
             display: grid;
             grid-template-columns: 1fr 1fr 1fr;
+            grid-gap: 20px;
             gap: 20px;
             align-items: start;
         }
@@ -3284,6 +3295,7 @@
             max-width: 80vw;
             height: 100vh;
             background: #111111;
+            -webkit-backdrop-filter: blur(32px) saturate(180%);
             backdrop-filter: blur(32px) saturate(180%);
             border-right: 1px solid rgba(255, 255, 255, 0.08);
             z-index: 2000;
@@ -3303,6 +3315,7 @@
             width: 100vw;
             height: 100vh;
             background: rgba(0, 0, 0, 0.6);
+            -webkit-backdrop-filter: blur(4px);
             backdrop-filter: blur(4px);
             z-index: 1999;
             opacity: 0;
@@ -3326,6 +3339,7 @@
             flex-direction: column;
             padding: 20px;
             overflow-y: auto;
+            -webkit-backdrop-filter: blur(20px);
             backdrop-filter: blur(20px);
         }
 
@@ -3387,6 +3401,7 @@
             line-height: 1.45;
             color: var(--text2);
             pointer-events: none;
+            -webkit-user-select: none;
             user-select: none;
         }
 
@@ -3460,6 +3475,7 @@
             font-size: 17px;
             opacity: 0.5;
             transition: opacity 0.15s, transform 0.15s;
+            -webkit-user-select: none;
             user-select: none;
         }
 
@@ -3574,6 +3590,7 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
+            -webkit-backdrop-filter: blur(20px);
             backdrop-filter: blur(20px);
         }
 
@@ -3874,6 +3891,7 @@
             z-index: 400;
             display: none;
             font-family: var(--font-ui);
+            -webkit-user-select: none;
             user-select: none;
             overflow: hidden;
         }
@@ -4059,12 +4077,14 @@
 
         /* Top tabs bar — sticky full-width at the very top */
         .top-tabs {
+            position: -webkit-sticky;
             position: sticky;
             top: 0;
             z-index: 200;
             display: flex;
             background: rgba(8, 8, 8, 0.97);
             border-bottom: 2px solid var(--border);
+            -webkit-backdrop-filter: blur(10px);
             backdrop-filter: blur(10px);
             box-shadow: 0 2px 16px var(--shadow);
         }
@@ -4889,6 +4909,18 @@
         html.no-flexgap .midi-mapping-row > * + * { margin-left: 6px; }
         html.no-flexgap #live-config-btn > * + * { margin-left: 6px; }
         html.no-flexgap .lcp-row > * + * { margin-left: 12px; }
+
+        /* Five the first sweep missed. Each is `display: none` in its own rule
+           and is made a flex container by a state rule or a shared class
+           somewhere else — the Controller's setlist banner, the edit toggle,
+           Live View, the Canvas title and its toolbar. Reading one rule at a
+           time cannot see that; these directions came from the resolved
+           computed style. */
+        html.no-flexgap .setlist-banner > * + * { margin-left: 8px; }
+        html.no-flexgap #editModeBtn > * + * { margin-left: 6px; }
+        html.no-flexgap #live-view > * + * { margin-top: 16px; }
+        html.no-flexgap #cw-content-songname > * + * { margin-top: 8px; }
+        html.no-flexgap .cw-toolbar > * + * { margin-left: 4px; }
     </style>
 </head>
 
