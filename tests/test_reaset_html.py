@@ -2767,15 +2767,22 @@ def test_a_whole_song_loop_is_bracketed_like_any_other() -> None:
     end to end, and inset from the card's own edge so the two do not touch.
     """
     html = REASET_HTML.read_text(encoding="utf-8")
-    whole = _css_decls(html, ".loop-mark.is-whole")
+    body = strip_comments(inline_scripts(html)[0])
 
-    assert "border: none" not in whole, (
-        "the whole-song loop dropped its bracket again — that leaves a tint as "
-        "the only marker on the one case that has no other"
+    # It spans the track from the markup, not from a rule of its own — the
+    # track already carries the inset that keeps a bracket off the card border,
+    # and a second one here would put the mark somewhere its own percentages
+    # do not describe.
+    assert "loop-mark is-whole" in body, "the whole-song mark is gone"
+    assert re.search(r"is-whole[^\n]*left:0[^\n]*width:100%", body), (
+        "the whole-song mark no longer spans its track end to end"
     )
-    assert "left:" in whole and "right:" in whole, (
-        "the whole-song mark no longer spans the row"
-    )
+    if re.search(r"(?m)^ {8}\.loop-mark\.is-whole\s*\{", html):
+        whole = _css_decls(html, ".loop-mark.is-whole")
+        assert "border: none" not in whole, (
+            "the whole-song loop dropped its bracket again — that leaves a "
+            "tint as the only marker on the one case that has no other"
+        )
 
     # The looping SECTION's own row is bracketed too — the song row says WHERE
     # the loop is, the section row says THIS IS IT.
@@ -2786,4 +2793,38 @@ def test_a_whole_song_loop_is_bracketed_like_any_other() -> None:
     )
     assert _css_decls(html, ".section-row .loop-mark"), (
         "the section bracket has no size of its own and will swallow the row"
+    )
+
+
+def test_a_loop_at_the_songs_edge_does_not_draw_on_the_card_border() -> None:
+    """The first and the last section are the two that land on the card's edge.
+
+    A section starting at 0% or ending at 100% of its song put its bracket arm
+    a pixel from the row's own border, where the two drew on top of each other
+    — and those are not exotic cases, they are the intro and the outro.
+
+    The fix is on the TRACK, not on each mark. Insetting per-mark would need a
+    clamp, and a clamped bracket lies about the position by however much it
+    clamped, on a mark whose entire job is to say where something is.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    track = _css_decls(html, ".loop-marks")
+
+    left = re.search(r"left:\s*(\d+)px", track)
+    right = re.search(r"right:\s*(\d+)px", track)
+    assert left and right, (
+        "the loop track runs edge to edge, so a bracket for the first or last "
+        "section is drawn on top of the card's own border"
+    )
+    assert int(left.group(1)) >= 4 and int(right.group(1)) >= 4, (
+        f"the track's inset ({left.group(1)}px / {right.group(1)}px) is too "
+        f"small to keep a bracket arm clear of the border"
+    )
+
+    # And no mark may re-inset itself on top of that — two insets would put the
+    # whole-song bracket somewhere its own percentages do not describe.
+    whole = _css_decls(html, ".loop-mark.is-whole") if re.search(
+        r"(?m)^ {8}\.loop-mark\.is-whole\s*\{", html) else ""
+    assert "!important" not in whole, (
+        "the whole-song mark is overriding the track's inset again"
     )

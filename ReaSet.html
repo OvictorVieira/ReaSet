@@ -929,9 +929,17 @@
         /* Sits above the progress fill and below everything readable, so the
            bracket is something the row is wearing rather than something laid
            over the words. */
+        /* The TRACK is inset, not each mark.
+           A section that starts at 0% or ends at 100% of its song — the first
+           or the last one — put its bracket arm 1px from the card's own
+           border, where the two drew on top of each other. Insetting here
+           fixes every case at once and keeps the percentages honest, since
+           they stay proportional to a track that is itself proportional to the
+           song. Doing it per-mark would have needed a clamp and would still
+           have lied about the position by however much it clamped. */
         .loop-marks {
             position: absolute;
-            top: 0; right: 0; bottom: 0; left: 0;
+            top: 0; right: 6px; bottom: 0; left: 6px;
             pointer-events: none;
             z-index: 0;
         }
@@ -966,12 +974,8 @@
         }
         /* A whole-song loop is bracketed too — that is the case the old wash
            served worst, because there is no start or end marker anywhere else
-           to read. Inset from the card's own edge so the two do not touch. */
-        .loop-mark.is-whole {
-            left: 6px !important;
-            width: auto !important;
-            right: 6px;
-        }
+           to read. It needs no inset of its own: the track it sits in already
+           carries one. */
 
         .song-row>*:not(.card-bg-fill):not(.loop-marks),
         .section-row>*:not(.card-bg-fill):not(.loop-marks) {
