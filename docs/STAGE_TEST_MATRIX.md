@@ -195,6 +195,25 @@ network path and a localStorage origin, and will pass tests that a phone fails.
 | **C20** | Director marks two songs as skipped, then look at the Controller. | The skipped songs are **absent** from the Controller's list, not greyed out. The Director still sees them. | | |
 | **C21** | Switch a device from Controller to Director via the badge (and back). | The list repaints immediately — skipped songs appear/disappear on the spot, not on the next unrelated poll. | | |
 | **C22** | Unplug REAPER's project (or stop `Reaset.lua`) while a Controller is open. | The banner turns amber and says the project is unreachable. | | |
+| **E01** | Director, edit mode. Tap ✕ on a song. | It leaves the list. Show mode no longer lists it. It is still in REAPER. | | |
+| **E02** | Tap **+ Add song**. | Picker lists the removed song, plus every song already in the set tagged AGAIN. | | |
+| **E03** | Add a song from the picker. | Appended to the end of the list, playable, and gone from the picker. | | |
+| **E04** | Add a song that is **already in the set**. | Two rows for it, each with its own Loop / Skip / end-state controls. | | |
+| **E05** | Play the **first** copy of a repeated song and let it end. | Advances to what follows the FIRST copy. | | |
+| **E06** | Play the **second** copy and let it end. | Advances to what follows the SECOND copy. **This is the case the old code got wrong.** | | |
+| **E07** | While a repeat plays, watch the row highlight, the progress fill and the countdown. | All three land on the row that is actually playing, and none flicker to the other copy. | | |
+| **E08** | Start playback from REAPER itself (not from ReaSet) inside a repeated song. | The FIRST copy highlights, and stays highlighted — no flicker between the two. This is the documented fallback. | | |
+| **E09** | Set one copy of a repeat to Loop and the other not. | Only the looping copy loops. | | |
+| **E10** | Set a per-song colour / note / end-state on one copy. | **Both** copies show it — those describe the song, not the row. | | |
+| **E11** | Drag to reorder a list containing a repeat. | Both copies survive the drag in the positions you left them. Reload and check again — this is where a first-match scan used to collapse them. | | |
+| **E12** | Remove ONE copy of a repeat. | The other stays. The song does **not** reappear in the picker. | | |
+| **E13** | Remove the last copy. | It leaves the set and returns to the picker. | | |
+| **E14** | Repeat E01–E04 while a phone is watching as Controller. | Every change reaches the phone, in order, with both copies of a repeat rendered. | | |
+| **E15** | Controller, edit mode unavailable: try to reach add/remove. | No add row, no ✕, and nothing reaches REAPER even if a control is forced. | | |
+| **E16** | Setlist saved **before** this change: open it. | Loads unchanged, same songs, same order. | | |
+| **E17** | Add a new region in REAPER while a **curated** set is open. | It appears in the **picker**, not in the show. | | |
+| **E18** | Open ReaSet on a brand-new project with no setlist. | The whole project is listed — the empty-set bootstrap. | | |
+| **E19** | Remove **every** song, then reload. | Known limitation: the project comes back. See plan §18. | | |
 
 ---
 

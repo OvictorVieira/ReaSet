@@ -2388,10 +2388,88 @@
            one that does not. */
         .song-row .drag-handle,
         .song-row .song-dotmenu-btn,
+        .song-row .song-remove-btn,
         .section-row .sub-dotmenu-btn { display: none; }
+
+        /* Removing is destructive-ish and structural, so it reads as the one
+           red thing in a row of neutral controls — and it is only ever on
+           screen in edit mode, where nothing else is one tap from changing
+           what plays. */
+        .song-row .song-remove-btn {
+            align-items: center; justify-content: center;
+            width: 26px; height: 26px; flex: 0 0 auto;
+            margin-right: 2px;
+            border: none; border-radius: 8px;
+            background: rgba(252, 60, 68, 0.14);
+            color: var(--color-active);
+            font-size: 13px; line-height: 1; cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .song-row .song-remove-btn:hover { background: rgba(252, 60, 68, 0.28); }
+
+        /* The add-song row closes the list in edit mode. Full width because it
+           is not a per-row control and must not read as one. */
+        .add-song-row {
+            display: none;
+            width: 100%;
+            align-items: center; justify-content: center; gap: 8px;
+            margin: 10px 0 4px;
+            padding: 13px 14px;
+            border: 1.5px dashed rgba(255, 255, 255, 0.2);
+            border-radius: var(--radius-pill);
+            background: transparent;
+            color: var(--text2);
+            font-family: var(--font-ui); font-size: 13px; font-weight: 700;
+            letter-spacing: 0.03em;
+            cursor: pointer;
+        }
+        body.reaset-editing .add-song-row { display: flex; }
+        .add-song-row:hover { border-color: rgba(255, 255, 255, 0.42); color: var(--text-primary); }
+
+        #add-song-overlay {
+            display: none;
+            position: fixed; inset: 0; z-index: 1400;
+            background: rgba(0, 0, 0, 0.62); backdrop-filter: blur(3px);
+            align-items: center; justify-content: center; padding: 20px;
+        }
+        #add-song-overlay.open { display: flex; }
+        .add-song-card {
+            background: #1c1c1e;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            border-radius: 20px;
+            width: 100%; max-width: 420px;
+            max-height: 78vh; display: flex; flex-direction: column;
+            overflow: hidden;
+        }
+        .add-song-title {
+            padding: 18px 20px 12px;
+            font-family: var(--font-ui); font-size: 15px; font-weight: 800;
+            color: var(--text-primary);
+        }
+        .add-song-list { overflow-y: auto; padding: 0 10px 10px; }
+        .add-song-item {
+            display: flex; align-items: center; gap: 10px;
+            width: 100%; padding: 12px 12px;
+            background: transparent; border: none; border-radius: 12px;
+            color: var(--text-primary);
+            font-family: var(--font-ui); font-size: 14px; text-align: left;
+            cursor: pointer;
+        }
+        .add-song-item:hover { background: rgba(255, 255, 255, 0.07); }
+        .add-song-item .asi-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .add-song-item .asi-dur  { color: var(--text2); font-size: 12px; font-variant-numeric: tabular-nums; }
+        /* Marks a song ALREADY in the set. It stays selectable on purpose —
+           adding it again is the repeat this whole feature exists for. */
+        .add-song-item .asi-again {
+            font-size: 10px; font-weight: 800; letter-spacing: .05em;
+            color: var(--color-brand); border: 1px solid rgba(30,215,96,0.4);
+            border-radius: 999px; padding: 2px 7px;
+        }
+        .add-song-empty { padding: 14px 12px 20px; color: var(--text2); font-size: 13px; }
 
         body.reaset-editing .song-row .drag-handle,
         body.reaset-editing .song-row .song-dotmenu-btn,
+        body.reaset-editing .song-row .song-remove-btn,
         body.reaset-editing .section-row .sub-dotmenu-btn { display: flex; }
 
         /* In edit mode the three live toggles step aside; their state moves
@@ -5119,6 +5197,15 @@
         </div>
     </div>
 
+    <!-- ADD SONG PICKER -->
+    <div id="add-song-overlay" onclick="if(event.target===this)closeAddSongPicker()">
+        <div class="add-song-card">
+            <div class="add-song-title">Add a song to this setlist</div>
+            <div class="add-song-list" id="add-song-list"></div>
+            <button class="m-btn m-btn-cancel" style="margin:4px 14px 16px" onclick="closeAddSongPicker()">Cancel</button>
+        </div>
+    </div>
+
     <!-- DIRECTOR / CONTROLLER MODE SELECTOR -->
     <!-- Forced on first load (no stored mode): the backdrop click-to-close and
          the "keep current mode" cancel button are both suppressed in that case
@@ -6212,6 +6299,13 @@
              "O STOP tem que ser arrastado de um lado ao outro, igual ao deslizar para desligar do Mac.\nUm toque acidental não para o show, e um deslize pela metade é abandonado ao soltar.\nDesligue isso para ter um botão STOP comum, que age num toque só."],
             ["Note about the song…", "Nota sobre la canción…", "Nota sobre a música…"],
             ["Remove colour", "Quitar color", "Remover cor"],
+            ["Add song", "Agregar canción", "Adicionar música"],
+            ["Add a song to this setlist", "Agregar una canción a este setlist",
+             "Adicionar uma música a este setlist"],
+            ["Remove from setlist", "Quitar del setlist", "Remover do setlist"],
+            ["AGAIN", "OTRA VEZ", "DE NOVO"],
+            ["This project has no regions yet.", "Este proyecto todavía no tiene regiones.",
+             "Este projeto ainda não tem regiões."],
             ["Amber", "Ámbar", "Âmbar"],
             ["Teal", "Verde azulado", "Verde-azulado"]
         ];
@@ -6340,6 +6434,10 @@
         // Holds a UID, not a region id — its only job is to find the element
         // painted last time so it can be un-painted, and with a repeat the
         // region id names two of them.
+        // Regions in the REAPER project that tonight's set does not contain.
+        // Read only by the add-song picker: nothing about playback may walk it.
+        var g_offSetlist = [];
+
         var lastActiveID = null;
         var lastRenderChecksum = "";
         var isDragging = false;
@@ -9448,14 +9546,36 @@
             }
 
             g_subRegionMap = subMap;
+            // Rebuilt from scratch on every pass, like displayList: a region
+            // that left the project must not linger in the picker.
+            if (displayList.length === 0 && !initialized) g_offSetlist = [];
 
             // `delete mainMap[id]` used to double as the "already placed" mark.
             // That idiom cannot represent a repeat AT ALL: the second saved entry
             // for the same song finds the key already gone and is dropped without
             // a trace. Consumption is tracked separately now, so the map stays a
             // plain lookup and a song may be placed as often as the set asks.
+            // ── MEMBERSHIP ──────────────────────────────────────────────
+            // A setlist is now a REPERTOIRE: it holds tonight's songs, in
+            // order, and nothing else. It used to be a view of every region in
+            // the project, where exclusion was expressed as `skipped` — "in the
+            // list but greyed out", which is a different statement from "not in
+            // the list" and left no way to say the second one.
+            //
+            // Membership needs no new storage: an entry's PRESENCE in
+            // setlists[name] is its membership, which is exactly the format
+            // already on disk. Everything else in the project is off-setlist
+            // and reachable from the + picker in edit mode.
+            //
+            // ONE EXCEPTION, and it is deliberate. An EMPTY setlist absorbs the
+            // whole project on its first build. Without that, opening ReaSet on
+            // a new project would show an empty list and a picker — technically
+            // correct and a terrible first thirty seconds. Once a set has any
+            // entry at all it is curated, and a region added in REAPER later
+            // appears in the picker rather than silently joining the show.
             if (displayList.length === 0 && !initialized) {
                 var saved = setlists[currentSetlistName];
+                var bootstrap = (saved.length === 0);
                 var placed = {};
                 for (var j = 0; j < saved.length; j++) {
                     var item = saved[j];
@@ -9467,8 +9587,12 @@
                 for (var k in mainMap) { if (mainMap.hasOwnProperty(k) && !placed[k]) newItems.push(mainMap[k]); }
                 newItems.sort(function (a, b) { return a.start - b.start; });
                 for (var n = 0; n < newItems.length; n++) {
-                    displayList.push(_makeInstance(newItems[n], _newUid(newItems[n].id),
-                                                   { skipped: !!newItems[n].defaultSkip }));
+                    if (bootstrap) {
+                        displayList.push(_makeInstance(newItems[n], _newUid(newItems[n].id),
+                                                       { skipped: !!newItems[n].defaultSkip }));
+                    } else {
+                        g_offSetlist.push(newItems[n]);
+                    }
                 }
                 if (displayList.length > 0 && !isPlaying) wwr_req("SET/POS/" + displayList[0].start, "setlist-init-cursor");
                 initialized = true;
@@ -9487,12 +9611,14 @@
                     kept.push(itm);
                 }
                 displayList = kept;
+                // Regions the set does not contain. They are NOT appended to
+                // displayList any more: transport, auto-advance and the block
+                // grouping all walk that list, so a song nobody put in the show
+                // would be something the show could chain into.
                 var newItems2 = [];
                 for (var k2 in mainMap) { if (mainMap.hasOwnProperty(k2) && !present[k2]) newItems2.push(mainMap[k2]); }
                 newItems2.sort(function (a, b) { return a.start - b.start; });
-                for (var n2 = 0; n2 < newItems2.length; n2++) {
-                    displayList.push(_makeInstance(newItems2[n2], _newUid(newItems2[n2].id), null));
-                }
+                g_offSetlist = newItems2;
             }
             saveCurrentState();
             var cs = JSON.stringify(displayList.map(function (r) { return { id: r.id, uid: r.uid, chain: r.chain, skipped: r.skipped, loop: r.loop, name: r.name, color: r.color }; })) + (_hideSkippedEffective() ? 1 : 0) + JSON.stringify(g_subRegionMap) + JSON.stringify(g_songOverrides);
@@ -9924,6 +10050,7 @@
                     rowDiv.innerHTML =
                         '<div class="card-bg-fill" id="bg-' + r.uid + '"></div>'
                         + '<div class="drag-handle">⋮⋮</div>'
+                        + '<button class="song-remove-btn" title="' + t('Remove from setlist') + '" onclick="event.stopPropagation(); removeFromSetlist(\'' + r.uid + '\')">&#10005;</button>'
                         + '<button class="song-dotmenu-btn" onclick="event.stopPropagation(); openSongMenu(event,\'' + r.uid + '\')"><svg width="4" height="18" viewBox="0 0 4 18" fill="currentColor"><circle cx="2" cy="2" r="2"/><circle cx="2" cy="9" r="2"/><circle cx="2" cy="16" r="2"/></svg></button>'
                         + '<span class="song-index">' + songIndex + stopHtml + '</span>'
                         + '<button class="' + chevClass + '" id="chev-' + r.uid + '" onclick="event.stopPropagation();toggleExpand(\'' + r.uid + '\',' + hasSubs + ')">' + chevIcon + '</button>'
@@ -10010,6 +10137,17 @@
 
                     listEl.appendChild(li);
                 }
+            }
+
+            // Appended after the rows and OUTSIDE any .song-container, so
+            // Sortable — which rebuilds the order from those — cannot pick it
+            // up as a draggable entry.
+            if (canEditSetlist()) {
+                var addLi = document.createElement("li");
+                addLi.className = "add-song-row";
+                addLi.setAttribute("onclick", "openAddSongPicker()");
+                addLi.innerHTML = '<span>&#43;</span><span>' + t('Add song') + '</span>';
+                listEl.appendChild(addLi);
             }
 
             listEl.scrollTop = scrollPos;
@@ -10280,6 +10418,126 @@
             if (!canEditSetlist()) { RSDiag.blocked('toggleSubSkip', 'role-cannot-edit-setlist'); return; }
             if (window.subStates[id]) { window.subStates[id].skipped = !window.subStates[id].skipped; lastRenderChecksum = ""; syncRegions(); }
         }
+        // ── Membership actions ──────────────────────────────────────────────
+        // REMOVE is not SKIP, and conflating them is what this replaces.
+        //
+        //   skip    in the set, greyed out, not played tonight
+        //   remove  not in the set at all — still in the REAPER project,
+        //           reachable again from the + picker
+        //
+        // They live in different modes for the same reason: skip is a
+        // performance decision a Director makes during a show, remove is
+        // structural authoring. Edit mode already hides .song-actions and
+        // reveals the drag handle; the remove button belongs on that side.
+        // ── Add-song picker ─────────────────────────────────────────────────
+        // Lists what the project has and the set does not, then every song
+        // already in the set — the second group exists because a song can
+        // legitimately be played twice in one show, which is the requirement
+        // AbleSet does not meet and #13 asks for explicitly.
+        function openAddSongPicker() {
+            if (!canEditSetlist()) { RSDiag.blocked('openAddSongPicker', 'role-cannot-edit-setlist'); return; }
+            var ov = document.getElementById('add-song-overlay');
+            var list = document.getElementById('add-song-list');
+            if (!ov || !list) return;
+            list.innerHTML = '';
+
+            var seen = {};
+            var rows = [];
+            for (var i = 0; i < g_offSetlist.length; i++) rows.push({ r: g_offSetlist[i], again: false });
+            for (var j = 0; j < displayList.length; j++) {
+                if (seen[displayList[j].id]) continue;     // one entry per song, not per row
+                seen[displayList[j].id] = true;
+                rows.push({ r: displayList[j], again: true });
+            }
+            if (!rows.length) {
+                var empty = document.createElement('div');
+                empty.className = 'add-song-empty';
+                empty.textContent = t('This project has no regions yet.');
+                list.appendChild(empty);
+            }
+            for (var n = 0; n < rows.length; n++) {
+                (function (entry) {
+                    var b = document.createElement('button');
+                    b.className = 'add-song-item';
+                    var nm = document.createElement('span');
+                    nm.className = 'asi-name';
+                    nm.textContent = entry.r.displayName || entry.r.name;
+                    b.appendChild(nm);
+                    if (entry.again) {
+                        var tag = document.createElement('span');
+                        tag.className = 'asi-again';
+                        tag.textContent = t('AGAIN');
+                        b.appendChild(tag);
+                    }
+                    var du = document.createElement('span');
+                    du.className = 'asi-dur';
+                    du.textContent = formatTime(entry.r.duration);
+                    b.appendChild(du);
+                    b.addEventListener('click', function (e) {
+                        e.stopPropagation();
+                        addSongToSetlist(entry.r.id);
+                    });
+                    list.appendChild(b);
+                })(rows[n]);
+            }
+            ov.classList.add('open');
+        }
+        function closeAddSongPicker() {
+            var ov = document.getElementById('add-song-overlay');
+            if (ov) ov.classList.remove('open');
+        }
+
+        function removeFromSetlist(uid) {
+            if (!canEditSetlist()) { RSDiag.blocked('removeFromSetlist', 'role-cannot-edit-setlist'); return; }
+            var inst = _findInstanceByUid(uid);
+            if (!inst) { RSDiag.log('INSTANCE_MISS', { uid: String(uid), why: 'removeFromSetlist' }); return; }
+            var idx = displayList.indexOf(inst);
+            if (idx === -1) return;
+
+            // Intent pointing at a row that is about to stop existing would
+            // otherwise survive as a cue or a queue target nobody can see.
+            if (selectedRegion && selectedRegion.uid === inst.uid) clearSelectedRegion('row-removed');
+            if (queuedRegion && _uidOf(queuedRegion) === inst.uid) clearQueuedRegion('row-removed');
+            if (_activeUidHint === inst.uid) noteActiveInstance(null, 'row-removed');
+
+            displayList.splice(idx, 1);
+            // Back to the picker only if this was its LAST instance: with a
+            // repeat the song is still in the set, one row lighter.
+            var stillIn = false;
+            for (var i = 0; i < displayList.length; i++) { if (displayList[i].id === inst.id) { stillIn = true; break; } }
+            if (!stillIn) {
+                var already = false;
+                for (var j = 0; j < g_offSetlist.length; j++) { if (g_offSetlist[j].id === inst.id) { already = true; break; } }
+                if (!already) {
+                    g_offSetlist.push(inst);
+                    g_offSetlist.sort(function (a, b) { return a.start - b.start; });
+                }
+            }
+            RSDiag.log('SETLIST_REMOVE', { song: inst.id, uid: inst.uid, stillIn: stillIn });
+            saveCurrentState(); lastRenderChecksum = ""; renderSetlist();
+        }
+
+        // Appends. Position is then a drag, which is the gesture the list
+        // already teaches — a second "insert at index N" affordance would be
+        // the numeric reorder prompt growing back under a different name.
+        function addSongToSetlist(regionId) {
+            if (!canEditSetlist()) { RSDiag.blocked('addSongToSetlist', 'role-cannot-edit-setlist'); return; }
+            var src = null;
+            for (var i = 0; i < g_offSetlist.length; i++) { if (g_offSetlist[i].id == regionId) { src = g_offSetlist[i]; break; } }
+            // Not off-setlist: this is a REPEAT of a song already in the show,
+            // which is the case AbleSet does not allow and this one must.
+            if (!src) { for (var j = 0; j < displayList.length; j++) { if (displayList[j].id == regionId) { src = displayList[j]; break; } } }
+            if (!src) { RSDiag.log('ADD_MISS', { song: String(regionId) }); return; }
+
+            displayList.push(_makeInstance(src, _newUid(src.id), { skipped: !!src.defaultSkip }));
+            for (var g = g_offSetlist.length - 1; g >= 0; g--) {
+                if (g_offSetlist[g].id == regionId) g_offSetlist.splice(g, 1);
+            }
+            RSDiag.log('SETLIST_ADD', { song: String(regionId) });
+            saveCurrentState(); lastRenderChecksum = ""; renderSetlist();
+            closeAddSongPicker();
+        }
+
         function toggleSkip(uid) {
             if (!canEditSetlist()) { RSDiag.blocked('toggleSkip', 'role-cannot-edit-setlist'); return; }
             var inst = _instanceForAction(uid, 'toggleSkip');

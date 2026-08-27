@@ -1257,3 +1257,106 @@ Membership as its own concept (show mode listing only the set), the `+` picker,
 Everything here. Acceptance tests 8–15 of #13 need REAPER, and 12 (playback
 started outside ReaSet must not flicker the highlight between two instances)
 cannot be reasoned about from here at all.
+
+---
+
+## 18. Membership: the setlist becomes a repertoire
+
+Issue #13, second half. §17 built the identity this needs.
+
+### Exclusion had no way to be said
+
+`displayList` held every region in the project, and exclusion was expressed as
+`skipped: true` — which means *"in the list, greyed out"*. That is a different
+statement from *"not in the list"*, and there was no way to make the second one.
+
+Now:
+
+| | means |
+|---|---|
+| **skip** | in the set, greyed out, not played tonight |
+| **remove** | not in the set at all — still in the REAPER project, reachable from the `+` picker |
+
+They live in different modes, for the same reason the drag handle does: skip is a
+*performance* decision a Director makes during a show; remove is *structural
+authoring*. Edit mode already hid `.song-actions` and revealed the drag handle,
+so the remove button belongs on that side and the ✕ in show mode still means skip.
+
+### Membership needs no new storage
+
+An entry's **presence** in `setlists[name]` is its membership — which is exactly
+the format already on disk. `displayList` is the set, in order; `g_offSetlist`
+holds everything else in the project and is read *only* by the picker. Nothing
+about playback may walk it, and a test enforces that: transport, auto-advance and
+the block grouping all iterate `displayList`, so a song nobody added being in it
+means the show can chain into it.
+
+The refresh branch of `syncRegions()` is where that matters most — it runs about
+once a second for the life of the page, so a leak there would quietly re-absorb
+the whole project.
+
+### One deliberate exception
+
+**An empty setlist absorbs the whole project on its first build.** Without it,
+opening ReaSet on a new project would show an empty list and a picker —
+technically correct and a terrible first thirty seconds. Once a set has any entry
+at all it is curated, and a region added in REAPER later appears in the picker
+rather than silently joining the show.
+
+This also makes migration a non-event: every existing setlist already contains
+everything, so it loads exactly as before. Acceptance test 7 by construction.
+
+### Known limitation, stated rather than hidden
+
+Emptying a setlist completely and then reloading brings the whole project back,
+because an empty set is indistinguishable from a new one **in this storage
+format** — and the epic's constraint is not to change that format without a fix
+requiring it. Distinguishing them needs either a per-setlist "curated" flag (a
+format change) or a device-local marker (which a second device would not see, so
+two devices would disagree about the same set).
+
+Removing every song from a set is a rare deliberate act, and the recovery — it
+comes back — is benign next to the alternative of a blank first run. If it turns
+out to matter, the fix is a format change and should be taken as one.
+
+### The picker allows repeats
+
+It lists what the project has and the set does not, then every song already in
+the set, tagged **AGAIN**. That second group is the point: a song can legitimately
+be played twice in one show, which AbleSet does not allow and #13 requires.
+
+Adding appends. Position is then a drag, which is the gesture the list already
+teaches — a second "insert at index N" affordance would be the numeric reorder
+prompt growing back under a different name.
+
+Removing one instance of a repeat leaves the song in the set, one row lighter; it
+returns to the picker only when its **last** instance goes. Removal also clears
+any selection, queue entry or active-instance hint pointing at that row, since
+intent aimed at a row that no longer exists is a cue nobody can see.
+
+### Roles
+
+`removeFromSetlist()`, `addSongToSetlist()` and `openAddSongPicker()` each check
+`canEditSetlist()` at the function, not only in CSS — #13 acceptance test 16. The
+add row is additionally rendered only for a Director and CSS-hidden outside edit
+mode, but neither of those is what stops a write.
+
+### Locked by tests
+
+`test_off_setlist_songs_never_reach_playback`, `test_remove_is_not_skip`, and
+`test_membership_actions` — the last **executes** the real `addSongToSetlist()`
+and `removeFromSetlist()` and covers the repeat in both directions: adding a song
+already in the set, and removing one instance of a repeat without the song
+leaving.
+
+Eight mutations run, eight caught. One initially passed and forced a much better
+test: re-appending off-setlist regions in the refresh branch was invisible to an
+assertion that only checked `g_offSetlist` was mentioned *somewhere* in
+`syncRegions()`. The test now asserts the refresh branch contains no
+`displayList.push` at all.
+
+### Still requires a real-device test
+
+#13's acceptance tests 1–6 and 8–15. In particular 6 (add/remove/reorder reach
+followers) and 14 (a follower renders both instances in the right order) are
+multi-device and cannot be reasoned about here.

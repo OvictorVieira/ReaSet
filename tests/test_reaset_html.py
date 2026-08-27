@@ -1508,3 +1508,160 @@ def test_every_row_is_its_own_object(script_body: str) -> None:
         # and nothing leaks back into the region every row is copied from
         "sourceSafe": True,
     }, got
+
+
+# ── Membership (#13, second half) ────────────────────────────────────────────
+# A setlist is now a REPERTOIRE: tonight's songs, in order, and nothing else.
+# It used to be a view of every region in the project, where exclusion was
+# expressed as `skipped` — "in the list but greyed out", which is a different
+# statement from "not in the list" and left no way to make the second one.
+
+def test_off_setlist_songs_never_reach_playback(script_body: str) -> None:
+    """Songs outside the set must not be in displayList.
+
+    Transport, auto-advance and the block grouping all walk that list. A song
+    nobody put in the show being in it means the show can chain into it.
+    """
+    body = strip_comments(script_body)
+    assert re.search(r"var\s+g_offSetlist\s*=\s*\[\]", body), (
+        "g_offSetlist is gone — off-setlist regions are back in displayList"
+    )
+    sync = strip_comments(extract_function(body, "syncRegions"))
+    assert "g_offSetlist" in sync, "syncRegions() no longer separates off-setlist regions"
+
+    # The load-bearing one: on a REFRESH, a region the set does not contain must
+    # not be appended to displayList. That branch runs once a second for the
+    # life of the page, so a leak there quietly re-absorbs the whole project and
+    # the show can chain into a song nobody added.
+    refresh = _else_branch(sync, "if (displayList.length === 0 && !initialized)")
+    assert "displayList.push" not in refresh, (
+        "the refresh branch of syncRegions() appends to displayList again — "
+        "off-setlist regions rejoin the show, which is the behaviour #13 exists "
+        "to end"
+    )
+    assert "g_offSetlist" in refresh, (
+        "the refresh branch no longer records off-setlist regions, so the add "
+        "picker goes empty a second after any edit"
+    )
+
+    # And in the bootstrap branch it may only happen for an EMPTY set.
+    assert re.search(r"bootstrap\s*=\s*\(\s*saved\.length\s*===\s*0\s*\)", sync), (
+        "the whole-project absorb is no longer conditional on the set being "
+        "empty, so every new region silently joins the show again"
+    )
+    # Only the picker may read it.
+    readers = [m for m in re.findall(r"function\s+(\w+)[^{]*\{", body)
+               if "g_offSetlist" in _fn_body(body, m)]
+    allowed = {"syncRegions", "openAddSongPicker", "addSongToSetlist", "removeFromSetlist"}
+    assert set(readers) <= allowed, (
+        f"g_offSetlist is read outside the picker and its two actions: "
+        f"{sorted(set(readers) - allowed)}"
+    )
+
+
+def _fn_body(body: str, name: str) -> str:
+    try:
+        return extract_function(body, name)
+    except AssertionError:
+        return ""
+
+
+def test_remove_is_not_skip(script_body: str) -> None:
+    """The two mean different things and must stay separate.
+
+    skip   = in the set, greyed out, not played tonight
+    remove = not in the set at all, still in the REAPER project
+
+    Conflating them is what the old ✕ did, and it is why there was no way to
+    say "this song is not in tonight's show".
+    """
+    body = strip_comments(script_body)
+    rm = strip_comments(extract_function(body, "removeFromSetlist"))
+    assert "displayList.splice" in rm, "removeFromSetlist() does not remove the row"
+    assert ".skipped" not in rm, (
+        "removeFromSetlist() touches the skipped flag — removing is not skipping"
+    )
+    sk = strip_comments(extract_function(body, "toggleSkip"))
+    assert "splice" not in sk and "g_offSetlist" not in sk, (
+        "toggleSkip() has started removing rows — skipping is not removing"
+    )
+    for fn in ("removeFromSetlist", "addSongToSetlist", "openAddSongPicker"):
+        assert "canEditSetlist()" in strip_comments(extract_function(body, fn)), (
+            f"{fn}() is not gated by canEditSetlist() — #13 acceptance test 16 "
+            f"requires the guard at the function, not only in CSS"
+        )
+
+
+@requires_node
+def test_membership_actions(script_body: str) -> None:
+    """Runs the real add/remove against a stubbed list.
+
+    Covers the repeat case in both directions: adding a song already in the set
+    (which AbleSet forbids and #13 requires), and removing ONE instance of a
+    repeat without the song leaving the set.
+    """
+    fns = "\n".join(extract_function(script_body, f)
+                    for f in ("removeFromSetlist", "addSongToSetlist", "_makeInstance",
+                              "_findInstanceByUid", "_uidOf"))
+
+    harness = textwrap.dedent(
+        """
+        var RSDiag = { log: function () {}, blocked: function () {} };
+        var _uidSeq = 100;
+        function _newUid(rid) { return String(rid) + '#' + (++_uidSeq); }
+        function canEditSetlist() { return true; }
+        function saveCurrentState() {}
+        function renderSetlist() {}
+        function clearSelectedRegion() { selectedRegion = null; }
+        function clearQueuedRegion() { queuedRegion = null; }
+        function noteActiveInstance(u) { _activeUidHint = u || null; }
+        function closeAddSongPicker() {}
+        var lastRenderChecksum = '', selectedRegion = null, queuedRegion = null, _activeUidHint = null;
+
+        var A = { id: 'A', name: 'Song A', start: 0,  end: 10, duration: 10 };
+        var B = { id: 'B', name: 'Song B', start: 10, end: 20, duration: 10 };
+        var C = { id: 'C', name: 'Song C', start: 20, end: 30, duration: 10 };
+        var displayList = [ _makeInstance(A, 'A#1', {}), _makeInstance(B, 'B#1', {}) ];
+        var g_offSetlist = [ C ];
+
+        __FNS__
+        var out = [];
+        var ids = function () { return displayList.map(function (r) { return r.uid; }); };
+        var off = function () { return g_offSetlist.map(function (r) { return r.id; }); };
+
+        // Add a song that is NOT in the set.
+        addSongToSetlist('C');
+        out.push(['added-off-setlist', ids(), off()]);
+
+        // Add a song that IS in the set — the repeat.
+        addSongToSetlist('A');
+        out.push(['added-repeat', ids(), off()]);
+
+        // Remove ONE instance of the repeat: the song stays in the set.
+        removeFromSetlist('A#102');
+        out.push(['removed-one-of-two', ids(), off()]);
+
+        // Remove the last instance: now it leaves, and returns to the picker.
+        removeFromSetlist('A#1');
+        out.push(['removed-last', ids(), off()]);
+
+        // Intent pointing at a removed row must not survive it.
+        selectedRegion = { id: 'B', uid: 'B#1' };
+        queuedRegion   = { id: 'B', uid: 'B#1' };
+        _activeUidHint = 'B#1';
+        removeFromSetlist('B#1');
+        out.push(['intent-cleared', [selectedRegion, queuedRegion, _activeUidHint]]);
+
+        console.log(JSON.stringify(out));
+        """
+    ).replace("__FNS__", fns)
+
+    got = {row[0]: row[1:] for row in json.loads(run_node(harness))}
+    assert got["added-off-setlist"] == [["A#1", "B#1", "C#101"], []], got["added-off-setlist"]
+    # The repeat: two rows for A, and A is NOT put back in the picker.
+    assert got["added-repeat"] == [["A#1", "B#1", "C#101", "A#102"], []], got["added-repeat"]
+    # One instance gone, the song still in the set, picker untouched.
+    assert got["removed-one-of-two"] == [["A#1", "B#1", "C#101"], []], got["removed-one-of-two"]
+    # Last instance gone: now it goes back to the picker.
+    assert got["removed-last"] == [["B#1", "C#101"], ["A"]], got["removed-last"]
+    assert got["intent-cleared"] == [[None, None, None]], got["intent-cleared"]
