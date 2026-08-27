@@ -2862,9 +2862,15 @@ def test_region_colour_is_written_to_reaper_not_to_this_browser(script_body: str
         "anyone can recolour the project — this is an edit, and edits are the "
         "Director's"
     )
-    assert "join(';')" in push, (
-        "a whole block is no longer one write, so Reaset.lua re-enumerates the "
-        "project once per song on its defer thread"
+    assert "join(',')" in push, (
+        "a whole block is no longer one comma-joined write, so Reaset.lua "
+        "re-enumerates the project once per song on its defer thread"
+    )
+    assert "join(';')" not in push, (
+        "`;` separates COMMANDS in REAPER's web interface — this file joins "
+        "multiple commands with it. A semicolon-joined value is split into "
+        "commands before it reaches the key, so only the first pair survives "
+        "and colouring a block silently does one song"
     )
 
     # Only Apply reaches the wire. Picking a swatch stages the colour so the
@@ -3472,3 +3478,79 @@ def test_the_grid_probe_exists_and_is_a_probe() -> None:
     )
     assert "no-grid" in probe, "the probe sets no class, so every fallback is inert"
     assert "userAgent" not in probe, "the probe sniffs the UA instead of measuring"
+
+
+
+def test_no_extstate_value_is_joined_with_a_semicolon(script_body: str) -> None:
+    """`;` is REAPER's command separator, not a character you may put in a value.
+
+    This file joins multiple commands with it — see the director heartbeat,
+    which sends three SET/EXTSTATE in one request. So a VALUE containing `;` is
+    not one value: REAPER splits it and reads the tail as further commands,
+    which are nonsense and get dropped.
+
+    That is exactly how the region-colour write failed. It was built as one
+    request carrying five `id:hex` pairs joined with `;`, and REAPER read it as
+    five commands of which only the first was real — so colouring a block only
+    ever coloured one song, silently.
+    """
+    body = strip_comments(script_body)
+    offenders = []
+    for call in re.finditer(r"wwr_req\(\s*('[^']*'|\"[^\"]*\")([^)]*)\)", body):
+        literal, rest = call.group(1), call.group(2)
+        # A literal ending in a `;` before another SET/GET is a deliberate
+        # multi-command request, which is what `;` is FOR.
+        if "SET/EXTSTATE" not in literal and "GET/EXTSTATE" not in literal:
+            continue
+        if "join(';')" in rest:
+            offenders.append(literal.strip("'\"")[:60])
+    assert not offenders, (
+        f"these build an ExtState VALUE by joining with ';', which REAPER reads "
+        f"as extra commands: {offenders}"
+    )
+
+
+def test_the_colour_watchdog_tells_the_two_failures_apart(script_body: str) -> None:
+    """"It did not work" for both causes is what makes this a support call.
+
+    color_tick() clears the ExtState key the instant it runs. So seconds after
+    the write, whether the key is still there separates "nothing on the REAPER
+    side is listening" — the script not running, or replaced without restarting
+    REAPER, which keeps the old copy in memory — from "the script ran and the
+    region did not change", which is a bug and wants a diagnostic dump.
+    """
+    body = strip_comments(script_body)
+    assert "xr_region_color_key" in body, (
+        "the colour key is no longer read back, so the watchdog cannot know "
+        "which failure it is looking at"
+    )
+    assert re.search(
+        r'tok\[2\] === "regionColor"', body
+    ), "nothing populates the read-back value from a reply"
+
+    watch = strip_comments(extract_function(body, "_watchStagedColors"))
+    assert "xr_region_color_key" in watch, (
+        "the watchdog stopped consulting the read-back, so it is back to one "
+        "message for two different problems"
+    )
+
+
+def test_the_palettes_offer_fixed_colours_only() -> None:
+    """No native colour picker beside the app's own swatches.
+
+    There used to be a rainbow swatch holding an <input type="color"> — an OS
+    picker in the middle of the palette, offering a nineteenth colour that
+    belonged to no set and was drawn by the operating system rather than by
+    this app.
+    """
+    html = re.sub(
+        r"<!--.*?-->", "", REASET_HTML.read_text(encoding="utf-8"), flags=re.S
+    )
+    for container in ("js-lyr-swatches", "chords-color-selector", "ls-swatches"):
+        block = re.search(
+            r'<div[^>]*\b' + container + r'\b[^>]*>(.*?)</div>', html, re.S
+        )
+        assert block, f"the {container} palette is gone"
+        assert 'type="color"' not in block.group(1), (
+            f"{container} still carries a native colour picker"
+        )

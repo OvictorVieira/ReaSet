@@ -1391,17 +1391,6 @@
             box-shadow: 0 0 0 1px rgba(0,0,0,0.6) inset;
         }
 
-        /* The custom-colour swatch holds a native <input type=color>, which has
-           to fill it without being seen. */
-        .ls-swatch input[type="color"] {
-            opacity: 0;
-            width: 100%;
-            height: 100%;
-            cursor: pointer;
-            border: 0;
-            padding: 0;
-            margin: 0;
-        }
 
         .ctx-clear-btn {
             width: 100%;
@@ -5569,11 +5558,7 @@
                     <div class="ap-group-title">Colour</div>
                     <!-- Filled from SONG_COLOR_PALETTE by _buildPalettes(), so
                          this is the same set of colours the song rows offer. -->
-                    <div class="ap-swatches js-lyr-swatches" data-palette="applyLyricsColor">
-                        <span class="ls-swatch ls-swatch-custom" title="Color personalizado" style="background:linear-gradient(135deg,#f00,#0f0,#00f)">
-                            <input type="color" class="js-lyr-color-custom" oninput="applyLyricsColor(this.value)">
-                        </span>
-                    </div>
+                    <div class="ap-swatches js-lyr-swatches" data-palette="applyLyricsColor"></div>
                 </div>
 
                 <div class="ap-group">
@@ -5765,13 +5750,7 @@
             </div>
             <div class="ls-row">
                 <div class="ls-label"><span>Color</span></div>
-                <div class="ls-swatches js-lyr-swatches" id="ls-swatches" data-palette="applyLyricsColor">
-                    <span class="ls-swatch ls-swatch-custom" id="ls-swatch-custom" title="Color personalizado"
-                          style="background:linear-gradient(135deg,#f00,#0f0,#00f)">
-                        <input type="color" class="js-lyr-color-custom" id="ls-color-custom"
-                               oninput="applyLyricsColor(this.value)">
-                    </span>
-                </div>
+                <div class="ls-swatches js-lyr-swatches" id="ls-swatches" data-palette="applyLyricsColor"></div>
             </div>
             <div class="ls-row">
                 <label class="ls-toggle">
@@ -6463,6 +6442,10 @@
                          ";GET/EXTSTATE/ReaSet/lyricsTrack;GET/EXTSTATE/ReaSet/chordsTrack" +
                          ";GET/EXTSTATE/ReaSet/lyricsTrackMatches;GET/EXTSTATE/ReaSet/chordsTrackMatches" +
                          ";GET/EXTSTATE/ReaSet/tick;GET/EXTSTATE/ReaSet/error" +
+                         // Read back so the colour watchdog can tell the two
+                         // failures apart: a key still sitting there means
+                         // nothing consumed it.
+                         ";GET/EXTSTATE/ReaSet/regionColor" +
                          ";GET/EXTSTATE/ReaSet/setlistRev;GET/EXTSTATE/ReaSet/setlistFileRev" +
                          ";GET/EXTSTATE/ReaSet/directorPinHash" +
                          ";GET/EXTSTATE/ReaSet/directorHeartbeatId;GET/EXTSTATE/ReaSet/directorHeartbeatTs" +
@@ -8458,15 +8441,15 @@
         // from SONG_COLOR_PALETTE. A palette cannot drift from the others
         // because there is only one to drift from.
         //
-        // A custom-colour swatch is markup rather than a palette entry — it
-        // holds a native <input type=color> — so it is detached, the palette is
-        // written, and it goes back at the end.
+        // Fixed colours only. There used to be a rainbow swatch holding a
+        // native <input type=color> beside them — an OS colour picker in the
+        // middle of the app's own palette, offering a nineteenth colour that
+        // belonged to no set and looked like nothing else here.
         function _buildPalettes() {
             var hosts = document.querySelectorAll('[data-palette]');
             for (var h = 0; h < hosts.length; h++) {
                 var host = hosts[h];
                 var fn = host.getAttribute('data-palette');
-                var custom = host.querySelector('.ls-swatch-custom');
                 var html = '';
                 for (var i = 0; i < SONG_COLOR_PALETTE.length; i++) {
                     var c = SONG_COLOR_PALETTE[i];
@@ -8475,7 +8458,6 @@
                             '" onclick="' + fn + '(\'' + c + '\')"></span>';
                 }
                 host.innerHTML = html;
-                if (custom) host.appendChild(custom);
             }
         }
 
@@ -8705,7 +8687,15 @@
             // One write for a whole block: Reaset.lua splits on ';' and indexes
             // the regions once, rather than re-enumerating per song on the
             // defer thread of a machine that is also playing audio.
-            wwr_req('SET/EXTSTATE/ReaSet/regionColor/' + parts.join(';'), 'region-color');
+            // COMMA, NOT SEMICOLON. `;` is REAPER's own command separator in
+            // the web interface — this file joins multiple commands with it a
+            // few hundred lines up. Sending "…/regionColor/74:0A84FF;127:0A84FF"
+            // therefore did not write one value containing five pairs: REAPER
+            // read it as five COMMANDS, of which only the first was real and
+            // the other four were nonsense it dropped. Colouring a whole block
+            // could never have worked, and the single write this was designed
+            // around is exactly what broke it.
+            wwr_req('SET/EXTSTATE/ReaSet/regionColor/' + parts.join(','), 'region-color');
             RSDiag.log('REGION_COLOR', { n: parts.length });
         }
 
@@ -8767,6 +8757,10 @@
         // an error. The screen would keep showing the staged colour and look
         // like it worked.
         var _colorApplyWatch = null;
+        // Last value REAPER reports for the colour key. color_tick() clears it
+        // the moment it runs, so a NON-EMPTY value seconds after the write is
+        // proof that nothing on the REAPER side is listening.
+        var xr_region_color_key = null;
         function _watchStagedColors() {
             if (_colorApplyWatch) clearTimeout(_colorApplyWatch);
             _colorApplyWatch = setTimeout(function () {
@@ -8774,9 +8768,17 @@
                 var left = 0;
                 for (var k in g_stagedColors) { if (g_stagedColors.hasOwnProperty(k)) left++; }
                 if (!left) return;
-                RSDiag.log('COLOR_NOT_CONFIRMED', { n: left });
-                showAppAlert(t('REAPER did not confirm the colour. Check that Reaset.lua is running on the REAPER machine, and that the script was restarted after the file was replaced.'),
-                             t('Colour'));
+                // Two different failures, and telling the user "it did not
+                // work" for both is what makes this a support call. The key is
+                // consumed by color_tick() the instant it runs, so whether it
+                // is still there says which one happened.
+                var stale = !!xr_region_color_key;
+                RSDiag.log('COLOR_NOT_CONFIRMED', { n: left, keyStillThere: stale ? 1 : 0 });
+                showAppAlert(
+                    stale
+                        ? t('Nothing on the REAPER side read the colour. Reaset.lua is not running, or it was replaced without restarting the script — REAPER keeps running the old copy that is already in memory.')
+                        : t('Reaset.lua read the colour but the region did not change. Send the diagnostics: this one is a bug, not a setup problem.'),
+                    t('Colour'));
             }, 6000);
         }
 
@@ -9877,6 +9879,11 @@
                         if (tok[1] === "ReaSet" && tok[2] === "lyricsTrack") {
                             xr_lyrics_track = tok.slice(3).join('\t');
                             refreshBridgePolling();
+                        }
+                        // color_tick() clears this the instant it runs, so a
+                        // value still here is proof nothing consumed it.
+                        if (tok[1] === "ReaSet" && tok[2] === "regionColor") {
+                            xr_region_color_key = tok.slice(3).join('\t');
                         }
                         if (tok[1] === "ReaSet" && tok[2] === "chordsTrack") {
                             xr_chords_track = tok.slice(3).join('\t');
@@ -13714,7 +13721,6 @@
                 if (sw[i].getAttribute("data-color") === c) sw[i].classList.add("active");
                 else sw[i].classList.remove("active");
             }
-            if (/^#[0-9a-f]{6}$/i.test(c)) _lyrSyncVal('js-lyr-color-custom', c);
         }
 
         function applyLyricsContext(on) {

@@ -894,9 +894,13 @@ local function color_tick()
     if cmd == "" then return end
     reaper.SetExtState(SEC, "regionColor", "", false)
 
-    -- Index the regions ONCE. A whole block arrives as one semicolon-separated
+    -- Index the regions ONCE. A whole block arrives as one comma-separated
     -- write, and re-enumerating per entry is O(regions x entries) on the defer
     -- thread of a machine that is also playing audio.
+    --
+    -- COMMA, not semicolon: `;` separates COMMANDS in REAPER's web interface,
+    -- so a semicolon-joined value was split into five commands before it ever
+    -- reached this key.
     local byidx, i = {}, 0
     while true do
         local ok, isrgn, pos, rgnend, name, midx = reaper.EnumProjectMarkers(i)
@@ -906,7 +910,7 @@ local function color_tick()
     end
 
     local touched = false
-    for one in cmd:gmatch("[^;]+") do
+    for one in cmd:gmatch("[^,]+") do
         local sidx, hex = one:match("^(%d+):(%w+)$")
         local reg = sidx and byidx[tonumber(sidx)]
         if reg then

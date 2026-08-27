@@ -137,7 +137,7 @@ def test_colour_tick_paints_the_region_and_consumes_its_key() -> None:
     lua.execute(
         """
         SEC = 'ReaSet'
-        ext = { regionColor = '1:FF8800;2:x' }
+        ext = { regionColor = '1:FF8800,2:x' }   -- comma: ';' is REAPER's command separator
         writes = {}
         arranged = 0
         regions = {

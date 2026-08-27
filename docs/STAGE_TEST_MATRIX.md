@@ -421,7 +421,10 @@ all, check that before anything else.
 | **Z02** | Now press **APPLY**, watching REAPER. | *Now* the region takes the colour. | | |
 | **Z03** | Look at a phone that is watching the same setlist. | Within about a second, the same colour. Nobody had to import anything. | | |
 | **Z2b** | Pick a colour and press **DISCARD** instead. | The row goes back, and REAPER was never touched. | | |
-| **Z2c** | Pick a colour, press APPLY, and wait about six seconds without REAPER's script running. | It tells you REAPER did not confirm, and names the likely cause. Silence was the old failure: the write is swallowed with no error. | | |
+| **Z2c** | Pick a colour, press APPLY, and wait about six seconds with `Reaset.lua` **not** running. | It says *nothing on the REAPER side read the colour* — the script is not running, or was replaced without restarting REAPER, which keeps the old copy in memory. | | |
+| **Z2d** | Same, but with the script running and a bug stopping the paint. | A different message, asking for the diagnostics. The key is consumed the instant `color_tick()` runs, so whether it is still there separates a setup problem from a bug. | | |
+| **Z2e** | Colour a **block** of five songs and watch REAPER. | All five change. Only the first one changing is the semicolon bug: `;` is REAPER's command separator, so a `;`-joined value was read as five commands and four were dropped. | | |
+| **Z2f** | Look at any palette for a rainbow swatch. | There is none. Fixed colours only — the native OS colour picker is gone. | | |
 | **Z03** | Save the REAPER project, close it, reopen. | The colour is still there. It belongs to the project now, not to a browser. | | |
 | **Z04** | Tick **Apply to the whole block**, then pick a colour. | Every song in that block takes it — including the ones above the one you opened. | | |
 | **Z4b** | Read the line under that switch **before** touching it. | It says how many songs the block holds, or that this song is a block on its own. A block is a run that plays **without stopping**: with Auto-Stop on and every song left on Auto, each song is its own block, and the switch correctly colours one. | | |
