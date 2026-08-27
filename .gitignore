@@ -2,3 +2,13 @@
 # Python bytecode from running the test suite locally
 __pycache__/
 *.pyc
+
+# Screenshots. The browser harnesses under Tools/ are driven by throwaway
+# scripts that write PNGs with a RELATIVE path, and they run with the working
+# directory at the repo root — so five of them were swept into commits by a
+# `git add -A`. Real app artwork lives in assets/, which this does not touch.
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
