@@ -1825,3 +1825,156 @@ Seven mutations run, seven caught.
 
 Quit REAPER with the browser open and with it closed, in both orders, and
 confirm the clock is at `0:00` on **both** devices when everything comes back.
+
+---
+
+## 24. The transport bar, and the iPad that stopped updating
+
+Reported off one photograph of a phone: *"acho q ficou ruim os botoes ali.. ta
+dando foco no stop ao inves do play... o loop realmente não da pra saber q é
+loop"*, and separately *"eu tenho um iPad mini q não atualiza mais mas tenho o
+chrome... queria usar elementos ai q de pra eu executar nele essa tela de boa
+sem quebrar nada"*.
+
+Two problems that look unrelated and are not: both are about the transport bar
+being designed for the machine it was written on rather than the one it runs
+on.
+
+### 24.1 Area is hierarchy
+
+PLAY was 17% of the bar. A full-red Stop slide was 48%.
+
+That is the wrong way round in the only way that matters on a stage. The
+loudest colour and the largest target belonged to the one action nobody wants
+to trigger by accident, and the control the whole bar exists for was the
+smallest thing on it. Nobody reads a transport bar mid-song; they glance at it
+in peripheral vision from a few metres away, and at that distance size and
+colour are the entire vocabulary. Everything else — labels, icons, borders — is
+for the rehearsal room.
+
+**Stop moved to its own row, above Play.** Two things follow from that, and the
+second is the one that makes it right rather than merely tidier:
+
+- The slide gets the full width, so it has **314px of travel on a phone where
+  it had 23**. A 23px track is a tap with extra steps, which is the one thing
+  Slide to Stop exists to stop being.
+- On a device propped on a stand the bottom edge is the shortest reach, and
+  what gets reached for blind — mid-song, between fills — is PLAY. Putting Stop
+  on the near row would have made the show-ending control the easiest one to
+  hit. It is on the far row, where a mis-reach lands on nothing.
+
+The track is dark rather than red; the red lives on the thumb, which is the
+part that has to be found. Tap mode collapses back to one row, because a plain
+button needs no travel.
+
+**One button, re-parented by mode.** Two Stop buttons in the markup would need
+two of everything that keeps a Stop control honest — the label, the class, the
+gesture, the diagnostics — and §15 records what happened the last time this bar
+carried three copies of it: two never updated their label at all, so on a fresh
+device the button said STOP, wanted a three-second hold, and did nothing for a
+tap. Silently.
+
+**Loop was drawn with U+21BB, which is the reload mark.** That is why nobody
+could name it, and it sat beside a reconnect button where "refresh" is a
+plausible reading — the same two-icons-one-symbol failure §15 fixed between
+Loop and RECONNECT, resurfacing because the glyph that stayed was itself wrong.
+It is now the media repeat mark, two runs with arrowheads at opposite ends, and
+it carries the word LOOP. A symbol nobody can name is not an icon.
+
+### 24.2 A phone on its side is not a tablet
+
+Found by diffing computed geometry against the previous build, which was
+supposed to be a regression check on the compatibility sweep and instead
+surfaced a defect of my own.
+
+The bar took 65px from the setlist on a phone and 104px on a tablet. In
+landscape it was far worse: a phone on its side is **844px wide and 390px
+tall**, so a width-only media query handed it the tablet's generous bar — 181px,
+**46% of the screen**, leaving 108px of setlist. About one song.
+
+Width alone was the wrong axis for a tier that spends height. The tablet tier
+is gated on both now, and a short-viewport tier compresses the bar to what a
+finger needs: 46% of the screen down to 31%, setlist from 108px to 169px.
+
+Compressing it then took the Stop track to 32px, which is thin enough that a
+thumb landing slightly high misses the one control that has to work. 44pt is
+the floor, and the press that begins this drag is a tap like any other.
+
+### 24.3 The engine, not the browser
+
+Chrome on iOS is the system WebKit with a different icon. The engine on a
+tablet that has stopped receiving updates is whatever the last iOS for it
+shipped, and installing another browser changes nothing — which also means a
+user-agent string cannot answer any question worth asking here, since the
+failing device reports Chrome.
+
+**Nothing that breaks on that engine throws.** It drops the declaration or the
+event it cannot handle and renders something plausible-but-wrong. That is why
+none of it would surface in review, and why none of it would surface in a
+browser that is not broken:
+
+| Feature | Landed in | What the tablet renders instead |
+|---|---|---|
+| Pointer Events | Safari 13 | Stop is not ugly, it is **inert** |
+| `touch-action` | Safari 13 | the page scrolls out from under the drag |
+| flex `gap` | 14.1 | 46 containers with their children touching |
+| `inset` | 14.1 | an overlay collapsed to the top-left corner |
+| `clamp()` | 13.1 | stage-sized type rendering as body text |
+| `aspect-ratio` | 15 | a swatch grid with no height |
+| `-webkit-sticky` | pre-13 | the topbar scrolls away with the list |
+
+The gesture handlers now take `(button, x)` rather than an event, so one body
+serves pointer, touch and mouse, and every engine difference is confined to the
+binding. Touch and mouse bind **exclusively** when pointer is absent — a device
+reporting both would otherwise run the drag twice. The touch path calls
+`preventDefault` itself, since `touch-action` arrived in the same version, and
+listens on the document, since `setPointerCapture` did too and this gesture
+normally ends with the finger off the element.
+
+The flex-gap fallback is generated, one rule per container, gated on a class
+set only by a **measured** probe: two zero-width children in a 1px-gap flex row
+are 1px wide where gap works and 0 where it does not.
+
+Its first classifier asked "is this rule a flex container?" by looking for
+`display: flex` in the same rule, and five walked through it — each was
+`display: none` in its own rule and became flex from a state rule or a shared
+class elsewhere. The stylesheet is free to say `display` anywhere, so a check
+that has to *recognise* flex cannot be trusted to. The burden is inverted
+instead: a gap declaration must announce itself as grid in its own rule, or
+carry a fallback. Decidable from one rule, and it fails safe.
+
+### 24.4 Driving the engine instead of reasoning about it
+
+The no-Pointer-Events path had never run anywhere. It was written from the
+compatibility tables, reviewed, and shipped — and a static test can only check
+that it *exists*, which is not the same as it working. On the one control whose
+failure mode is "the show does not stop", that was the largest remaining
+unknown in the branch.
+
+Chromium cannot be made old, but it can be made to lack the thing the code
+branches on. Deleting `window.PointerEvent` before the page's script runs is
+exactly what makes `_HAS_POINTER` false, so the fallback binds and can be
+driven with real touch events. `Tools/legacy_engine_test.js` does that, and
+forces every gap to zero for the layout half.
+
+Four gesture cases, because each is a different way for this control to be
+wrong: a completed slide stops once, an abandoned one does not stop at all, a
+tap on a slider does nothing, and a tap in tap mode stops **once** — not twice
+when the synthetic mouse event a touchscreen sends lands 300ms after
+`touchend`.
+
+**Its spacing section shipped worthless and mutation testing is what caught
+it.** It asserted only that the two engines agree, and deleting every margin
+from the transport row left it green: that row is spaced by margins in both
+modes, so it agrees with itself at zero. A check that cannot distinguish
+"correct" from "collapsed" is a green light that means nothing, which is worse
+than no check at all. It now asserts the controls are separated *at all* before
+asserting the two agree about by how much.
+
+### 24.5 What is still unproven
+
+Real iOS 12 touch quirks — scroll momentum, the 350ms click delay, the
+proprietary gesture events — reproduce on that iPad and nowhere else.
+`V02` in the matrix (drag the Stop thumb on the tablet) is worth more than
+every other case in its section combined: if the gesture is inert there, the
+device cannot go on stage, and nothing else in the section matters.
