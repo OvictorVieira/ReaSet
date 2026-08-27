@@ -11024,98 +11024,90 @@
                     // If native loop is active for THIS region, let the Lua script handle the jump —
                     // do NOT cancel it here. _reaperNativeLoopOff only runs when moving away from
                     // the current region (outgoing jump), so native loop keeps working correctly.
-                    if (activeRegion.loop && window._nativeLoopSubId === activeRegion.id) {
-                        // Native loop: Lua (ReaSet_NativeLoop.lua) handles Repeat + region jump.
-                        // Nothing to do from JS — just return and let REAPER loop natively.
-                        return;
-                    }
-                    // Cancel any active native loop before any outgoing jump.
-                    // SET/REPEAT/0 is included in _reaperNativeLoopOff, so it lands
-                    // in the same HTTP batch as the SET/POS below — preventing REAPER's
-                    // Repeat from firing a conflicting jump before Lua cleanup runs.
-                    _reaperNativeLoopOff();
-                    if (activeRegion.loop) { wwr_req("SET/POS/" + activeRegion.start, "song-loop"); return; }
+                    // The decision lives in resolveBoundaryAction(); everything
+                    // below is the side effects it asks for. Splitting them is
+                    // what makes the seven branches testable without a REAPER.
+                    var _bnd = resolveBoundaryAction({
+                        region:           activeRegion,
+                        nativeLoopSubId:  window._nativeLoopSubId,
+                        queued:           queuedRegion,
+                        endState:         effectiveSongEnd(activeRegion),
+                        stopAfter:        !!getOverride(activeRegion.id).stopAfter,
+                        delayAfter:       getOverride(activeRegion.id).delayAfter || 0,
+                        next:             findNextValidSong(activeIdx),
+                        autoStop:         !!document.getElementById('autoStopToggle').checked,
+                        playRegionLocked: !!(window._playRegionLocked && Date.now() < window._playRegionLocked)
+                    });
+                    RSDiag.log('BOUNDARY', {
+                        song:   activeRegion.id,
+                        uid:    _uidOf(activeRegion),
+                        action: _bnd.action,
+                        target: _bnd.target ? _bnd.target.id : (_bnd.cue ? _bnd.cue.id : '-'),
+                        why:    _bnd.why || '-'
+                    });
 
-                    // PRECEDENCE AT A BOUNDARY (#9).
-                    //
-                    // The queued song used to be checked first and therefore
-                    // beat everything, including a song explicitly marked
-                    // "always stop here". That inverts the block workflow this
-                    // tool exists for: inside a block songs run on, and the last
-                    // song of a block stops so a human decides when the next one
-                    // begins. Queueing during a block must not silently turn its
-                    // final stop into a continuation.
-                    //
-                    // So: the end-state decides WHETHER playback continues, and
-                    // only then does the queue decide WHERE it continues to.
-                    var _endState = effectiveSongEnd(activeRegion);
-                    if (queuedRegion && _endState === 'continue') {
-                        noteActiveInstance(_uidOf(queuedRegion), 'queued-at-region-end');
-                        wwr_req("SET/POS/" + queuedRegion.start, "queued-at-region-end");
+                    // Native loop: Lua (ReaSet_NativeLoop.lua) owns Repeat and the
+                    // region jump. Do NOT cancel it here — _reaperNativeLoopOff
+                    // only runs when moving AWAY from the current region.
+                    if (_bnd.action === 'native-loop') return;
+
+                    // Cancel any active native loop before any outgoing jump.
+                    // SET/REPEAT/0 is inside _reaperNativeLoopOff, so it lands in
+                    // the same HTTP batch as the SET/POS below — preventing REAPER's
+                    // Repeat from firing a conflicting jump before Lua cleans up.
+                    _reaperNativeLoopOff();
+
+                    if (_bnd.action === 'song-loop') {
+                        wwr_req("SET/POS/" + _bnd.target.start, "song-loop"); return;
+                    }
+                    if (_bnd.action === 'queued') {
+                        noteActiveInstance(_uidOf(_bnd.target), 'queued-at-region-end');
+                        wwr_req("SET/POS/" + _bnd.target.start, "queued-at-region-end");
                         clearQueuedRegion('consumed-at-region-end');
                         return;
                     }
-                    // Per-song overrides: stopAfter / delayAfter
-                    var _rov = getOverride(activeRegion.id);
-                    if (_rov.stopAfter) {
+                    if (_bnd.action === 'stop-after') {
                         window._endOfRegionLocked = Date.now() + 400;
-                        // A queued song outranks setlist order for WHERE to cue,
-                        // even though it did not outrank the stop itself.
-                        var _nrs = promoteQueuedToSelected('block-stop-boundary') ||
-                                   findNextValidSong(activeIdx);
+                        // The stop stands; the queue only decides what the NEXT
+                        // Play will start.
+                        if (_bnd.fromQueue) promoteQueuedToSelected('block-stop-boundary');
                         wwr_req(1016, "song-stop-after");
-                        // Same reason as the auto-stop branch: the reposition waits
-                        // for the transport to confirm it stopped.
-                        if (_nrs) window._pendingCuePos = _nrs.start;
+                        // The reposition waits for TRANSPORT to confirm it stopped
+                        // — Main_OnCommand stops on the next audio block, so a
+                        // SET/POS in that gap seeks a transport still rolling.
+                        if (_bnd.cue) window._pendingCuePos = _bnd.cue.start;
                         return;
                     }
-                    if (_rov.delayAfter > 0) {
-                        // 'wait' delays continuation, it does not block it, so an
-                        // explicit queued song is still the target to resume into.
-                        var _nrd = (queuedRegion || findNextValidSong(activeIdx));
-                        if (_nrd === queuedRegion) clearQueuedRegion('consumed-at-wait-boundary');
-                        if (_nrd) {
-                            noteActiveInstance(_uidOf(_nrd), 'delay-after-resume');
-                            window._endOfRegionLocked = Date.now() + 400; // lock before async — same guard as autoStop/shouldPlayNext
-                            wwr_req(1016, "song-delay-after");
-                            (function(nxt, delaySec) {
-                                scheduleAutoTransport(function () {
-                                    wwr_req("SET/POS/" + nxt.start, "delay-after-resume");
-                                    scheduleAutoTransport(function () {
-                                        wwr_req(1007, "delay-after-resume");
-                                    }, 80, 'delay-after-play');
-                                }, delaySec * 1000, 'delay-after-seek');
-                            })(_nrd, _rov.delayAfter);
-                            return;
-                        }
-                    }
-                    var shouldPlayNext = activeRegion.chain || !document.getElementById('autoStopToggle').checked;
-                    if (shouldPlayNext) {
-                        var nextR = findNextValidSong(activeIdx);
-                        if (nextR) {
-                            // findNextValidSong took activeIdx, which is now the
-                            // ACTIVE INSTANCE's index — so a chain out of the
-                            // second copy of a song follows the second copy.
-                            noteActiveInstance(_uidOf(nextR), 'auto-chain');
-                            // Lock for 400ms: prevents the dedup reset (timeRem > 0.5 in region B)
-                            // from allowing a second end-of-A trigger when A.end === B.start.
-                            window._endOfRegionLocked = Date.now() + 400;
-                            wwr_req("SET/POS/" + nextR.start, "auto-chain");
-                            return;
-                        }
-                    }
-                    if (document.getElementById('autoStopToggle').checked && !activeRegion.chain) {
-                        // If the user just explicitly played a new song (playRegion was called
-                        // within the last 500ms), skip the STOP entirely. The stale transport
-                        // response that triggered this tick was from BEFORE the user's click;
-                        // sending STOP now would race with the user's already-dispatched PLAY
-                        // and kill the new song's playback.
-                        if (window._playRegionLocked && Date.now() < window._playRegionLocked) { return; }
+                    if (_bnd.action === 'wait') {
+                        if (_bnd.fromQueue) clearQueuedRegion('consumed-at-wait-boundary');
+                        noteActiveInstance(_uidOf(_bnd.target), 'delay-after-resume');
                         window._endOfRegionLocked = Date.now() + 400;
-                        // Same rule as the stopAfter branch: the stop stands,
-                        // and the queued song becomes what the next Play starts.
-                        var nextR2 = promoteQueuedToSelected('auto-stop-boundary') ||
-                                     findNextValidSong(activeIdx);
+                        wwr_req(1016, "song-delay-after");
+                        (function (nxt, delaySec) {
+                            scheduleAutoTransport(function () {
+                                wwr_req("SET/POS/" + nxt.start, "delay-after-resume");
+                                scheduleAutoTransport(function () {
+                                    wwr_req(1007, "delay-after-resume");
+                                }, 80, 'delay-after-play');
+                            }, delaySec * 1000, 'delay-after-seek');
+                        })(_bnd.target, _bnd.delaySec);
+                        return;
+                    }
+                    if (_bnd.action === 'chain') {
+                        // findNextValidSong took activeIdx, which is the ACTIVE
+                        // INSTANCE's index — so a chain out of the second copy of
+                        // a song follows the second copy.
+                        noteActiveInstance(_uidOf(_bnd.target), 'auto-chain');
+                        // Lock for 400ms: stops the dedup reset (timeRem > 0.5 in
+                        // region B) from allowing a second end-of-A trigger when
+                        // A.end === B.start.
+                        window._endOfRegionLocked = Date.now() + 400;
+                        wwr_req("SET/POS/" + _bnd.target.start, "auto-chain");
+                        return;
+                    }
+                    if (_bnd.action === 'auto-stop') {
+                        window._endOfRegionLocked = Date.now() + 400;
+                        if (_bnd.fromQueue) promoteQueuedToSelected('auto-stop-boundary');
                         // ARM, DON'T DETECT.
                         //
                         // Detecting the end here and sending a STOP can never be
@@ -11124,22 +11116,16 @@
                         // spot — it stops it on the next audio block. A SET/POS
                         // landing in that gap runs while the transport is STILL
                         // ROLLING, so it seeks PLAYBACK into the next song, which is
-                        // audible until the stop settles. Ordering the commands
-                        // inside one request does not help: the problem is not
-                        // arrival order, it is that the first one's effect is late.
+                        // audible until the stop settles.
                         //
                         // Reaset.lua now tells REAPER where to stop in advance, so
-                        // it stops in its own audio engine at the exact sample. While
-                        // that is armed we send nothing here; the reposition waits
-                        // for TRANSPORT to confirm playState 0.
-                        if (window._autoStopArmed) {
-                            if (nextR2) window._pendingCuePos = nextR2.start;
-                            return;
-                        }
-                        wwr_req(1016, "auto-stop-fallback");
-                        if (nextR2) window._pendingCuePos = nextR2.start;
+                        // it stops in its own audio engine at the exact sample.
+                        // While that is armed we send nothing here.
+                        if (!window._autoStopArmed) wwr_req(1016, "auto-stop-fallback");
+                        if (_bnd.cue) window._pendingCuePos = _bnd.cue.start;
                         return;
                     }
+                    return;
                 }
 
                 // Canvas mode sync
@@ -11509,6 +11495,65 @@
             // longer exists. Drop it, or a stale intent steers the NEXT song.
             if (_activeUidHint && first !== -1) noteActiveInstance(null, 'transport-left-hinted-row');
             return first;
+        }
+
+        // ── What happens when a song ends ───────────────────────────────────
+        // The single most important decision in this file, and until now the
+        // only one with no test at all: it was seven branches inlined in the
+        // middle of updatePlaybackUI, tangled with DOM reads and wwr_req calls,
+        // so there was no way to ask it a question without a running REAPER.
+        //
+        // Lifted out UNCHANGED — same conditions, same order, same fall-through
+        // — and made pure: it takes a context and returns what to do. The
+        // caller still performs every side effect, so nothing about the timing,
+        // the locks or the command ordering moved.
+        //
+        // The order IS the behaviour, and #9 is the reason for it:
+        //
+        //   1. native loop      Lua owns the jump; do nothing
+        //   2. song loop        back to this song's start
+        //   3. queued song      ONLY if this song's end-state says 'continue'
+        //   4. stop after       stop; the queue (or the next song) becomes the cue
+        //   5. wait N seconds   stop, pause, then resume into queue-or-next
+        //   6. chain / no auto  roll straight into the next song
+        //   7. auto-stop        stop; the queue (or the next song) becomes the cue
+        //
+        // Rule 3 is the one worth reading twice. The queue used to be checked
+        // FIRST and therefore beat everything, including a song explicitly
+        // marked "always stop here" — which inverts the block workflow this
+        // tool exists for. The end-state decides WHETHER playback continues,
+        // and only then does the queue decide WHERE it continues to.
+        function resolveBoundaryAction(ctx) {
+            var region = ctx.region;
+            if (region.loop && ctx.nativeLoopSubId === region.id) return { action: 'native-loop' };
+            if (region.loop) return { action: 'song-loop', target: region };
+
+            if (ctx.queued && ctx.endState === 'continue') {
+                return { action: 'queued', target: ctx.queued, fromQueue: true };
+            }
+            if (ctx.stopAfter) {
+                return { action: 'stop-after', cue: ctx.queued || ctx.next, fromQueue: !!ctx.queued };
+            }
+            if (ctx.delayAfter > 0) {
+                var waitTarget = ctx.queued || ctx.next;
+                // No target at all: falls THROUGH to the branches below, exactly
+                // as the inlined version did.
+                if (waitTarget) {
+                    return { action: 'wait', target: waitTarget, delaySec: ctx.delayAfter,
+                             fromQueue: !!ctx.queued };
+                }
+            }
+            if ((region.chain || !ctx.autoStop) && ctx.next) {
+                return { action: 'chain', target: ctx.next };
+            }
+            if (ctx.autoStop && !region.chain) {
+                // A Play issued in the last 500ms means the reply that triggered
+                // this tick predates the user's command; stopping now would race
+                // it and kill the song they just started.
+                if (ctx.playRegionLocked) return { action: 'none', why: 'play-region-locked' };
+                return { action: 'auto-stop', cue: ctx.queued || ctx.next, fromQueue: !!ctx.queued };
+            }
+            return { action: 'none', why: 'nothing-to-do' };
         }
 
         function _findInstanceByUid(uid) {

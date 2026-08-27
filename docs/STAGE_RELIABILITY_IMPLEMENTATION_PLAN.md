@@ -1475,3 +1475,83 @@ appears where the section DOM ids are built.
 
 **L01–L18** in `docs/STAGE_TEST_MATRIX.md`. L01, L02 and L03 are the three
 regressions above and are cheap to check first.
+
+---
+
+## 20. What happens when a song ends
+
+The single most important decision in this file, and until now the only one
+with **no automated coverage at all**: seven branches inlined in the middle of
+`updatePlaybackUI`, tangled with DOM reads and `wwr_req` calls, so there was no
+way to ask it a question without a running REAPER.
+
+`resolveBoundaryAction(ctx)` is that decision, lifted out **unchanged** — same
+conditions, same order, same fall-through — and made pure. It takes a context
+and returns what to do; the caller still performs every side effect, so nothing
+about the timing, the locks or the command ordering moved. This was an
+extraction, not a change.
+
+### The order is the behaviour
+
+| | Condition | Action |
+|---|---|---|
+| 1 | native loop armed for this region | nothing — Lua owns the jump |
+| 2 | `region.loop` | seek back to this song's start |
+| 3 | queued song **and** end-state is `continue` | jump to the queued song |
+| 4 | per-song **stop** | stop; queue-or-next becomes the pending cue |
+| 5 | per-song **wait N** | stop, pause N seconds, resume into queue-or-next |
+| 6 | `chain`, or Auto-Stop off | seek to the next song, still rolling |
+| 7 | Auto-Stop on and not chained | stop; queue-or-next becomes the pending cue |
+
+**Rule 3 is the one worth reading twice.** The queue used to be checked *first*
+and therefore beat everything, including a song explicitly marked "always stop
+here" — which inverts the block workflow this tool exists for. Inside a block,
+songs run on; the last song of a block stops so a human decides when the next
+one begins. Queueing during a block must not silently turn its final stop into
+a continuation.
+
+So the end-state decides **whether** playback continues, and only then does the
+queue decide **where** it continues to. Tapping a song during a block that ends
+in a stop does not make the show run on — it stops, and the song you tapped is
+what the next Play starts. That is deliberate, and it is the behaviour most
+likely to look like a bug until you have run a block on stage.
+
+Rule 5's fall-through is also load-bearing: a wait with **nowhere to go** drops
+through to rules 6 and 7 rather than swallowing the boundary. The inlined
+version did this by accident of structure; the extracted one does it on purpose
+and a test covers it.
+
+### Diagnostics
+
+Every boundary now logs one `BOUNDARY` line under `?diag=transport`, naming the
+action and its target. When a transition surprises somebody, that line says
+which of the seven branches ran — which is the question a screen recording
+cannot answer.
+
+### Locked by tests
+
+`test_what_happens_when_a_song_ends` **executes** the real function across all
+seven branches, fifteen cases, including all three the show depends on: plays
+straight on, stops at the end, and a mid-song tap replacing the natural next.
+
+`test_the_boundary_decision_has_no_side_effects` keeps it pure. A `wwr_req`
+sneaking back in would make the decision untestable again and — worse — would
+look tested.
+
+Eight mutations run, eight caught, including a direct reintroduction of the
+pre-#9 bug where the queue beat a stop.
+
+### A fixture that could not exist
+
+The first draft of the test asked what happens to a song set to **wait** and to
+**continue** at once. That state cannot occur: `getSongEnd()` derives the
+end-state *from* `stopAfter` / `delayAfter` / `chain`, and `effectiveSongEnd()`
+then resolves `'auto'` against the global toggle. The harness now derives it the
+same way, so an impossible fixture is impossible to write — the context's fields
+are not independent, and a test that pretends they are teaches nothing.
+
+### Still requires a real-device test
+
+**B01–B11** in `docs/STAGE_TEST_MATRIX.md`. These are about what is **audible**
+— a gapless chain sounds different from a chain with a 40ms hole in it, and no
+static test can hear that.

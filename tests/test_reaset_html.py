@@ -1859,3 +1859,137 @@ def test_section_tap_resolution(script_body: str) -> None:
         "sourceClean": True,
         "songUid": "A_3",
     }, got
+
+
+# ── What happens when a song ends ────────────────────────────────────────────
+# The most important decision in the app, and until this test the only one with
+# no automated coverage at all: seven branches inlined in updatePlaybackUI,
+# tangled with DOM reads and wwr_req calls, so it could not be asked a question
+# without a running REAPER.
+
+@requires_node
+def test_what_happens_when_a_song_ends(script_body: str) -> None:
+    """Runs the real resolveBoundaryAction() across all seven branches.
+
+    The three cases the show actually depends on:
+      * set to continue  → the next song plays, uninterrupted
+      * set to stop      → it stops, and the next Play starts the right song
+      * queued mid-song  → the queue replaces the natural next
+    """
+    fn = extract_function(script_body, "resolveBoundaryAction")
+
+    harness = textwrap.dedent(
+        """
+        var A = { id: 'A', start: 0,  end: 10 };
+        var B = { id: 'B', start: 10, end: 20 };   // the natural next
+        var Q = { id: 'Q', start: 90, end: 99 };   // a queued song
+
+        __FN__
+
+        // The context fields are NOT independent: getSongEnd() derives the
+        // end-state from stopAfter / delayAfter / chain, and effectiveSongEnd()
+        // then resolves 'auto' against the global toggle. Deriving it here the
+        // same way makes an impossible fixture impossible to write — the first
+        // draft of this test asked what happens to a song that is set to WAIT
+        // and to CONTINUE at once, which cannot occur.
+        function endStateOf(region, stopAfter, delayAfter, autoStop) {
+            if (stopAfter)      return 'stop';
+            if (delayAfter > 0) return 'wait';
+            if (region.chain)   return 'continue';
+            return autoStop ? 'stop' : 'continue';   // 'auto', resolved
+        }
+        function ctx(over) {
+            var base = {
+                region: A, nativeLoopSubId: null, queued: null,
+                stopAfter: false, delayAfter: 0, next: B, autoStop: false,
+                playRegionLocked: false
+            };
+            for (var k in over) if (over.hasOwnProperty(k)) base[k] = over[k];
+            base.endState = endStateOf(base.region, base.stopAfter, base.delayAfter, base.autoStop);
+            return base;
+        }
+        function run(label, over) {
+            var r = resolveBoundaryAction(ctx(over));
+            return [label, r.action, (r.target || r.cue || {}).id || null, !!r.fromQueue];
+        }
+
+        console.log(JSON.stringify([
+          // ── 1. PLAY STRAIGHT ON ───────────────────────────────────────────
+          run('chain-flag',      { region: { id:'A', start:0, end:10, chain:true }, autoStop:true }),
+          run('auto-stop-off',   { autoStop: false }),
+
+          // ── 2. STOP AT THE END ────────────────────────────────────────────
+          run('auto-stop-on',    { autoStop: true }),
+          run('per-song-stop',   { stopAfter: true, autoStop: false }),
+          // Per-song stop beats a global "keep playing".
+          run('stop-beats-auto', { stopAfter: true, autoStop: false }),
+
+          // ── 3. TAPPED ANOTHER SONG WHILE PLAYING ──────────────────────────
+          // Continue + queued: the queue replaces the natural next.
+          run('queued-continue', { queued: Q, autoStop: false }),
+          // Stop + queued: the STOP STANDS. The queue only decides what the
+          // next Play will start. This is #9's precedence rule, and it is the
+          // one that looks surprising until you have run a block on stage.
+          run('queued-vs-stop',  { queued: Q, autoStop: true }),
+          run('queued-vs-stopafter', { queued: Q, stopAfter: true }),
+
+          // ── the rest ──────────────────────────────────────────────────────
+          run('song-loop',       { region: { id:'A', start:0, end:10, loop:true } }),
+          run('native-loop',     { region: { id:'A', start:0, end:10, loop:true }, nativeLoopSubId: 'A' }),
+          run('wait',            { delayAfter: 5 }),
+          run('wait-queued',     { delayAfter: 5, queued: Q }),
+          // A wait with nowhere to go falls THROUGH, exactly as the inlined
+          // version did — it does not swallow the boundary.
+          run('wait-no-target',  { delayAfter: 5, next: null, autoStop: true }),
+          run('end-of-setlist',  { next: null, autoStop: false }),
+          // A Play issued moments ago outranks a stop built from a stale reply.
+          run('play-just-issued',{ autoStop: true, playRegionLocked: true })
+        ]));
+        """
+    ).replace("__FN__", fn)
+
+    got = {row[0]: row[1:] for row in json.loads(run_node(harness))}
+    expected = {
+        # plays straight on, into B
+        "chain-flag":         ["chain", "B", False],
+        "auto-stop-off":      ["chain", "B", False],
+        # stops, and B is what the next Play starts
+        "auto-stop-on":       ["auto-stop", "B", False],
+        "per-song-stop":      ["stop-after", "B", False],
+        "stop-beats-auto":    ["stop-after", "B", False],
+        # the queue replaces the natural next
+        "queued-continue":    ["queued", "Q", True],
+        # ...but never overrides a stop; it becomes the cue instead
+        "queued-vs-stop":     ["auto-stop", "Q", True],
+        "queued-vs-stopafter":["stop-after", "Q", True],
+        "song-loop":          ["song-loop", "A", False],
+        "native-loop":        ["native-loop", None, False],
+        "wait":               ["wait", "B", False],
+        "wait-queued":        ["wait", "Q", True],
+        "wait-no-target":     ["auto-stop", None, False],
+        "end-of-setlist":     ["none", None, False],
+        "play-just-issued":   ["none", None, False],
+    }
+    assert got == expected, (
+        "\n" + "\n".join(
+            f"  {k:22} got {got.get(k)!s:32} expected {v}"
+            for k, v in expected.items() if got.get(k) != v
+        )
+    )
+
+
+def test_the_boundary_decision_has_no_side_effects(script_body: str) -> None:
+    """It must stay pure, or the test above stops meaning anything.
+
+    Every side effect — the commands, the locks, the queue promotion — belongs
+    to the caller. A wwr_req sneaking in here would make the decision
+    untestable again and, worse, would look tested.
+    """
+    body = strip_comments(extract_function(strip_comments(script_body), "resolveBoundaryAction"))
+    for forbidden in ("wwr_req", "document.", "window.", "clearQueuedRegion",
+                      "promoteQueuedToSelected", "noteActiveInstance", "Date.now"):
+        assert forbidden not in body, (
+            f"resolveBoundaryAction() reaches for {forbidden} — it is no longer a "
+            f"decision, and the seven-branch test above is now asserting against "
+            f"something that also acts"
+        )

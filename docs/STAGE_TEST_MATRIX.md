@@ -241,6 +241,24 @@ Three of these caught regressions from the identity refactor that affected
 | **L17** | Lyrics and Chords panels during playback. | Both follow. The "next song" label under the lyrics names what follows the **playing** instance. | | |
 | **L18** | Expand a song, open a section's `⋮` menu, set a note and a colour. | Applies. With a repeat, **both** copies show it — sections belong to the song. | | |
 
+### What happens when a song ends
+
+The three the show depends on. Run them with audio, not just eyes on the screen.
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **B01** | Song marked **Emendar** (chain). Let it end. | Rolls straight into the next song, **no audible gap**. | | |
+| **B02** | Auto-Stop **off** globally, song on Auto. Let it end. | Same — plays on into the next. | | |
+| **B03** | Auto-Stop **on** globally, song on Auto. Let it end. | **Stops.** Cursor lands on the next song, so one Play starts it. | | |
+| **B04** | Song marked **Parar**, Auto-Stop off. Let it end. | Stops anyway — the per-song setting beats the global one. | | |
+| **B05** | While a song is playing, tap another. Let the current one end. Current song set to **continue**. | The tapped song plays **instead of** the natural next. | | |
+| **B06** | Same, but the current song is set to **Parar** (or Auto-Stop is on). | It **stops**. The tapped song becomes what the next Play starts — the queue does not override a stop. This is deliberate: see plan §20. | | |
+| **B07** | Song set to **Esperar 5s**. Let it end. | Stops, waits about five seconds, then resumes into the next song by itself. | | |
+| **B08** | Song set to **Esperar 5s**, and you tap another song mid-play. | After the wait it resumes into **the tapped song**, not the natural next. | | |
+| **B09** | Let the **last** song of the setlist end. | Stops cleanly. No seek to song 1, no error. | | |
+| **B10** | Tap a song and press Play, then immediately let the previous region's end tick arrive. | The song you started keeps playing — a stale end-of-region reply must not stop it. | | |
+| **B11** | Repeat B01–B06 with `?diag=transport` open. | Each boundary logs one `BOUNDARY` line naming the action taken. If something surprises you, that line says which of the seven branches ran. | | |
+
 ---
 
 ## 5. Visual block scenarios
