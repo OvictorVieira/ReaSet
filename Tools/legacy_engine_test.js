@@ -114,6 +114,21 @@ async function transportResponds(browser) {
     console.log('\n1. Transport buttons with no Pointer Events');
     const { ctx, page, errors } = await openPage(browser, { noPointer: true });
 
+    // The role has to be stated, not inherited from whatever the page settled
+    // on with no REAPER to talk to. LOOP is an edit: a Controller's is disabled
+    // on purpose, so tapping it here would be measuring the permission rather
+    // than the engine's touch handling. Both halves are checked below.
+    const loopByRole = await page.evaluate(() => {
+        const out = {};
+        for (const m of ['controller', 'director']) {
+            REASET_MODE = m; applyModeUI();
+            out[m] = document.getElementById('footer-loop-btn').disabled;
+        }
+        return out;
+    });
+    check('a Controller is not offered LOOP', loopByRole.controller === true);
+    check('a Director is offered LOOP', loopByRole.director === false);
+
     await page.evaluate(() => {
         window.__calls = [];
         for (const fn of ['togglePlay', 'navSong', 'toggleCurrentLoop']) {

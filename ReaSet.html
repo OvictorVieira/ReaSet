@@ -3401,6 +3401,32 @@
             box-shadow: 0 0 16px rgba(191, 90, 242, 0.3);
         }
 
+        /* Same rule as the footer's LOOP: on a Controller it reports, it does
+           not offer. Dimmed enough to read as a state rather than a target,
+           with .active still showing through — "does this song loop" is worth
+           knowing on every device in the room. Without this the button looked
+           exactly as pressable as PLAY beside it and did nothing at all. */
+        .lt-btn:disabled {
+            cursor: default;
+            opacity: 0.75;
+        }
+        .lt-btn:disabled:active {
+            -webkit-transform: none;
+            transform: none;
+        }
+        .lt-ghost:disabled:hover {
+            background: rgba(255, 255, 255, 0.10);
+            border-color: rgba(255, 255, 255, 0.14);
+            color: rgba(255, 255, 255, 0.54);
+            box-shadow: none;
+        }
+        .lt-ghost.active:disabled:hover {
+            background: rgba(191, 90, 242, 0.18);
+            border-color: rgba(191, 90, 242, 0.4);
+            color: var(--color-loop);
+            box-shadow: 0 0 16px rgba(191, 90, 242, 0.3);
+        }
+
         /* ══════════════════════════════════════════════
    6. MODALS
 ══════════════════════════════════════════════ */
@@ -9798,6 +9824,10 @@
         function applyModeUI() {
             var badge = document.getElementById('mode-badge');
             document.body.classList.toggle('reaset-controller', REASET_MODE !== 'director');
+            // Losing the lease has to reach the buttons now, not on whatever
+            // tick happens to arrive next — a device demoted mid-song would
+            // otherwise keep offering a control it can no longer use.
+            _applyLoopPermission();
             badge.classList.add('show');
             badge.classList.toggle('is-director',   REASET_MODE === 'director');
             badge.classList.toggle('is-controller', REASET_MODE !== 'director');
@@ -11723,6 +11753,34 @@
             inst.loop = !inst.loop;
             saveCurrentState(); lastRenderChecksum = ""; syncRegions();
         }
+        // Loop is an EDIT — it changes what REAPER plays, and it is published
+        // — so toggleCurrentLoop() refuses on a Controller. The buttons have to
+        // know that, or they light themselves from the Director's song, do
+        // nothing when pressed, and can never be turned off: the exact "it is
+        // stuck on" this looked like from a phone.
+        //
+        // `disabled` stops the click, only CSS stops it LOOKING pressable, and
+        // the two have to agree. Lit still means "this song loops" — a readout,
+        // not a control.
+        //
+        // BOTH buttons, from one place. The footer learned this and the Live
+        // view's did not, so the same silent refusal came back on the one
+        // screen a phone is most likely to be showing during a song. A rule
+        // that holds for a role cannot be applied per button and stay applied.
+        function _applyLoopPermission() {
+            var can = canEditSetlist();
+            var title = can
+                ? t('Loop this song or section')
+                : t('Only the Director can change the loop');
+            var ids = ['footer-loop-btn', 'live-loop-btn'];
+            for (var i = 0; i < ids.length; i++) {
+                var b = document.getElementById(ids[i]);
+                if (!b) continue;
+                b.disabled = !can;
+                b.title = title;
+            }
+        }
+
         function toggleCurrentLoop(e) {
             if (e) e.stopPropagation();
             if (!canEditSetlist()) { RSDiag.blocked('toggleCurrentLoop', 'role-cannot-edit-setlist'); return; }
@@ -11951,21 +12009,7 @@
             var loopBtn = document.getElementById("footer-loop-btn");
             if (isLooping) loopBtn.classList.add("active");
             else loopBtn.classList.remove("active");
-            // Loop is an EDIT — it changes what REAPER plays, and it is
-            // published — so toggleCurrentLoop() refuses on a Controller. The
-            // button did not know that. It lit itself from the Director's song,
-            // did nothing when pressed, and could never be turned off: the
-            // exact "it is stuck on" this looked like from a phone.
-            //
-            // Same rule the RECONNECT button had to learn: `disabled` stops the
-            // click, only CSS stops it LOOKING pressable, and the two have to
-            // agree. Lit still means "this song loops" — it is a readout here,
-            // not a control.
-            var _canLoop = canEditSetlist();
-            loopBtn.disabled = !_canLoop;
-            loopBtn.title = _canLoop
-                ? t('Loop this song or section')
-                : t('Only the Director can change the loop');
+            _applyLoopPermission();
 
             // Play button text
             var playBtn = document.getElementById("main-play-btn");
@@ -14456,6 +14500,7 @@
             updateTopTabs();
             _lrmLastSongId = null; // force region map rebuild on open
             applyLiveSettings();
+            _applyLoopPermission();
             updatePlaybackUI();
         }
         function closeLiveView() {
@@ -14560,6 +14605,7 @@
             // Loop btn
             var ll = document.getElementById("live-loop-btn");
             if (ll) { if (isLooping) ll.classList.add("active"); else ll.classList.remove("active"); }
+            _applyLoopPermission();
         }
         // The stepper used to multiply a hardcoded 78px — a number that
         // appeared nowhere else, least of all in the rule that actually sizes

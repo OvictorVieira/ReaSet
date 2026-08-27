@@ -2069,6 +2069,7 @@ def test_only_one_view_can_be_open(script_body: str) -> None:
         function toggleCanvasEdit() {}
         function closeLiveConfig() {}
         function applyLiveSettings() {}
+        function _applyLoopPermission() {}
         function _setViewTabActive(name, on) { classes['tab-' + name] = { active: !!on }; }
 
         __FNS__
@@ -2846,12 +2847,21 @@ def test_loop_cannot_look_pressable_to_a_role_that_cannot_press_it(script_body: 
         "deliberate, this whole test is the wrong shape"
     )
 
+    # It used to disable the button inline here. It is one function now,
+    # shared with the Live view's LOOP — see
+    # test_every_loop_button_knows_a_controller_cannot_press_it — but the
+    # transport tick that redraws this bar still has to apply it, or the
+    # footer goes back to offering a control this device cannot use.
     ui = strip_comments(extract_function(body, "updatePlaybackUI"))
-    assert re.search(r"loopBtn\.disabled\s*=\s*!", ui), (
+    assert "_applyLoopPermission()" in ui, (
         "the LOOP button is offered to a role that cannot use it: it lights "
         "from the Director's song and then refuses every press"
     )
-    assert "canEditSetlist()" in ui, "the button's enabled state is not the role's"
+    perm = strip_comments(extract_function(body, "_applyLoopPermission"))
+    assert re.search(r"\.disabled\s*=\s*!", perm), (
+        "nothing disables the LOOP button any more"
+    )
+    assert "canEditSetlist()" in perm, "the button's enabled state is not the role's"
 
     # Disabled must also LOOK it, and .active must still read through — "does
     # this song loop" is worth knowing on every device in the room.
@@ -3677,6 +3687,73 @@ def test_the_palettes_offer_fixed_colours_only() -> None:
         assert block, f"the {container} palette is gone"
         assert 'type="color"' not in block.group(1), (
             f"{container} still carries a native colour picker"
+        )
+
+
+def test_every_loop_button_knows_a_controller_cannot_press_it() -> None:
+    """Loop is an edit: it changes what REAPER plays and it is published, so
+    toggleCurrentLoop() refuses on a Controller.
+
+    The footer's LOOP was taught that. The Live view's was not — so on the one
+    screen a phone is most likely to be showing during a song, the button
+    looked exactly as pressable as PLAY beside it, lit itself from the
+    Director's song, and did nothing at all when pressed.
+
+    A rule that holds for a ROLE cannot be applied per button and stay
+    applied. Every button wired to toggleCurrentLoop has to be governed from
+    the one place, and that place has to run when the role changes — not on
+    whatever transport tick happens to arrive next.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    body = strip_comments(html)
+
+    wired = set(
+        re.findall(r'<button[^>]*\bid="([^"]+)"[^>]*onclick="toggleCurrentLoop', html)
+    ) | set(
+        re.findall(r'<button[^>]*onclick="toggleCurrentLoop[^>]*\bid="([^"]+)"', html)
+    )
+    assert len(wired) >= 2, f"expected the footer and the Live view, found {wired}"
+
+    gov = strip_comments(extract_function(html, "_applyLoopPermission"))
+    assert "canEditSetlist()" in gov, (
+        "the loop buttons no longer ask whether this device may edit"
+    )
+    assert ".disabled = " in gov, (
+        "nothing disables the loop buttons, so a Controller's press is refused "
+        "silently"
+    )
+    assert "Only the Director can change the loop" in gov, (
+        "a disabled loop button says nothing about why"
+    )
+    for bid in wired:
+        assert f"'{bid}'" in gov, (
+            f"{bid} is wired to toggleCurrentLoop but is not governed by "
+            f"_applyLoopPermission — it will look pressable and refuse"
+        )
+
+    # And it has to be applied when the role changes, when the Live view
+    # opens, and on the transport tick that redraws the footer.
+    for fn in ("applyModeUI", "openLiveView", "updateLiveView"):
+        assert "_applyLoopPermission()" in strip_comments(extract_function(html, fn)), (
+            f"{fn}() does not re-apply the loop permission, so a button can be "
+            f"left offering a control this device cannot use"
+        )
+
+    # `disabled` stops the click; only CSS stops it LOOKING pressable, and the
+    # two have to agree.
+    css = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
+    for sel in (r"\.t-btn-loop:disabled", r"\.lt-btn:disabled"):
+        assert re.search(r"(?m)^ {8}" + sel + r"\s*\{", css), (
+            f"{sel} has no rule, so a disabled loop button looks exactly as "
+            f"pressable as PLAY beside it"
+        )
+
+    # The guard in the handler is the thing that actually refuses. Both of
+    # them: the song-level toggle and the section-level one.
+    for fn in ("toggleCurrentLoop", "toggleSubLoop", "toggleLoop"):
+        assert "canEditSetlist()" in strip_comments(extract_function(body, fn)), (
+            f"{fn}() no longer checks the role, so a Controller can publish an "
+            f"edit to every device in the room"
         )
 
 
