@@ -188,3 +188,73 @@ def test_colour_tick_paints_the_region_and_consumes_its_key() -> None:
     assert lua.eval("arranged") == 1, (
         "the arrange view was refreshed the wrong number of times"
     )
+
+
+def test_the_track_name_is_exact_and_a_near_miss_is_named() -> None:
+    """The name IS the command, so it is one spelling: "Lyrics".
+
+    This used to fold case and strip decoration, accepting "lyrics", "LYRICS",
+    "*Lyrics" and "01 - Lyrics" alike. A convention that accepts eight
+    spellings is not a convention — nobody converges on one and the rule
+    becomes something you have to read the source to know.
+
+    Being strict is only usable if being wrong is LOUD, so the loose form still
+    runs, for exactly one purpose: recognising a near miss and NAMING it, so
+    the panel can say what to rename rather than reporting "no track".
+
+    Runs the real chunk against a stubbed reaper API — a transcription of this
+    logic into Python would keep passing after the original drifted.
+    """
+    src = REASET_LUA.read_text(encoding="utf-8")
+    chunk = extract_lua_chunk(
+        src, "local function normalize_track_name", "local function item_at_pos"
+    )
+
+    lua = lupa.LuaRuntime(unpack_returned_tuples=True)
+    tracks: list[tuple[str, int]] = []
+
+    class Reaper:
+        def CountTracks(self, _proj):
+            return len(tracks)
+
+        def GetTrack(self, _proj, i):
+            return i
+
+        def GetTrackName(self, i):
+            return (True, tracks[i][0])
+
+        def GetTrackNumMediaItems(self, i):
+            return tracks[i][1]
+
+    lua.globals()["reaper"] = Reaper()
+    find = lua.execute(chunk + "\nreturn bridge_find_track")
+
+    def probe(names: list[tuple[str, int]]):
+        nonlocal tracks
+        tracks = names
+        return find(lua.table(track_name="Lyrics"))
+
+    found, count, near = probe([("Lyrics", 3)])
+    assert found is not None and count == 1 and near is None, (
+        "the exact name stopped matching"
+    )
+
+    for wrong in ("lyrics", "LYRICS", "*Lyrics", "01 - Lyrics", "Lyrics --"):
+        found, count, near = probe([(wrong, 3)])
+        assert found is None, f'"{wrong}" still matches — the name is not exact'
+        assert near == wrong, (
+            f'"{wrong}" is not reported as a near miss, so the panel can only '
+            "say 'no track' and the user has nothing to act on"
+        )
+
+    for unrelated in ("Backing Lyrics", "Lyrics Bus", "Guitar"):
+        found, count, near = probe([(unrelated, 3)])
+        assert found is None and near is None, (
+            f'"{unrelated}" is being offered as a near miss — it is an '
+            "ordinary audio track"
+        )
+
+    # A divider track must not shadow the real one, and must not be reported
+    # as a near miss in preference to the match that exists.
+    found, count, near = probe([("=== LYRICS ===", 0), ("Lyrics", 5)])
+    assert found is not None and count == 1, "a divider track shadows the real one"

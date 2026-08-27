@@ -547,6 +547,35 @@ just renders without that colour, border or font.
 | **T09** | The active tab at the top. | Green text with a green underline. | | |
 | **T10** | On the old iPad: the weight buttons and the colour swatches in the Lyrics popover. | Spaced apart, not touching. They spaced with flex `gap`, which that engine drops. | | |
 
+### Lyrics, chords, and the name being the command
+
+The lyrics track is the one called **exactly** `Lyrics`. Not `lyrics`, not
+`LYRICS`, not `*Lyrics` or `01 - Lyrics`. This used to accept all of them, and
+a convention that accepts eight spellings is not a convention.
+
+Being strict is only usable if being wrong is loud, so a near miss is
+recognised and **named**: the panel says which track to rename instead of
+reporting "no track".
+
+Chords can be written inline in the lyric in the ChordPro convention —
+`[Am]Quando eu [F]te vi` — and render above the syllable they land on.
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **L01** | A track named exactly `Lyrics`, with items carrying Item Notes. | The panel shows the note under the playhead. | | |
+| **L02** | Rename it to `lyrics`. | It stops working **and says so**, naming `lyrics` and telling you to rename it. Silence would be the bug. | | |
+| **L03** | Try `LYRICS`, `*Lyrics`, `01 - Lyrics`. | Same: refused, and named. | | |
+| **L04** | A track called `Backing Lyrics`. | Nothing at all. It is an ordinary audio track and must not be offered as a near miss. | | |
+| **L05** | A divider track `=== LYRICS ===` above the real `Lyrics`. | The real one is used. The divider does not shadow it. | | |
+| **L06** | Open Lyrics Tapper with only a `lyrics` track in the project. | It refuses and tells you to rename — it must **not** create a second `Lyrics` track beside it. | | |
+| **L07** | Item note: `[Am]Quando eu [F]te vi, o [C]mundo [G]parou`. | Four chords, each above the syllable it precedes. | | |
+| **L08** | Item note: `[intro] 2 compassos` and `Repete [2x]`. | Left exactly as typed. Those are not chords. | | |
+| **L09** | Chords with accidentals and slashes: `[F#m7]`, `[Bb]`, `[Csus4]`, `[G/B]`, `[Dadd9]`. | All recognised. | | |
+| **L10** | Drag the size slider in the Lyrics popover with chords on screen. | The chord stays over its syllable at every size. | | |
+| **L11** | A line long enough to wrap. | The chord wraps with its word, not left behind. | | |
+| **L12** | Move to the next verse. | The neighbouring verses show their chords too, dimmer — they do not appear only in the middle slot. | | |
+| **L13** | The `Chords` track, same rules. | Same. | | |
+
 ### The role modal
 
 | ID | Scenario | Expected | Result | Notes |

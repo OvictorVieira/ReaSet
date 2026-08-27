@@ -3349,3 +3349,59 @@ def test_the_help_buttons_look_pressable() -> None:
         "the hover is not the app's green, so it does not read as this app's "
         "control"
     )
+
+
+# ── Chords inside the lyric ─────────────────────────────────────────────────
+
+
+def test_a_bracket_is_only_a_chord_if_it_is_one(script_body: str) -> None:
+    """The note is typed by hand, so brackets that are NOT chords are common.
+
+    "[intro]", "[2x]", "[solo]" are things people write in a lyric sheet. The
+    tokeniser is deliberately loose and the VALIDATOR is what decides, so
+    anything that fails chord grammar is left exactly as typed rather than
+    being swallowed into a chord column.
+    """
+    body = strip_comments(script_body)
+    assert "CHORD_RE" in body, "the chord grammar is gone"
+
+    has = strip_comments(extract_function(body, "_hasChords"))
+    assert "_isChord(" in has, (
+        "any bracket now counts as a chord, so [intro] and [2x] disappear into "
+        "chord columns"
+    )
+    line = strip_comments(extract_function(body, "_chordLineHtml"))
+    assert "_isChord(" in line, (
+        "the renderer stopped validating, so it can build a column for a "
+        "bracket the detector never accepted"
+    )
+
+
+def test_every_lyric_slot_renders_chords_the_same_way(script_body: str) -> None:
+    """Three slots on the drum. If only the current one understands chords,
+    a verse shows its chords, then loses them the moment it moves up.
+    """
+    body = strip_comments(script_body)
+    stack = strip_comments(extract_function(body, "_lyricsStackHtml"))
+    assert "_lyricLineHtml(" in stack, "the current line bypasses the chord path"
+
+    fmt = strip_comments(extract_function(body, "_fmtLyric"))
+    assert "_lyricLineHtml(" in fmt, (
+        "the neighbouring verses bypass it, so chords appear and vanish as a "
+        "line moves between slots"
+    )
+
+
+def test_the_chord_sits_in_a_column_with_its_syllable() -> None:
+    """Absolute positioning would drift the moment the line wraps or the size
+    slider moves — and both happen constantly on this screen. A column keeps
+    the chord and the word it lands on together by construction.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    seg = _css_decls(html, ".lyr-cseg")
+    assert "inline-flex" in seg, "the chord/word pair is no longer a column"
+    assert "-webkit-inline-box" in seg, (
+        "no prefixed fallback, so the columns collapse on the old iPad"
+    )
+    chord = _css_decls(html, ".lyr-chord")
+    assert chord.strip(), "the chord has no styling of its own"

@@ -3606,6 +3606,39 @@
 
         .lyrics-content.no-context .lyrics-ctx { display: none; }
 
+        /* ── Chords above the words (ChordPro) ──────────────────────────────
+           A column per chord, not an absolutely positioned overlay: the chord
+           and the syllable it lands on then move together when the line wraps
+           or the size slider changes. inline-flex rather than grid so it works
+           on the iPad this has to run on. */
+        .lyr-cseg {
+            display: -webkit-inline-box;
+            display: inline-flex;
+            -webkit-box-orient: vertical;
+            flex-direction: column;
+            align-items: flex-start;
+            vertical-align: bottom;
+            white-space: pre-wrap;
+        }
+
+        .lyr-chord {
+            display: block;
+            font-family: var(--font-mono);
+            font-size: 0.42em;
+            font-weight: 700;
+            line-height: 1.25;
+            letter-spacing: 0.02em;
+            color: var(--color-brand);
+            white-space: pre;
+        }
+
+        .lyr-ctext { display: block; }
+
+        /* The neighbouring verses are smaller and dimmer, and their chords go
+           with them — a bright chord over a receded line would read as the
+           current one. */
+        .lyrics-ctx .lyr-chord { color: rgba(30, 215, 96, 0.55); }
+
         /* === LYRICS SETTINGS (gear popover) === */
         .lyrics-hdr-actions {
             display: flex;
@@ -6381,7 +6414,8 @@
         // to read. "!NOSWS" means the track exists but its notes cannot be
         // read, which is equally nothing to poll for at full speed.
         function _bridgeHasTrack(status) {
-            return !!status && status !== '!NOTRACK' && status !== '!NOSWS';
+            return !!status && status !== '!NOTRACK' && status !== '!NOSWS' &&
+                   status.indexOf('!WRONGNAME:') !== 0;
         }
 
         function refreshBridgePolling() {
@@ -8923,7 +8957,70 @@
 
         // X-Raym encodes newlines as the literal two-character sequence \n.
         // Reaset.lua additionally converts real newlines to <br> before publishing.
-        function _fmtLyric(s) { return s.split("\\n").join('<br>'); }
+        function _fmtLyric(s) { return _lyricLineHtml(s.split("\\n").join('<br>')); }
+
+        // ── Chords inside the lyric (ChordPro) ──────────────────────────────
+        //
+        //   [Am]Quando eu [F]te vi        →     Am        F
+        //                                      Quando eu te vi
+        //
+        // Square brackets around a chord, inline in the lyric line, is the
+        // ChordPro convention (chordpro.org) — the same one AbleSet reads. It
+        // is written by hand in the item note, so a bracket that is NOT a chord
+        // has to stay untouched: "[intro]" and "[2x]" are things people write.
+        // The bracket is therefore tokenised loosely and then VALIDATED against
+        // chord grammar, and anything that fails validation is left exactly as
+        // typed.
+        //
+        // Root, optional accidental, optional quality, optional extension
+        // figures, optional slash bass: C, Am, F#m7, Bb, Gsus4, D/F#, Cmaj7.
+        var CHORD_RE = /^[A-G](#|b)?(m|M|maj|min|dim|aug|sus|add)?\d{0,2}(sus\d|add\d{1,2})?(\/[A-G](#|b)?)?$/;
+
+        function _isChord(token) { return CHORD_RE.test(token); }
+
+        function _hasChords(line) {
+            var m = line.match(/\[([^\]]{1,10})\]/g);
+            if (!m) return false;
+            for (var i = 0; i < m.length; i++) {
+                if (_isChord(m[i].slice(1, -1))) return true;
+            }
+            return false;
+        }
+
+        // One line of lyric carrying chords becomes a row of columns, each a
+        // chord sitting above the words it lands on. Columns rather than
+        // absolute positioning: the chord and its syllable then move together
+        // when the text wraps or the font size changes, which is the whole
+        // reason to render it at all instead of showing two separate lines.
+        function _chordLineHtml(line) {
+            var out = '', re = /\[([^\]]{1,10})\]/g, last = 0, m;
+            var pend = null;              // chord waiting for the text after it
+            function col(chord, text) {
+                if (text === '' && chord === null) return '';
+                return '<span class="lyr-cseg">'
+                     + '<span class="lyr-chord">' + (chord === null ? '&nbsp;' : chord) + '</span>'
+                     + '<span class="lyr-ctext">' + (text === '' ? '&nbsp;' : text) + '</span>'
+                     + '</span>';
+            }
+            while ((m = re.exec(line)) !== null) {
+                if (!_isChord(m[1])) continue;          // "[intro]" stays as typed
+                out += col(pend, line.slice(last, m.index));
+                pend = m[1];
+                last = m.index + m[0].length;
+            }
+            out += col(pend, line.slice(last));
+            return out;
+        }
+
+        // Every lyric line goes through here, so the three slots of the drum
+        // cannot disagree about how a chord is drawn.
+        function _lyricLineHtml(html) {
+            var parts = String(html).split('<br>');
+            for (var i = 0; i < parts.length; i++) {
+                if (_hasChords(parts[i])) parts[i] = _chordLineHtml(parts[i]);
+            }
+            return parts.join('<br>');
+        }
 
         var _reduceMotion = !!(window.matchMedia &&
                                window.matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -9093,7 +9190,7 @@
             return '<span class="lyrics-line lyrics-ctx lyrics-prev' + (p === "" ? " empty" : "") + '">' +
                        (p === "" ? "&nbsp;" : _fmtLyric(p)) + '</span>' +
                    '<span class="lyrics-line lyrics-cur">' +
-                       (t === "" ? "&nbsp;" : lines.join('<br>')) + '</span>' +
+                       (t === "" ? "&nbsp;" : _lyricLineHtml(lines.join('<br>'))) + '</span>' +
                    '<span class="lyrics-line lyrics-ctx lyrics-next' + (n === "" ? " empty" : "") + '">' +
                        (n === "" ? "&nbsp;" : _fmtLyric(n)) + '</span>';
         }
@@ -9240,7 +9337,9 @@
         function _bridgeStatus(kind) {
             var isLy    = (kind === 'lyrics');
             var st      = isLy ? xr_lyrics_track : xr_chords_track;
-            var keyword = isLy ? 'lyrics' : 'chords';
+            // The exact track name the bridge looks for, so the message can be
+            // copied straight into REAPER.
+            var keyword = isLy ? 'Lyrics' : 'Chords';
             var what    = isLy ? 'letra' : 'acordes';
 
             // A frozen script keeps its last published values, so the panel can
@@ -9263,7 +9362,15 @@
             }
             if (st === '!NOTRACK') {
                 return { level: 'problem',
-                         msg: 'Sin track «' + keyword + '» (se aceptan prefijos: *' + keyword + ', 01 ' + keyword + ').' };
+                         msg: 'Sin track «' + keyword + '» — el nombre es exacto, con mayúscula inicial.' };
+            }
+            // A near miss is the common case now that the name is exact, and
+            // it is the one worth spelling out: the track is there, it is one
+            // rename away, and saying so beats "no track" every time.
+            if (st.indexOf('!WRONGNAME:') === 0) {
+                return { level: 'problem',
+                         msg: 'Hay un track «' + st.slice(11) + '» — renómbralo a «' + keyword +
+                              '» (exacto, con mayúscula inicial).' };
             }
             var nMatch = isLy ? xr_lyrics_matches : xr_chords_matches;
             if (nMatch > 1) {

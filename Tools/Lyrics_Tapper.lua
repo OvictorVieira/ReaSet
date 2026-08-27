@@ -96,7 +96,7 @@ local function get_current_pos()
     return reaper.GetCursorPosition()
 end
 
--- ─── Flexible track name matching ──────────────────────────────────────────
+-- ─── Exact track name matching ─────────────────────────────────────────────
 -- This MUST stay byte-identical to normalize_track_name() in Reaset.lua.
 -- If the two diverge, the web bridge and this tapper can disagree on which
 -- track is "the lyrics track" — the tapper writes to one, the bridge reads
@@ -107,13 +107,10 @@ end
 -- numbering) but NOT here — the tapper would have silently created a
 -- duplicate "Chords" track next to it.
 --
--- The track must still BE the keyword, not just contain it — decoration
--- around it is stripped, extra words are not:
---   • case is ignored             → "LYRICS", "Lyrics", "lyrics"
---   • leading symbols ignored     → "*Lyrics", "##Chords", "_Lyrics", ">Lyrics"
---   • leading numbering ignored   → "01 Lyrics", "3 - Chords"
---   • trailing symbols ignored    → "Lyrics*", "Chords --", "[Lyrics]"
--- "Backing Lyrics" or "Lyrics Bus" stay ordinary tracks, on purpose.
+-- THE NAME IS THE COMMAND, AND IT IS EXACT: "Lyrics", "Chords", "Notes".
+-- One spelling, capitalised. The loose form below is no longer what decides a
+-- match — it exists only so the bridge can recognise a near miss and tell the
+-- user what to rename. Kept identical to Reaset.lua for that reason.
 local function normalize_track_name(name)
     local s = (name or ""):lower()
     local prev
@@ -138,7 +135,7 @@ local function find_matching_track(canonical)
     for i = 0, n - 1 do
         local tr = reaper.GetTrack(0, i)
         local _, name = reaper.GetTrackName(tr)
-        if normalize_track_name(name) == canonical:lower() then
+        if name == canonical then
             matches[#matches + 1] = tr
             if not with_items and reaper.GetTrackNumMediaItems(tr) > 0 then
                 with_items = tr
@@ -154,7 +151,7 @@ local function ensure_target_track()
     -- Check cached track still valid
     if target_track and reaper.ValidatePtr(target_track, 'MediaTrack*') then
         local _, name = reaper.GetTrackName(target_track)
-        if normalize_track_name(name) == canonical:lower() then
+        if name == canonical then
             return target_track
         end
     end
@@ -165,6 +162,25 @@ local function ensure_target_track()
     if #matches > 0 then
         target_track = preferred
         return target_track
+    end
+
+    -- Before creating one: is there a track that is one rename away? The name
+    -- is exact now, so "lyrics" or "01 - Lyrics" no longer matches — and
+    -- creating a second track beside it is the worst possible answer. The
+    -- tapper would fill the new one while the bridge reads neither, and it
+    -- would not surface until a show.
+    local n = reaper.CountTracks(0)
+    for i = 0, n - 1 do
+        local tr = reaper.GetTrack(0, i)
+        local _, name = reaper.GetTrackName(tr)
+        if normalize_track_name(name) == canonical:lower() then
+            reaper.MB('There is a track called "' .. name .. '".\n\n' ..
+                      'The name has to be exactly "' .. canonical .. '" — ' ..
+                      'capitalised, nothing around it.\n\n' ..
+                      'Rename that track and try again. Nothing was created.',
+                      'ReaSet — wrong track name', 0)
+            return nil
+        end
     end
 
     -- Create new track with the canonical name

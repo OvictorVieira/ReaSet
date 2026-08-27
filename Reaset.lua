@@ -271,7 +271,9 @@ end
 -- Publishes what this bridge is actually doing, so the web UI can tell apart
 -- the failure modes that otherwise all look like "no lyrics showing":
 --   ""          → key absent/cleared: this script is not running at all
---   "!NOTRACK"  → script alive, but no track matched the keyword
+--   "!NOTRACK"  → script alive, but no track is called exactly "Lyrics"/"Chords"
+--   "!WRONGNAME:<name>" → a track is nearly right ("lyrics", "01 - Lyrics"):
+--                 named so the panel can say what to rename it to
 --   "!NOSWS"    → track found, but SWS/ULT_GetMediaItemNote is unavailable
 --   "<name>"    → track found and readable (shows the real REAPER track name)
 -- Written as non-persistent global ExtState so it dies with REAPER and is
@@ -283,14 +285,23 @@ local function bridge_publish_status(b, value)
     end
 end
 
--- Normalises a track name for matching. The track must still BE the keyword —
--- we only strip decoration around it, so detection stays predictable:
---   • case is ignored            → "LYRICS", "Lyrics", "lyrics"
---   • leading symbols are ignored → "*Lyrics", "##Chords", "-- lyrics", "[Chords]"
---   • leading numbering ignored   → "01 Lyrics", "3 - Chords"
---   • trailing symbols ignored    → "Lyrics*", "Chords --", "[Lyrics]"
--- Anything that leaves extra WORDS behind does NOT match, on purpose:
--- "Backing Lyrics" or "Lyrics Bus" stay ordinary audio tracks.
+-- THE NAME IS THE COMMAND, AND IT IS EXACT.
+--
+-- A track is the lyrics track when it is called exactly "Lyrics". Not
+-- "lyrics", not "LYRICS", not "*Lyrics" or "01 - Lyrics". One spelling,
+-- capitalised, the way every other command in this app is written.
+--
+-- This used to accept all of those: case folded, leading symbols and numbering
+-- stripped, trailing symbols stripped. It was meant to be forgiving and it was
+-- the wrong trade. A convention that accepts eight spellings is not a
+-- convention — nobody converges on one, every project ends up spelled
+-- differently, and the rule that decides what is a lyrics track becomes
+-- something you have to read the source to know.
+--
+-- Being strict is only usable if being wrong is LOUD. So the loose form is
+-- still computed, and used for exactly one thing: recognising a near miss and
+-- saying so. A track called "lyrics" now reports "!WRONGNAME:lyrics" instead
+-- of silently working, and the panel tells you what to rename it to.
 --
 -- This is the canonical implementation. Tools/Lyrics_Tapper.lua has its own
 -- copy (normalize_track_name there too, ported to match this one exactly) —
@@ -298,6 +309,7 @@ end
 -- relative dofile(), so the two are kept as intentionally duplicated,
 -- byte-identical algorithms rather than one unverified cross-file include.
 -- If you change the rules here, port the same change there.
+-- Loose form, used ONLY to recognise a near miss and report it.
 local function normalize_track_name(name)
     local s = name:lower()
     -- Strip leading decoration repeatedly so mixed prefixes like "* 01 - " unwind
@@ -319,21 +331,28 @@ end
 -- "*LYRICS*" or "=== LYRICS ===" sitting above the real lyrics track silently
 -- shadows it: it matches the keyword, has no items, and the panel stays empty
 -- forever. Falls back to the first match when none of them have items.
+-- Returns (track, exact_match_count, near_miss_name_or_nil).
 local function bridge_find_track(b)
     local n = reaper.CountTracks(0)
     local first, with_items, count = nil, nil, 0
+    local near = nil
+    local loose = b.track_name:lower()
     for i = 0, n - 1 do
         local tr = reaper.GetTrack(0, i)
         local _, name = reaper.GetTrackName(tr)
-        if normalize_track_name(name) == b.track_name then
+        if name == b.track_name then
             count = count + 1
             if not first then first = tr end
             if not with_items and reaper.GetTrackNumMediaItems(tr) > 0 then
                 with_items = tr
             end
+        elseif not near and normalize_track_name(name) == loose then
+            -- Would have matched under the old permissive rule. Remembered so
+            -- the panel can name it rather than leaving the user guessing.
+            near = name
         end
     end
-    return (with_items or first), count
+    return (with_items or first), count, near
 end
 
 local function item_at_pos(track, pos)
@@ -470,11 +489,11 @@ local function bridge_tick(b, cur_pos, tick)
     end
 
     if needs_scan then
-        local tr, count = bridge_find_track(b)
+        local tr, count, near = bridge_find_track(b)
         b.track = tr
         bridge_publish_matches(b, count)
         if not tr then
-            bridge_publish_status(b, "!NOTRACK")
+            bridge_publish_status(b, near and ("!WRONGNAME:" .. near) or "!NOTRACK")
             return
         end
         b.miss_tick = nil                   -- found one: no backoff to carry
@@ -506,8 +525,10 @@ end
 
 -- Both panels show their neighbours: lyrics stacks them vertically, chords
 -- places them left/right of the current one.
-local lyrics = bridge_new("lyrics", "XR_Lyrics", "lyricsTrack", true)
-local chords = bridge_new("chords", "XR_Chords", "chordsTrack", true)
+-- Capitalised, exactly. See normalize_track_name above for why this stopped
+-- being forgiving.
+local lyrics = bridge_new("Lyrics", "XR_Lyrics", "lyricsTrack", true)
+local chords = bridge_new("Chords", "XR_Chords", "chordsTrack", true)
 
 ----------------------------------------------------------------------------
 -- 4) SETLIST SYNC  — Director's browser → Reaset.lua → shared file → Players
