@@ -846,10 +846,15 @@
            pointing at the row that was playing repainted its green with the
            song's own colour, and the row you were pointing at stopped looking
            like the row that was playing.
-           The fix is not a different tint per state. It is to darken, left to
-           right: black over whatever the row already is. Green stays green and
-           goes darker, amber stays amber and goes darker, and no state can be
-           repainted as another because nothing adds a colour of its own. */
+           The fix is to darken, left to right, in the row's OWN hue: green
+           stays green and goes darker, amber stays amber and goes darker, a
+           coloured song goes to a deep tone of that colour. No state can be
+           repainted as another because the tint is always the hue already
+           there.
+           --row-hover is declared in the same rules that set each row's
+           background, so the cascade that makes playing outrank the song
+           colour carries the hover tint with it — there is no second ordering
+           to keep in step. */
         .song-row::after {
             content: '';
             position: absolute;
@@ -857,13 +862,13 @@
             left: 0;
             bottom: 0;
             width: 100%;
-            background: rgba(0, 0, 0, 0.26);
+            background: var(--row-hover, rgba(0, 0, 0, 0.30));
             -webkit-transform: scaleX(0);
             transform: scaleX(0);
             -webkit-transform-origin: left center;
             transform-origin: left center;
-            -webkit-transition: -webkit-transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
-            transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+            -webkit-transition: -webkit-transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
             pointer-events: none;
             z-index: 0;
         }
@@ -907,6 +912,7 @@
             background: rgba(30, 215, 96, 0.13);
             border-color: rgba(30, 215, 96, 0.20);
             box-shadow: none;
+            --row-hover: rgba(13, 97, 43, 0.85);
         }
         .song-row.active .song-index { color: var(--color-brand); }
 
@@ -920,6 +926,7 @@
             background: rgba(255, 159, 10, 0.10);
             border-color: rgba(255, 159, 10, 0.20);
             box-shadow: none;
+            --row-hover: rgba(115, 72, 5, 0.85);
         }
 
         .song-row.cued,
@@ -927,6 +934,7 @@
             background: rgba(30, 215, 96, 0.08);
             border-color: rgba(30, 215, 96, 0.16);
             box-shadow: none;
+            --row-hover: rgba(13, 97, 43, 0.85);
         }
 
         /* Playing wins. "What happens if I press Play" is not a question
@@ -937,6 +945,7 @@
             background: rgba(30, 215, 96, 0.13);
             border-color: rgba(30, 215, 96, 0.20);
             box-shadow: none;
+            --row-hover: rgba(13, 97, 43, 0.85);
         }
 
         /* A grid card is read top-down, so its bar runs along the top edge
@@ -945,6 +954,7 @@
             background: rgba(30, 215, 96, 0.08);
             border-color: rgba(30, 215, 96, 0.16);
             box-shadow: none;
+            --row-hover: rgba(13, 97, 43, 0.85);
         }
 
         .section-row.cued {
@@ -1504,6 +1514,7 @@
             background: var(--mapped-theme-color-dark, rgba(255, 255, 255, 0.07));
             border-color: var(--mapped-theme-color-edge, rgba(255, 255, 255, 0.14));
             border-left: none;
+            --row-hover: var(--mapped-theme-color-deep, rgba(0, 0, 0, 0.30));
         }
 
         .song-row.active .card-bg-fill,
@@ -1731,6 +1742,7 @@
         .section-row.active {
             background: rgba(252, 60, 68, 0.07);
             border-left: 2px solid rgba(252, 60, 68, 0.4);
+            --row-hover: rgba(113, 27, 31, 0.85);
         }
 
         .section-row-dot {
@@ -1740,6 +1752,7 @@
         .section-row.has-mapped-color {
             background: var(--mapped-theme-color-dark, rgba(255, 255, 255, 0.05));
             border-left: none;
+            --row-hover: var(--mapped-theme-color-deep, rgba(0, 0, 0, 0.30));
         }
 
         /* Same defect as the song row: this outranked the playing state and
@@ -1752,13 +1765,13 @@
             left: 0;
             bottom: 0;
             width: 100%;
-            background: rgba(0, 0, 0, 0.26);
+            background: var(--row-hover, rgba(0, 0, 0, 0.30));
             -webkit-transform: scaleX(0);
             transform: scaleX(0);
             -webkit-transform-origin: left center;
             transform-origin: left center;
-            -webkit-transition: -webkit-transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
-            transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+            -webkit-transition: -webkit-transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
             pointer-events: none;
             z-index: 0;
         }
@@ -1964,6 +1977,7 @@
             background: rgba(30, 215, 96, 0.13);
             border-color: rgba(30, 215, 96, 0.20);
             box-shadow: none;
+            --row-hover: rgba(13, 97, 43, 0.85);
         }
         .grid-card.active .grid-card-index { color: var(--color-brand); }
 
@@ -2026,6 +2040,7 @@
         .grid-card.has-mapped-color {
             background: var(--mapped-theme-color-dark, rgba(255, 255, 255, 0.07));
             border-left: none;
+            --row-hover: var(--mapped-theme-color-deep, rgba(0, 0, 0, 0.30));
         }
 
 
@@ -2036,13 +2051,13 @@
             left: 0;
             bottom: 0;
             width: 100%;
-            background: rgba(0, 0, 0, 0.26);
+            background: var(--row-hover, rgba(0, 0, 0, 0.30));
             -webkit-transform: scaleX(0);
             transform: scaleX(0);
             -webkit-transform-origin: left center;
             transform-origin: left center;
-            -webkit-transition: -webkit-transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
-            transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+            -webkit-transition: -webkit-transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
             pointer-events: none;
             z-index: 0;
         }
@@ -8492,6 +8507,25 @@
             return 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + alpha + ')';
         }
 
+        // The hover tint: THE ROW'S OWN COLOUR, DARKER.
+        //
+        // The first version laid plain black over the row. Black does not
+        // darken a colour, it desaturates it — a green row went grey-brown,
+        // and the one row you were pointing at was the one row that had
+        // stopped looking like its colour.
+        //
+        // Multiplying the channels keeps the hue and drops the value, which
+        // is what "the same colour, darker" actually means. The alpha is high
+        // on purpose: the resting row is a 0.10-0.13 wash over near-black, so
+        // a translucent deep tone would land BRIGHTER than the row it covers.
+        // At 0.85 the result is the deep tone itself.
+        function hexToDeepRgba(hex) {
+            var rgb = hexToRgb(hex);
+            return 'rgba(' + Math.round(rgb[0] * 0.45)
+                 + ',' + Math.round(rgb[1] * 0.45)
+                 + ',' + Math.round(rgb[2] * 0.45) + ',0.85)';
+        }
+
         // A row's colour was painted at 0.10 alpha, which is under the 0.13
         // the plain playing-row highlight uses — so a song you had deliberately
         // coloured read as less marked than one you had not. Raised until the
@@ -8502,7 +8536,8 @@
                 + '; --mapped-theme-color-dark: ' + hexToRgba(hex, 0.24)
                 + '; --mapped-theme-color-hover: ' + hexToRgba(hex, 0.34)
                 + '; --mapped-theme-color-edge: ' + hexToRgba(hex, 0.52)
-                + '; --mapped-theme-color-fill: ' + hexToRgba(hex, 0.46) + ';';
+                + '; --mapped-theme-color-fill: ' + hexToRgba(hex, 0.46)
+                + '; --mapped-theme-color-deep: ' + hexToDeepRgba(hex) + ';';
         }
 
         var SONG_COLOR_PALETTE = [
@@ -11242,7 +11277,7 @@
                         var subStyleAttr = "";
                         var subClassAdds = "";
                         if (mappedSubColor) {
-                            subStyleAttr = 'style="--mapped-theme-color: ' + mappedSubColor.hex + '; --mapped-theme-color-dark: ' + mappedSubColor.bgDark + '; --mapped-theme-color-hover: ' + mappedSubColor.hover + '; --mapped-theme-color-fill: ' + mappedSubColor.fill + ';"';
+                            subStyleAttr = 'style="--mapped-theme-color: ' + mappedSubColor.hex + '; --mapped-theme-color-dark: ' + mappedSubColor.bgDark + '; --mapped-theme-color-hover: ' + mappedSubColor.hover + '; --mapped-theme-color-fill: ' + mappedSubColor.fill + '; --mapped-theme-color-deep: ' + hexToDeepRgba(mappedSubColor.hex) + ';"';
                             subClassAdds = " has-mapped-color";
                         }
                         // Feature 4: STOP entry styling; Feature 11: skipped; Feature 12: custom class

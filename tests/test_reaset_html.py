@@ -3566,9 +3566,11 @@ def test_hover_darkens_and_never_repaints() -> None:
     at the row that was playing repainted its green with the song's own colour
     — the row under the pointer stopped looking like the row that was playing.
 
-    A hover that DARKENS cannot do that: black over whatever the row already
-    is. Green stays green, amber stays amber, and no state can be mistaken for
-    another because nothing adds a colour of its own.
+    A hover that DARKENS cannot do that. The first fix laid plain black over
+    the row, which desaturates rather than darkens: the green row went
+    grey-brown. The tint is now the row's own hue at a lower value, driven by
+    one `--row-hover` variable, so the wipe can only ever deepen the colour
+    that is already there.
     """
     html = REASET_HTML.read_text(encoding="utf-8")
     css = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
@@ -3579,12 +3581,104 @@ def test_hover_darkens_and_never_repaints() -> None:
         ), f"{surface} repaints its background on hover again"
 
         sweep = _css_decls(html, surface + "::after")
-        assert "rgba(0, 0, 0" in sweep, (
-            f"{surface}'s hover adds a colour instead of darkening"
+        assert "var(--row-hover" in sweep, (
+            f"{surface}'s hover no longer takes its tint from the row"
         )
         assert "scaleX(0)" in sweep and "transform-origin: left" in sweep, (
             f"{surface}'s hover is no longer a left-to-right wipe"
         )
+        dur = re.search(r"[^-]transition: transform ([\d.]+)s", sweep)
+        assert dur and float(dur.group(1)) >= 0.4, (
+            f"{surface}'s wipe is back to a duration too short to read"
+        )
+
+    # The row's own colour, and only the row's own colour.
+    #
+    # Every rule that paints a row surface must also say what that surface
+    # darkens to, in the SAME hue. A state that sets a background and no
+    # --row-hover falls through to the neutral black default — which is the
+    # exact defect this replaced, back on one state only.
+    def _rgb(value):
+        m = re.search(r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", value)
+        return tuple(int(m.group(k)) for k in (1, 2, 3)) if m else None
+
+    checked = 0
+    for m in re.finditer(r"(?m)^ {8}([^{}]*?)\{([^}]*)\}", css):
+        sels, body = m.group(1), m.group(2)
+        parts = [p.strip() for p in sels.split(",")]
+        if not any(
+            re.match(r"^\.(song-row|grid-card|section-row)\.[\w.-]+$", p)
+            for p in parts
+        ):
+            continue
+        bg = re.search(r"(?m)^\s*background:\s*([^;]+);", body)
+        if not bg or "rgba(" not in bg.group(1):
+            continue
+        if "var(" in bg.group(1):
+            # A surface painted from the song's own colour. Its hue is not in
+            # the stylesheet at all — it is built in buildColorVarsFromHex,
+            # and checked below.
+            hv = re.search(r"--row-hover:\s*([^;]+);", body)
+            assert hv and "--mapped-theme-color-deep" in hv.group(1), (
+                f"`{sels.strip()}` paints from the song's colour but does not "
+                "darken to it"
+            )
+            checked += 1
+            continue
+        hover = re.search(r"--row-hover:\s*([^;]+);", body)
+        assert hover, (
+            f"`{sels.strip()}` paints a surface but names no --row-hover, so "
+            "pointing at it lays black over the colour instead of deepening it"
+        )
+        a, b = _rgb(bg.group(1)), _rgb(hover.group(1))
+        assert a and b, f"`{sels.strip()}` has an unreadable colour pair"
+        if max(a) == 0:
+            continue  # a black surface has no hue to keep
+        assert max(b) > 0, (
+            f"`{sels.strip()}` darkens to black, which desaturates {a} "
+            "instead of deepening it"
+        )
+        # Same hue = proportional channels, each measured against the
+        # brightest one so the difference in value drops out.
+        for chan in range(3):
+            assert abs(a[chan] / max(a) - b[chan] / max(b)) < 0.06, (
+                f"`{sels.strip()}` darkens to {b}, which is not "
+                f"{a} in a lower value — the hover changes the hue"
+            )
+        assert max(b) < max(a), (
+            f"`{sels.strip()}` hovers to {b}, which is not darker than {a}"
+        )
+        checked += 1
+
+    assert checked >= 6, (
+        f"only {checked} state rules were checked; the selector shapes moved "
+        "and this stopped covering the states it names"
+    )
+
+    # The song's own colour, darkened by the same rule: multiply the channels.
+    # `hexToRgba(hex, a)` would NOT do — a translucent bright tone over a row
+    # that is a 0.10 wash on near-black composites BRIGHTER than the row.
+    deep = re.search(
+        r"function hexToDeepRgba\(hex\)\s*\{(.*?)\n        \}", html, re.S
+    )
+    assert deep, "the song colour has no darkened form any more"
+    body = deep.group(1)
+    factors = set(re.findall(r"\*\s*(0\.\d+)", body))
+    assert len(factors) == 1, (
+        f"hexToDeepRgba scales the channels unevenly ({sorted(factors)}), "
+        "which shifts the hue instead of lowering the value"
+    )
+    assert 0.2 <= float(factors.pop()) <= 0.6, (
+        "hexToDeepRgba no longer lands between the colour and black"
+    )
+    alpha = re.search(r",(0?\.\d+)\)", body)
+    assert alpha and float(alpha.group(1)) >= 0.7, (
+        "hexToDeepRgba is too translucent to darken a row that is already "
+        "a thin wash over near-black — it would lighten it"
+    )
+    assert "--mapped-theme-color-deep: ' + hexToDeepRgba(hex)" in html, (
+        "buildColorVarsFromHex stopped emitting the darkened form"
+    )
 
 
 def test_playing_beats_the_song_colour() -> None:
