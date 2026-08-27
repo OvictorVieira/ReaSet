@@ -142,9 +142,23 @@ conveniences you reach for occasionally: one for authoring content, one for
 diagnosing the lyrics/chords bridge when a panel stays empty.
 
 ### 🎤 Lyrics Tapper — `Tools/Lyrics_Tapper.lua`
-A standalone REAPER/ReaImGui tool for **building** the `lyrics`/`chords`/`notes`
-items ReaSet reads. Paste a block of text, press **ARM**, then tap along
-(mouse or **Space**) as the song plays: each tap closes the previous line's
+A standalone REAPER/ReaImGui tool for **building** the `Lyrics`/`Chords`/`Notes`
+items ReaSet reads. Two ways in:
+
+**Generate** — load a `.txt` (one lyric line per line) or paste one, then press
+**Generate**. Every line becomes an item, spread evenly across the **time
+selection** if you drew one, otherwise across the **region the edit cursor is
+in** — a song is a region, so that is usually what you meant. With neither it
+refuses rather than scattering items somewhere nobody chose. Items touch, so
+the panel never goes blank between lines. Then drag the few edges that matter.
+
+Coming from Ableton: there is nothing to convert. ReaSet keeps the text in Item
+Notes, so the MIDI-file-per-line trick that AbleSet needs — one clip per line,
+named after the line, dragged in with ⌘ held — has no equivalent here and no
+purpose. The same `.txt` you already feed that generator works directly.
+
+**Tap** — press **ARM**, then tap along (mouse or **Space**) as the song plays:
+each tap closes the previous line's
 item and opens the next one at the current position, teleprompter-style.
 For N lines, that's N taps to place all of them, plus **one more tap** to close
 the last item and finish the take right there — no separate Stop needed for a

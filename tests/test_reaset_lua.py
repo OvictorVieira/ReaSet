@@ -258,3 +258,118 @@ def test_the_track_name_is_exact_and_a_near_miss_is_named() -> None:
     # as a near miss in preference to the match that exists.
     found, count, near = probe([("=== LYRICS ===", 0), ("Lyrics", 5)])
     assert found is not None and count == 1, "a divider track shadows the real one"
+
+
+TAPPER_LUA = ROOT / "Tools" / "Lyrics_Tapper.lua"
+
+
+def test_generate_spreads_the_lines_across_a_real_span() -> None:
+    """Tapping gets timing that matches the vocal; generating gets the words in.
+
+    The point of Generate is to turn a lyric sheet into items in one gesture,
+    so the span it chooses has to be the one the user meant — and when there is
+    no such span it must refuse rather than scatter forty items from the cursor
+    into a project with no way to know where they went.
+
+    Runs the real chunk against a stubbed reaper API.
+    """
+    src = TAPPER_LUA.read_text(encoding="utf-8")
+    chunk = src[
+        src.index("local SECTION_PATTERNS") : src.index("local function do_reset()")
+    ]
+
+    items: list[dict] = []
+    regions: list[tuple[str, float, float]] = []
+    state = {"timesel": (0.0, 0.0), "cursor": 0.0}
+
+    class Reaper:
+        def GetSet_LoopTimeRange(self, *_a):
+            return state["timesel"]
+
+        def GetCursorPosition(self):
+            return state["cursor"]
+
+        def EnumProjectMarkers(self, i):
+            if i >= len(regions):
+                return (0, False, 0, 0, "", 0)
+            name, start, end = regions[i]
+            return (i + 1, True, start, end, name, i)
+
+        def AddMediaItemToTrack(self, _tr):
+            items.append({"pos": None, "len": None, "note": None})
+            return len(items) - 1
+
+        def SetMediaItemInfo_Value(self, it, key, value):
+            items[it]["pos" if key == "D_POSITION" else "len"] = value
+
+        def GetSetMediaItemInfo_String(self, it, _k, value, _set):
+            items[it]["note"] = value
+
+        def Undo_BeginBlock(self):
+            pass
+
+        def Undo_EndBlock(self, *_a):
+            pass
+
+        def UpdateArrange(self):
+            pass
+
+        def GetPlayState(self):
+            return 0
+
+    lua = lupa.LuaRuntime(unpack_returned_tuples=True)
+    lua.globals()["reaper"] = Reaper()
+    # The upvalues the extracted chunk closes over, stubbed so the chunk itself
+    # stays the real one.
+    preamble = """
+        lines = {}
+        target_track = 0
+        track_type_idx = 0
+        TRACK_TYPES = { [0] = "Lyrics", [1] = "Chords", [2] = "Notes" }
+        ui_msg = ""
+        full_text = ""
+        function ensure_target_track() return target_track end
+        function get_current_pos() return 0 end
+    """
+    api = lua.execute(
+        preamble + chunk + "\nreturn { gen = do_generate, parse = parse_lines }"
+    )
+
+    sheet = "Chorus\numa linha\n\noutra linha\n  terceira  \n"
+    parsed, skipped = api.parse(sheet)
+    assert skipped == 1, "the section header is no longer filtered out"
+    lua.globals()["lines"] = parsed
+
+    # A song is a region, and the cursor is inside it.
+    regions.append(("Numb", 10.0, 190.0))
+    state["cursor"] = 60.0
+    api.gen()
+    assert len(items) == 3, "one item per line"
+    assert items[0]["pos"] == 10.0, "the first line does not start at the region"
+    last_end = items[-1]["pos"] + items[-1]["len"]
+    assert abs(last_end - 190.0) < 1e-9, "the last line does not reach the end"
+    assert items[0]["note"] == "uma linha", "the text is not in the item note"
+    for a, b in zip(items, items[1:]):
+        assert abs((a["pos"] + a["len"]) - b["pos"]) < 1e-9, (
+            "items do not touch, so the panel goes blank between lines"
+        )
+
+    # An explicit time selection is a clearer statement of intent than the
+    # region the cursor happens to be in.
+    items.clear()
+    state["timesel"] = (100.0, 120.0)
+    api.gen()
+    assert items[0]["pos"] == 100.0 and abs(
+        (items[-1]["pos"] + items[-1]["len"]) - 120.0
+    ) < 1e-9, "the time selection no longer wins over the region"
+
+    # Neither: it must refuse.
+    items.clear()
+    regions.clear()
+    state["timesel"] = (0.0, 0.0)
+    state["cursor"] = 5.0
+    api.gen()
+    assert items == [], (
+        "with no span it invented one — forty items land somewhere nobody chose"
+    )
+    assert "region" in lua.globals()["ui_msg"], "it refused without saying why"
