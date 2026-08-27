@@ -363,6 +363,41 @@ which is exactly why it has to be looked at rather than reasoned about.
 
 ---
 
+### How a row says what it is
+
+A 2px ring around the playing card was the loudest thing on the screen, and
+`.cued` stacked on `.active` drew it twice on the row that least needed one.
+Every state is a **surface** now — what the row is, not a box drawn round it —
+and the fill growing across it is the marker.
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **R01** | Play a song and watch its row. | The row is green and the fill **grows across it**. No ring, no border, no bar down the edge. | | |
+| **R02** | Same row, look at the boundary between filled and unfilled. | It reads as a **position** in a green row, not as a green block sitting on a grey card. | | |
+| **R03** | Stopped, tap a song. | Its row goes green and **quieter** — no fill. That is "Play starts here". | | |
+| **R04** | Tap the song that is already playing. | It stays exactly as it was. Playing beats cued; nothing new appears. | | |
+| **R05** | Playing, tap a different song. | That row goes **amber**, same treatment. That is "this is next". | | |
+| **R06** | Look at every row that is not playing, at the very left edge. | **No green sliver.** The playhead used to be a border, so it sat at x=0 on every idle row. | | |
+| **R07** | Take a song with a looping **section** and look at its row. | A purple bracket sits where that section is inside the song — a third of the way in for a section a third of the way in. | | |
+| **R08** | Same, but a song with **the whole song** looping. | A purple wash across the row, **no bracket**. A border there just traces the card. | | |
+| **R09** | Play into a looping section and watch. | The fill passes through the bracket. The bracket does not move. | | |
+
+### Grid view
+
+It showed a number, a name and a duration — so the one thing a setlist is read
+for, where the show pauses, was spelled out in the list and invisible here.
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **G01** | Switch to grid and look at any card. | A pip under the name: **→\|** chains, **■** stops, **⏱** waits. The same mark the list draws. | | |
+| **G02** | Read a run of cards left to right. | Chains then a stop **is** the block. That is what the list says with a gap. | | |
+| **G03** | Look at the first card of each block. | A vertical rule down its **leading edge**. A top margin would slide sideways into the middle of a row and mean nothing. | | |
+| **G04** | A song with loop on; a song skipped. | A purple **↻** pip; a **✕** pip. | | |
+| **G05** | Play something and find its card. | Green — same as the list. It used to be drawn in the **stop red**, with a red title. | | |
+| **G06** | Tap a card while stopped, then while playing. | Green (cued), then amber (queued). Same language as the list. | | |
+
+---
+
 ## 5. Visual block scenarios
 
 | ID | Setlist / action | Expected | Result | Notes |
