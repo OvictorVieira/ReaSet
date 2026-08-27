@@ -1009,3 +1009,100 @@ satisfied by the `title` line surviving after the offline class was removed.
 **T23–T30** and **C18–C22** in `docs/STAGE_TEST_MATRIX.md`. T25 (slide back and
 release must NOT stop) and T26 (diagonal drag on a phone must not be stolen by
 the scroller) are the two that cannot be reasoned about from here.
+
+---
+
+## 16. pt-BR, and closing the gap where strings bypassed the table
+
+Issue #14. Two problems, and the second had to be fixed first or the first only
+half-lands.
+
+### The table now has three columns, and every column is still a key
+
+```js
+I18N_ROWS = [ ["English", "Español", "Português"], … ]   // 211 rows
+I18N_LANGS = ['en', 'es', 'pt']
+```
+
+`t()` and `_i18nWalk()` took `REASET_LANG === 'es' ? 1 : 0` — a **boolean**, which
+is what limited the table to two languages. Both now take `_langIndex(lang)`, and
+an unknown language reads as English rather than as `undefined`.
+
+The design property worth preserving is that **every column is a lookup key**, not
+just English. That is what lets translation work with no markup annotations at all
+and makes re-running the walk idempotent. A third column had to keep it: a Spanish
+node must still be findable when the user picks Portuguese, and a Portuguese node
+when they pick English. A per-language dictionary keyed on English would only
+translate in one direction, and switching twice would strand half the screen in
+whatever language it last landed in.
+
+`I18N_MAP` registers all three cells per row, **first writer wins** — where two
+rows would share a translation, the earlier row keeps the key rather than a later
+one silently stealing it. A test asserts no such collision exists at all, because
+a cell owned by two rows cannot be translated deterministically.
+
+Empty cells fall back to English. A row added without its translation should
+degrade to a readable string, not an invisible one.
+
+Browser detection gained `/^pt/i` and the switcher a third segment.
+
+### The strings that never reached the table
+
+Eleven dialogs held their text inline, in Spanish, so they rendered Spanish on an
+English or Portuguese device: the Director PIN prompt and its four outcomes, the
+Pull confirmation, the MIDI-mappings clear, the device rename, the reorder prompt,
+and the new-setlist prompt. All now go through `t()` with an English source string
+and a row.
+
+The mode-selector card — **the first screen a new device ever sees** — was
+Spanish-only in the markup regardless of the setting. It was already rewritten in
+English by `a03c61e`; §16 adds its rows.
+
+### The part that keeps it from decaying
+
+Nothing *fails* when a string bypasses the table. It renders, it is readable to
+whoever wrote it, and only a user in the other language sees the seam — which is
+how a phone set to English showed
+
+> ⚠ El dispositivo "Mac · Chrome" **is now the Director — this device is read-only**
+
+one sentence in two languages. A reviewer will not reliably catch that. Four tests
+do:
+
+- `test_i18n_table_is_complete_and_unambiguous` — three full columns, no empty
+  cells, and no cell owned by two rows.
+- `test_every_language_is_reachable` — both readers index by language rather than
+  branching on Spanish, every language in the table has a switcher button, and a
+  pt-BR browser is detected.
+- `test_no_dialog_bypasses_the_translation_table` — **this is the one that stops
+  the next feature from reintroducing the bug.** Any `prompt`/`confirm`/`alert`
+  whose first argument is a multi-word string literal fails the build.
+- `test_markup_prose_is_in_the_table` — pins the mode selector's prose
+  specifically, since that is the surface that actually went wrong.
+
+Eight mutations were run and all eight were caught: `t()` and the walk reverted to
+a boolean, pt dropped from browser detection, the PT button removed, a row left
+with an empty pt cell, two rows given the same translation, a dialog put back
+inline, and mode-selector prose moved out of the table.
+
+### Four rows deleted
+
+The `Stop Hold (3s)` help body, `■ STOP (Hold)`, `Mode: Hold` and `STOP (Hold)`
+went with the hold gesture in `402b84d`. Translating strings nothing renders is
+how a table grows to a size nobody wants to maintain.
+
+### The judgement call
+
+The owner chose to keep the table **inline**. ReaSet ships as a single file
+dropped into `reaper_www_root`, `Sortable.min.js` being separate is already a
+documented install step that has to be got right, and this session alone
+contained two "did you update the file?" incidents. A third file to keep in sync
+is another chance to run something old on a stage — and it fails silently, which
+is the worst property a translation can have.
+
+### Still requires a real-device test
+
+Set a phone to pt-BR and open ReaSet: every screen, every dialog, every banner,
+and no sentence mixing two languages. Switch language at runtime and confirm
+what is already on screen follows — the DOM walk does this, so anything that
+does not follow is a string still outside the table.

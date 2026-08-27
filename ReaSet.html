@@ -2219,7 +2219,7 @@
         }
 
         /* Language picker — the segmented control, sized for two cells. */
-        #lang-seg { max-width: 180px; }
+        #lang-seg { max-width: 210px; }
 
         /* ── Full screen ─────────────────────────────────────────────────
            iOS standalone and the Fullscreen API both hand the page the WHOLE
@@ -4955,6 +4955,7 @@
                     <div class="ap-seg" id="lang-seg">
                         <button data-lang="en" onclick="applyLanguage('en')">EN</button>
                         <button data-lang="es" onclick="applyLanguage('es')">ES</button>
+                        <button data-lang="pt" onclick="applyLanguage('pt')">PT</button>
                     </div>
                 </div>
 
@@ -5907,230 +5908,332 @@
         wwr_start();
 
         // ══════════════════════════════════════════════════════════
-        // I18N — English / Spanish
+        // I18N — English / Spanish / Portuguese (Brazil)
         // ══════════════════════════════════════════════════════════
-        // The app grew with both languages hardcoded in place. Rather than
+        // The app grew with English and Spanish hardcoded in place. Rather than
         // annotate ~150 elements with keys — which means editing markup all
-        // over a 10k-line file — each row below is simply [english, spanish]
-        // and BOTH sides act as a lookup key. Whatever string a node happens
-        // to hold today is found in the table and swapped for the other
-        // language, so translation is symmetric, needs no markup changes at
-        // all, and re-running it is idempotent.
+        // over a 12k-line file — each row below is [en, es, pt] and EVERY
+        // COLUMN acts as a lookup key. Whatever string a node happens to hold
+        // today is found in the table and swapped for the requested language,
+        // so translation needs no markup changes at all and re-running the walk
+        // is idempotent.
+        //
+        // That property is why the third column was added as a column rather
+        // than as a second table: a Spanish node must still be findable when
+        // the user picks Portuguese, and a Portuguese node when they pick
+        // English. A per-language dictionary keyed on English would only
+        // translate in one direction, and switching twice would strand half
+        // the screen in whatever language it last landed in.
+        //
+        // An empty cell falls back to English rather than rendering blank, so
+        // a row added without its translation degrades to a readable string
+        // instead of an invisible one.
         var I18N_ROWS = [
-            ["Layout", "Disposición"],
-            ["Song durations", "Duración por canción"],
-            ["Full-screen views", "Vistas en pantalla completa"],
-            ["Hides the top bar in Lyrics, Chords and Canvas.", "Oculta la barra superior en Letras, Acordes y Canvas."],
-            ["Hide top bar", "Ocultar barra superior"],
-            ["Show top bar", "Mostrar barra superior"],
-            ["Full screen", "Pantalla completa"],
-            ["Enter full screen", "Entrar en pantalla completa"],
-            ["Exit full screen", "Salir de pantalla completa"],
-            ["ReaSet is already running full screen.", "ReaSet ya está en pantalla completa."],
-            ["Safari on iPhone cannot hide its bars from a web page. Add ReaSet to the Home Screen instead — it launches with no address bar and no toolbar.", "Safari en iPhone no puede ocultar sus barras desde una página web. En su lugar, agregá ReaSet a la pantalla de inicio — se abre sin barra de direcciones ni barra inferior."],
-            ["Tap Share in Safari", "Tocá Compartir en Safari"],
-            ["Choose Add to Home Screen", "Elegí Añadir a pantalla de inicio"],
-            ["Open ReaSet from the new icon", "Abrí ReaSet desde el ícono nuevo"],
-            ["If the icon opens with an HTTPS error, turn off “Warn before connecting to a website over HTTP” in Settings › Apps › Safari. REAPER serves plain HTTP.", "Si el ícono abre con un error de HTTPS, desactivá «Avisar antes de conectarse a un sitio web por HTTP» en Ajustes › Apps › Safari. REAPER sirve HTTP plano."],
-            ["Connected to REAPER", "Conectado a REAPER"],
-            ["No reply from REAPER", "Sin respuesta de REAPER"],
-            ["Active songs", "Canciones activas"],
-            ["Show progress / total", "Progreso del show / total"],
-            ["Session time since first playback — long-press to reset", "Tiempo de sesión desde la primera reproducción — mantené presionado para reiniciar"],
-            ["Session time, from the Director", "Tiempo de sesión, del Director"],
-            ["DIRECTOR", "DIRECTOR"],
-            ["Elapsed show time", "Tiempo transcurrido del show"],
-            ["Total setlist duration", "Duración total del setlist"],
-            ["EDIT", "EDICIÓN"],
-            ["When this song ends", "Al terminar esta canción"],
-            ["Auto", "Auto"],
-            ["Continue", "Continuar"],
-            ["Stop", "Parar"],
-            ["Wait", "Esperar"],
-            ["seconds before the next song", "segundos antes de la siguiente"],
-            ["Auto follows the global Auto-Stop, currently:", "Auto sigue el Auto-Stop global, ahora:"],
-            ["stop", "parar"],
-            ["continue", "continuar"],
-            ["Loop", "Loop"],
-            ["Skip", "Omitir"],
-            ["Edit mode", "Modo edición"],
-            ["Always continue into the next song", "Siempre continuar a la siguiente"],
-            ["Always stop after this song", "Siempre parar después de esta"],
-            ["Stop, wait, then continue", "Parar, esperar y continuar"],
-            ["Follows Auto-Stop (global): stops", "Sigue Auto-Stop (global): para"],
-            ["Follows Auto-Stop (global): continues", "Sigue Auto-Stop (global): continúa"],
-            ["Auto-Scroll keeps the active song visible.", "Auto-scroll mantiene visible la canción activa."],
-            ["Queue ON = seamless transition.\nQueue OFF = immediate jump.", "Cola ACTIVADA = transición encadenada.\nCola DESACTIVADA = salto inmediato."],
-            ["Smooth Seek ON lets REAPER apply its own smooth-seek preference while playing.\nOFF forces immediate jumps for manual song/section and MIDI navigation.\nSaved per project.", "Seek suave ACTIVADO deja que REAPER aplique su propia preferencia de seek suave mientras reproduce.\nDESACTIVADO fuerza saltos inmediatos en la navegación manual de canción/sección y por MIDI.\nSe guarda por proyecto."],
-            ["Auto-Stop ON = stops at the end of the region.\n(Use Chain to override per song).", "Auto-stop ACTIVADO = detiene al final de la región.\n(Usá Chain para anularlo por canción)."],
-            ["Hide Skips = removes inactive songs from the view.", "Ocultar omitidas = saca de la vista las canciones inactivas."],
-            ["Briefly fires play/stop at the start of each region to initialize MIDI.\nOnly works with Auto-Stop enabled.", "Dispara brevemente play/stop al inicio de cada región para inicializar MIDI.\nSolo funciona con Auto-stop activado."],
-            ["Requires holding STOP for 3 seconds before it takes effect.\nGuards against an accidental tap stopping the show.", "Requiere mantener STOP presionado 3 segundos para que tenga efecto.\nProtege de que un toque accidental detenga el show."],
-            ["The Default setlist cannot be deleted.", "El setlist Default no se puede eliminar."],
-            ["Not connected to the project — changes will not be saved", "Sin conexión al proyecto — no se guardarán cambios"],
-            ["Import successful.", "Importación exitosa."],
-            ["Invalid file format.", "Formato de archivo inválido."],
-            ["Error reading file.", "Error al leer el archivo."],
-            ["Done ✓", "Listo ✓"],
-            ["Settings imported. The app will reload.", "Ajustes importados. La app se recargará."],
-            ["Error reading JSON file.", "Error al leer el archivo JSON."],
-            ["SHOW", "SHOW"],
-            ["LYRICS", "LETRAS"],
-            ["CHORDS", "ACORDES"],
-            ["LIVE", "LIVE"],
-            ["CANVAS", "CANVAS"],
-            ["Active:", "Activas:"],
-            ["Playtime:", "Duración:"],
-            ["Export", "Exportar"],
-            ["Import", "Importar"],
-            ["Delete", "Eliminar"],
-            ["Up Next:", "Sigue:"],
-            ["↻ Loop", "↻ Loop"],
-            ["Views", "Vistas"],
-            ["Show Options", "Opciones de show"],
-            ["Auto-Scroll", "Auto-scroll"],
-            ["Queue Mode", "Modo cola"],
-            ["Smooth Seek", "Seek suave"],
-            ["Auto-Stop", "Auto-stop"],
-            ["Hide Skips", "Ocultar omitidas"],
-            ["MIDI Init", "Init MIDI"],
-            ["Slide to Stop", "Deslizá para parar"],
-            ["SLIDE TO STOP", "DESLIZÁ PARA PARAR"],
-            ["RELEASE TO STOP", "SOLTÁ PARA PARAR"],
-            ["Grid View", "Vista grilla"],
-            ["Settings — MIDI", "Ajustes — MIDI"],
-            ["MIDI Learn", "MIDI Learn"],
-            ["Appearance", "Apariencia"],
-            ["Data — Backup", "Datos — Respaldo"],
-            ["Export Settings JSON", "Exportar ajustes JSON"],
-            ["Import Settings JSON", "Importar ajustes JSON"],
-            ["REAPER Connection", "Conexión con REAPER"],
-            ["Sync", "Sincronizar"],
-            ["Setlist Sync (Director/Controller)", "Sync de setlist (Director/Controller)"],
-            ["This device:", "Este dispositivo:"],
-            ["Push setlist to shared", "Enviar setlist al compartido"],
-            ["Pull setlist from shared", "Traer setlist del compartido"],
-            ["Set/Change Director PIN", "Definir/cambiar PIN de Director"],
-            ["General", "General"],
-            ["Lyrics", "Letras"],
-            ["Chords", "Acordes"],
-            ["Display filters", "Filtros de pantalla"],
-            ["Luminance", "Luminancia"],
-            ["Contrast", "Contraste"],
-            ["Saturation", "Saturación"],
-            ["Reset to defaults", "Restablecer valores"],
-            ["Theme", "Tema"],
-            ["Language", "Idioma"],
-            ["Typeface", "Tipografía"],
-            ["Sizes", "Tamaños"],
-            ["Global", "Global"],
-            ["Main line", "Línea principal"],
-            ["Context lines", "Líneas de contexto"],
-            ["Weight", "Grosor"],
-            ["Colour", "Color"],
-            ["Size", "Tamaño"],
-            ["Thin", "Fino"],
-            ["Medium", "Medio"],
-            ["Bold", "Negrita"],
-            ["Black", "Black"],
-            ["Previous / next verses", "Versos anterior / siguiente"],
-            ["Global size", "Tamaño global"],
-            ["Context lines size", "Letras secundarias"],
-            ["Show previous/next verses", "Mostrar versos anterior/siguiente"],
-            ["How is this device used?", "¿Cómo se usa este dispositivo?"],
-            ["ReaSet picks this for you when you open it — there is a Director already, or this device becomes one. Change it here only if you want a different device to own the setlist tonight.", "ReaSet lo elige solo al abrir — ya hay un Director, o este dispositivo pasa a serlo. Cambialo acá solo si querés que otro dispositivo sea el dueño del setlist esta noche."],
-            ["Director", "Director"],
-            ["Owns the show: edits the setlist, its order, chains, loops and skips, and publishes them to every other device. One per session.", "Dueño del show: edita el setlist, su orden, encadenados, loops y omitidas, y los publica a todos los demás dispositivos. Uno por sesión."],
-            ["Drives the show: play, pause, stop, cue and queue. Follows the Director's setlist and cannot edit it. Any number of devices.", "Maneja el show: play, pausa, stop, cue y cola. Sigue el setlist del Director y no puede editarlo. Cualquier cantidad de dispositivos."],
-            ["Cancel", "Cancelar"],
-            ["Initializing…", "Inicializando…"],
-            ["Action to assign", "Acción a asignar"],
-            ["▶ Play", "▶ Play"],
-            ["■ Stop", "■ Stop"],
-            ["⏸ Play / Pause", "⏸ Play / Pausa"],
-            ["→ Next song", "→ Canción siguiente"],
-            ["← Previous song", "← Canción anterior"],
-            ["↓ Next section", "↓ Sección siguiente"],
-            ["↑ Previous section", "↑ Sección anterior"],
-            ["⟳ Toggle Loop (active song)", "⟳ Toggle Loop (canción activa)"],
-            ["↺ Restart song", "↺ Reiniciar canción"],
-            ["⊘ Toggle Skip (active song)", "⊘ Toggle Skip (canción activa)"],
-            ["Listen for next note / CC…", "Escuchar siguiente nota / CC…"],
-            ["Active mappings", "Asignaciones activas"],
-            ["No mappings yet","Sin asignaciones todavía"],
-            ["Clear all mappings", "Borrar todas las asignaciones"],
-            ["Close", "Cerrar"],
-            ["MIDI access denied: ", "Acceso MIDI denegado: "],
-            ["Visible elements", "Elementos visibles"],
-            ["View", "Vista"],
-            ["SIZE", "TAMAÑO"],
-            ["Song", "Canción"],
-            ["Current section", "Sección actual"],
-            ["✕ Exit", "✕ Salir"],
-            ["Edit Canvas", "Editar canvas"],
-            ["Lyrics on Canvas", "Letras en canvas"],
-            ["UI Default", "UI por defecto"],
-            ["Heading", "Título"],
-            ["Heading Default", "Título por defecto"],
-            ["■ STOP (Hold)", "■ STOP (sostener)"],
-            ["Mode: Hold", "Modo: sostener"],
-            ["Title−", "Título−"],
-            ["Title+", "Título+"],
-            ["Section−", "Sección−"],
-            ["Section+", "Sección+"],
-            ["Next−", "Sigue−"],
-            ["Next+", "Sigue+"],
-            ["Confirm", "Confirmar"],
-            ["Notification", "Notificación"],
-            ["Export Setlists", "Exportar setlists"],
-            ["Download all your setlists as a JSON file.", "Descarga todos tus setlists como archivo JSON."],
-            ["↓ Download", "↓ Descargar"],
-            ["Menu", "Menú"],
-            ["Click to change mode", "Click para cambiar de modo"],
-            ["New", "Nuevo"],
-            ["Options", "Opciones"],
-            ["ReaSet NativeLoop connected", "ReaSet NativeLoop conectado"],
-            ["Dark", "Oscuro"],
-            ["Custom colour", "Color personalizado"],
-            ["Lyrics settings", "Ajustes de letra"],
-            ["Font", "Fuente"],
-            ["Text color", "Color de texto"],
-            ["Stop button mode", "Modo del botón Stop"],
-            ["Lilac", "Lila"],
-            ["Red", "Rojo"],
-            ["White", "Blanco"],
-            ["Green", "Verde"],
-            ["Blue", "Azul"],
-            ["CONTROLLER", "CONTROLLER"],
-            ["The device", "El dispositivo"],
-            ["Another device", "Otro dispositivo"],
-            ["STOP (Hold)", "STOP (Mantener)"],
-            ["RECONNECT", "RECONECTAR"],
-            ["Reconnect", "Reconectar"],
+            ["Layout", "Disposición", "Layout"],
+            ["Song durations", "Duración por canción", "Duração por música"],
+            ["Full-screen views", "Vistas en pantalla completa", "Telas cheias"],
+            ["Hides the top bar in Lyrics, Chords and Canvas.",
+             "Oculta la barra superior en Letras, Acordes y Canvas.",
+             "Esconde a barra superior em Letras, Cifras e Canvas."],
+            ["Hide top bar", "Ocultar barra superior", "Esconder barra superior"],
+            ["Show top bar", "Mostrar barra superior", "Mostrar barra superior"],
+            ["Full screen", "Pantalla completa", "Tela cheia"],
+            ["Enter full screen", "Entrar en pantalla completa", "Entrar em tela cheia"],
+            ["Exit full screen", "Salir de pantalla completa", "Sair da tela cheia"],
+            ["ReaSet is already running full screen.",
+             "ReaSet ya está en pantalla completa.",
+             "O ReaSet já está em tela cheia."],
+            ["Safari on iPhone cannot hide its bars from a web page. Add ReaSet to the Home Screen instead — it launches with no address bar and no toolbar.",
+             "Safari en iPhone no puede ocultar sus barras desde una página web. En su lugar, agregá ReaSet a la pantalla de inicio — se abre sin barra de direcciones ni barra inferior.",
+             "O Safari no iPhone não consegue esconder as próprias barras a partir de uma página. Adicione o ReaSet à Tela de Início — assim ele abre sem barra de endereço e sem barra de ferramentas."],
+            ["Tap Share in Safari", "Tocá Compartir en Safari", "Toque em Compartilhar no Safari"],
+            ["Choose Add to Home Screen", "Elegí Añadir a pantalla de inicio", "Escolha Adicionar à Tela de Início"],
+            ["Open ReaSet from the new icon", "Abrí ReaSet desde el ícono nuevo", "Abra o ReaSet pelo ícone novo"],
+            ["If the icon opens with an HTTPS error, turn off “Warn before connecting to a website over HTTP” in Settings › Apps › Safari. REAPER serves plain HTTP.",
+             "Si el ícono abre con un error de HTTPS, desactivá «Avisar antes de conectarse a un sitio web por HTTP» en Ajustes › Apps › Safari. REAPER sirve HTTP plano.",
+             "Se o ícone abrir com erro de HTTPS, desative «Avisar antes de acessar um site por HTTP» em Ajustes › Apps › Safari. O REAPER serve HTTP puro."],
+            ["Connected to REAPER", "Conectado a REAPER", "Conectado ao REAPER"],
+            ["No reply from REAPER", "Sin respuesta de REAPER", "Sem resposta do REAPER"],
+            ["Active songs", "Canciones activas", "Músicas ativas"],
+            ["Show progress / total", "Progreso del show / total", "Progresso do show / total"],
+            ["Session time since first playback — long-press to reset",
+             "Tiempo de sesión desde la primera reproducción — mantené presionado para reiniciar",
+             "Tempo de sessão desde a primeira reprodução — segure para zerar"],
+            ["Session time, from the Director", "Tiempo de sesión, del Director", "Tempo de sessão, do Diretor"],
+            ["DIRECTOR", "DIRECTOR", "DIRETOR"],
+            ["Elapsed show time", "Tiempo transcurrido del show", "Tempo decorrido do show"],
+            ["Total setlist duration", "Duración total del setlist", "Duração total do setlist"],
+            ["EDIT", "EDICIÓN", "EDIÇÃO"],
+            ["When this song ends", "Al terminar esta canción", "Ao terminar esta música"],
+            ["Auto", "Auto", "Auto"],
+            ["Continue", "Continuar", "Continuar"],
+            ["Stop", "Parar", "Parar"],
+            ["Wait", "Esperar", "Esperar"],
+            ["seconds before the next song", "segundos antes de la siguiente", "segundos antes da próxima música"],
+            ["Auto follows the global Auto-Stop, currently:",
+             "Auto sigue el Auto-Stop global, ahora:",
+             "Auto segue o Auto-Stop global, atualmente:"],
+            ["stop", "parar", "parar"],
+            ["continue", "continuar", "continuar"],
+            ["Loop", "Loop", "Loop"],
+            ["Skip", "Omitir", "Pular"],
+            ["Edit mode", "Modo edición", "Modo edição"],
+            ["Always continue into the next song",
+             "Siempre continuar a la siguiente",
+             "Sempre emendar na próxima música"],
+            ["Always stop after this song", "Siempre parar después de esta", "Sempre parar depois desta música"],
+            ["Stop, wait, then continue", "Parar, esperar y continuar", "Parar, esperar e continuar"],
+            ["Follows Auto-Stop (global): stops",
+             "Sigue Auto-Stop (global): para",
+             "Segue o Auto-Stop (global): para"],
+            ["Follows Auto-Stop (global): continues",
+             "Sigue Auto-Stop (global): continúa",
+             "Segue o Auto-Stop (global): continua"],
+            ["Auto-Scroll keeps the active song visible.",
+             "Auto-scroll mantiene visible la canción activa.",
+             "O Auto-Scroll mantém a música ativa visível."],
+            ["Queue ON = seamless transition.\nQueue OFF = immediate jump.",
+             "Cola ACTIVADA = transición encadenada.\nCola DESACTIVADA = salto inmediato.",
+             "Fila LIGADA = transição sem corte.\nFila DESLIGADA = salto imediato."],
+            ["Smooth Seek ON lets REAPER apply its own smooth-seek preference while playing.\nOFF forces immediate jumps for manual song/section and MIDI navigation.\nSaved per project.",
+             "Seek suave ACTIVADO deja que REAPER aplique su propia preferencia de seek suave mientras reproduce.\nDESACTIVADO fuerza saltos inmediatos en la navegación manual de canción/sección y por MIDI.\nSe guarda por proyecto.",
+             "Smooth Seek LIGADO deixa o REAPER usar a própria preferência de busca suave durante a reprodução.\nDESLIGADO força saltos imediatos na navegação manual de música/seção e por MIDI.\nSalvo por projeto."],
+            ["Auto-Stop ON = stops at the end of the region.\n(Use Chain to override per song).",
+             "Auto-stop ACTIVADO = detiene al final de la región.\n(Usá Chain para anularlo por canción).",
+             "Auto-Stop LIGADO = para no fim da região.\n(Use Emendar para sobrescrever por música)."],
+            ["Hide Skips = removes inactive songs from the view.",
+             "Ocultar omitidas = saca de la vista las canciones inactivas.",
+             "Esconder Puladas = tira as músicas inativas da tela."],
+            ["Briefly fires play/stop at the start of each region to initialize MIDI.\nOnly works with Auto-Stop enabled.",
+             "Dispara brevemente play/stop al inicio de cada región para inicializar MIDI.\nSolo funciona con Auto-stop activado.",
+             "Dispara play/stop rapidamente no início de cada região para inicializar o MIDI.\nSó funciona com o Auto-Stop ligado."],
+            ["The Default setlist cannot be deleted.",
+             "El setlist Default no se puede eliminar.",
+             "O setlist Default não pode ser apagado."],
+            ["Not connected to the project — changes will not be saved",
+             "Sin conexión al proyecto — no se guardarán cambios",
+             "Sem conexão com o projeto — as alterações não serão salvas"],
+            ["Import successful.", "Importación exitosa.", "Importado com sucesso."],
+            ["Invalid file format.", "Formato de archivo inválido.", "Formato de arquivo inválido."],
+            ["Error reading file.", "Error al leer el archivo.", "Erro ao ler o arquivo."],
+            ["Done ✓", "Listo ✓", "Pronto ✓"],
+            ["Settings imported. The app will reload.",
+             "Ajustes importados. La app se recargará.",
+             "Ajustes importados. O app vai recarregar."],
+            ["Error reading JSON file.", "Error al leer el archivo JSON.", "Erro ao ler o arquivo JSON."],
+            ["SHOW", "SHOW", "SHOW"],
+            ["LYRICS", "LETRAS", "LETRAS"],
+            ["CHORDS", "ACORDES", "CIFRAS"],
+            ["LIVE", "LIVE", "AO VIVO"],
+            ["CANVAS", "CANVAS", "CANVAS"],
+            ["Active:", "Activas:", "Ativo:"],
+            ["Playtime:", "Duración:", "Tempo:"],
+            ["Export", "Exportar", "Exportar"],
+            ["Import", "Importar", "Importar"],
+            ["Delete", "Eliminar", "Apagar"],
+            ["Up Next:", "Sigue:", "A seguir:"],
+            ["↻ Loop", "↻ Loop", "↻ Loop"],
+            ["Views", "Vistas", "Telas"],
+            ["Show Options", "Opciones de show", "Opções do Show"],
+            ["Auto-Scroll", "Auto-scroll", "Auto-Scroll"],
+            ["Queue Mode", "Modo cola", "Modo Fila"],
+            ["Smooth Seek", "Seek suave", "Smooth Seek"],
+            ["Auto-Stop", "Auto-stop", "Auto-Stop"],
+            ["Hide Skips", "Ocultar omitidas", "Esconder Puladas"],
+            ["MIDI Init", "Init MIDI", "MIDI Init"],
+            ["Slide to Stop", "Deslizá para parar", "Deslizar para Parar"],
+            ["SLIDE TO STOP", "DESLIZÁ PARA PARAR", "DESLIZE PARA PARAR"],
+            ["RELEASE TO STOP", "SOLTÁ PARA PARAR", "SOLTE PARA PARAR"],
+            ["Grid View", "Vista grilla", "Modo Grade"],
+            ["Settings — MIDI", "Ajustes — MIDI", "Ajustes — MIDI"],
+            ["MIDI Learn", "MIDI Learn", "MIDI Learn"],
+            ["Appearance", "Apariencia", "Aparência"],
+            ["Data — Backup", "Datos — Respaldo", "Dados — Backup"],
+            ["Export Settings JSON", "Exportar ajustes JSON", "Exportar ajustes JSON"],
+            ["Import Settings JSON", "Importar ajustes JSON", "Importar ajustes JSON"],
+            ["REAPER Connection", "Conexión con REAPER", "Conexão com o REAPER"],
+            ["Sync", "Sincronizar", "Sincronizar"],
+            ["Setlist Sync (Director/Controller)",
+             "Sync de setlist (Director/Controller)",
+             "Sync de setlist (Diretor/Controller)"],
+            ["This device:", "Este dispositivo:", "Este dispositivo:"],
+            ["Push setlist to shared", "Enviar setlist al compartido", "Enviar setlist para o compartilhado"],
+            ["Pull setlist from shared", "Traer setlist del compartido", "Trazer setlist do compartilhado"],
+            ["Set/Change Director PIN", "Definir/cambiar PIN de Director", "Definir/alterar PIN do Diretor"],
+            ["General", "General", "Geral"],
+            ["Lyrics", "Letras", "Letras"],
+            ["Chords", "Acordes", "Cifras"],
+            ["Display filters", "Filtros de pantalla", "Filtros de tela"],
+            ["Luminance", "Luminancia", "Luminância"],
+            ["Contrast", "Contraste", "Contraste"],
+            ["Saturation", "Saturación", "Saturação"],
+            ["Reset to defaults", "Restablecer valores", "Restaurar padrões"],
+            ["Theme", "Tema", "Tema"],
+            ["Language", "Idioma", "Idioma"],
+            ["Typeface", "Tipografía", "Tipografia"],
+            ["Sizes", "Tamaños", "Tamanhos"],
+            ["Global", "Global", "Global"],
+            ["Main line", "Línea principal", "Linha principal"],
+            ["Context lines", "Líneas de contexto", "Linhas de contexto"],
+            ["Weight", "Grosor", "Espessura"],
+            ["Colour", "Color", "Cor"],
+            ["Size", "Tamaño", "Tamanho"],
+            ["Thin", "Fino", "Fina"],
+            ["Medium", "Medio", "Média"],
+            ["Bold", "Negrita", "Negrito"],
+            ["Black", "Black", "Black"],
+            ["Previous / next verses", "Versos anterior / siguiente", "Versos anterior / próximo"],
+            ["Global size", "Tamaño global", "Tamanho global"],
+            ["Context lines size", "Letras secundarias", "Tamanho das linhas de contexto"],
+            ["Show previous/next verses", "Mostrar versos anterior/siguiente", "Mostrar versos anterior/próximo"],
+            ["How is this device used?", "¿Cómo se usa este dispositivo?", "Como este dispositivo é usado?"],
+            ["ReaSet picks this for you when you open it — there is a Director already, or this device becomes one. Change it here only if you want a different device to own the setlist tonight.",
+             "ReaSet lo elige solo al abrir — ya hay un Director, o este dispositivo pasa a serlo. Cambialo acá solo si querés que otro dispositivo sea el dueño del setlist esta noche.",
+             "O ReaSet escolhe isso sozinho ao abrir — ou já existe um Diretor, ou este dispositivo passa a ser um. Mude aqui só se quiser que outro dispositivo seja o dono do setlist hoje."],
+            ["Director", "Director", "Diretor"],
+            ["Owns the show: edits the setlist, its order, chains, loops and skips, and publishes them to every other device. One per session.",
+             "Dueño del show: edita el setlist, su orden, encadenados, loops y omitidas, y los publica a todos los demás dispositivos. Uno por sesión.",
+             "Dono do show: edita o setlist, a ordem, emendas, loops e puladas, e publica tudo para os outros dispositivos. Um por sessão."],
+            ["Drives the show: play, pause, stop, cue and queue. Follows the Director's setlist and cannot edit it. Any number of devices.",
+             "Maneja el show: play, pausa, stop, cue y cola. Sigue el setlist del Director y no puede editarlo. Cualquier cantidad de dispositivos.",
+             "Conduz o show: play, pause, stop, cue e fila. Segue o setlist do Diretor e não pode editá-lo. Qualquer quantidade de dispositivos."],
+            ["Cancel", "Cancelar", "Cancelar"],
+            ["Initializing…", "Inicializando…", "Inicializando…"],
+            ["Action to assign", "Acción a asignar", "Ação a atribuir"],
+            ["▶ Play", "▶ Play", "▶ Play"],
+            ["■ Stop", "■ Stop", "■ Stop"],
+            ["⏸ Play / Pause", "⏸ Play / Pausa", "⏸ Play / Pause"],
+            ["→ Next song", "→ Canción siguiente", "→ Próxima música"],
+            ["← Previous song", "← Canción anterior", "← Música anterior"],
+            ["↓ Next section", "↓ Sección siguiente", "↓ Próxima seção"],
+            ["↑ Previous section", "↑ Sección anterior", "↑ Seção anterior"],
+            ["⟳ Toggle Loop (active song)", "⟳ Toggle Loop (canción activa)", "⟳ Alternar Loop (música ativa)"],
+            ["↺ Restart song", "↺ Reiniciar canción", "↺ Reiniciar música"],
+            ["⊘ Toggle Skip (active song)", "⊘ Toggle Skip (canción activa)", "⊘ Alternar Pular (música ativa)"],
+            ["Listen for next note / CC…", "Escuchar siguiente nota / CC…", "Aguardando a próxima nota / CC…"],
+            ["Active mappings", "Asignaciones activas", "Mapeamentos ativos"],
+            ["No mappings yet", "Sin asignaciones todavía", "Nenhum mapeamento ainda"],
+            ["Clear all mappings", "Borrar todas las asignaciones", "Limpar todos os mapeamentos"],
+            ["Close", "Cerrar", "Fechar"],
+            ["MIDI access denied: ", "Acceso MIDI denegado: ", "Acesso MIDI negado: "],
+            ["Visible elements", "Elementos visibles", "Elementos visíveis"],
+            ["View", "Vista", "Tela"],
+            ["SIZE", "TAMAÑO", "TAMANHO"],
+            ["Song", "Canción", "Música"],
+            ["Current section", "Sección actual", "Seção atual"],
+            ["✕ Exit", "✕ Salir", "✕ Sair"],
+            ["Edit Canvas", "Editar canvas", "Editar Canvas"],
+            ["Lyrics on Canvas", "Letras en canvas", "Letras no Canvas"],
+            ["UI Default", "UI por defecto", "Padrão da interface"],
+            ["Heading", "Título", "Título"],
+            ["Heading Default", "Título por defecto", "Padrão do título"],
+            ["Title−", "Título−", "Título−"],
+            ["Title+", "Título+", "Título+"],
+            ["Section−", "Sección−", "Seção−"],
+            ["Section+", "Sección+", "Seção+"],
+            ["Next−", "Sigue−", "Próxima−"],
+            ["Next+", "Sigue+", "Próxima+"],
+            ["Confirm", "Confirmar", "Confirmar"],
+            ["Notification", "Notificación", "Aviso"],
+            ["Export Setlists", "Exportar setlists", "Exportar setlists"],
+            ["Download all your setlists as a JSON file.",
+             "Descarga todos tus setlists como archivo JSON.",
+             "Baixe todos os seus setlists num arquivo JSON."],
+            ["↓ Download", "↓ Descargar", "↓ Baixar"],
+            ["Menu", "Menú", "Menu"],
+            ["Click to change mode", "Click para cambiar de modo", "Clique para trocar de modo"],
+            ["New", "Nuevo", "Novo"],
+            ["Options", "Opciones", "Opções"],
+            ["ReaSet NativeLoop connected", "ReaSet NativeLoop conectado", "ReaSet NativeLoop conectado"],
+            ["Dark", "Oscuro", "Escuro"],
+            ["Custom colour", "Color personalizado", "Cor personalizada"],
+            ["Lyrics settings", "Ajustes de letra", "Ajustes de letras"],
+            ["Font", "Fuente", "Fonte"],
+            ["Text color", "Color de texto", "Cor do texto"],
+            ["Stop button mode", "Modo del botón Stop", "Modo do botão Stop"],
+            ["Lilac", "Lila", "Lilás"],
+            ["Red", "Rojo", "Vermelho"],
+            ["White", "Blanco", "Branco"],
+            ["Green", "Verde", "Verde"],
+            ["Blue", "Azul", "Azul"],
+            ["CONTROLLER", "CONTROLLER", "CONTROLLER"],
+            ["The device", "El dispositivo", "O dispositivo"],
+            ["Another device", "Otro dispositivo", "Outro dispositivo"],
+            ["RECONNECT", "RECONECTAR", "RECONECTAR"],
+            ["Reconnect", "Reconectar", "Reconectar"],
             ["Restart the connection to REAPER. Does not change the setlist.",
-             "Reinicia la conexión con REAPER. No cambia el setlist."],
-            ["Setlist changed", "Setlist cambiado"],
+             "Reinicia la conexión con REAPER. No cambia el setlist.",
+             "Reinicia a conexão com o REAPER. Não altera o setlist."],
+            ["Setlist changed", "Setlist cambiado", "Setlist alterado"],
             ["also claimed Director — this device is keeping control",
-             "también reclamó Director — este dispositivo mantiene el control"],
-            ["is already controlling this REAPER session.", "ya está controlando esta sesión de REAPER."],
+             "también reclamó Director — este dispositivo mantiene el control",
+             "também reivindicou Diretor — este dispositivo está mantendo o controle"],
+            ["is already controlling this REAPER session.",
+             "ya está controlando esta sesión de REAPER.",
+             "já está controlando esta sessão do REAPER."],
             ["Only one Director is allowed at a time. Cancel to stay as Controller.",
-             "Solo se permite un Director a la vez. Cancelá para seguir como Controller."],
+             "Solo se permite un Director a la vez. Cancelá para seguir como Controller.",
+             "Só é permitido um Diretor por vez. Cancele para continuar como Controller."],
             ["Take over as Director? The other device drops to Controller.",
-             "¿Tomar el control como Director? El otro dispositivo pasa a Controller."],
+             "¿Tomar el control como Director? El otro dispositivo pasa a Controller.",
+             "Assumir como Diretor? O outro dispositivo passa a Controller."],
             ["Another device claimed Director first — opening as Controller.",
-             "Otro dispositivo reclamó Director primero — se abre como Controller."],
+             "Otro dispositivo reclamó Director primero — se abre como Controller.",
+             "Outro dispositivo reivindicou Diretor primeiro — abrindo como Controller."],
             ["is now the Director — this device can no longer edit the setlist",
-             "ahora es el Director — este dispositivo ya no puede editar el setlist"],
-            ["Amber", "Ámbar"],
-            ["Teal", "Verde azulado"]
+             "ahora es el Director — este dispositivo ya no puede editar el setlist",
+             "agora é o Diretor — este dispositivo não pode mais editar o setlist"],
+            ["Replace your local setlist with the shared one? This overwrites your unsynced changes.",
+             "¿Reemplazar tu setlist local por el compartido? Esto sobreescribe tus cambios no sincronizados.",
+             "Substituir seu setlist local pelo compartilhado? Isso sobrescreve suas alterações não sincronizadas."],
+            ["Only a Director can set the PIN.", "Solo un Director puede configurar el PIN.",
+             "Só um Diretor pode configurar o PIN."],
+            ["New Director PIN (leave empty to remove the protection):",
+             "Nuevo PIN de Director (dejar vacío para quitar la protección):",
+             "Novo PIN do Diretor (deixe vazio para remover a proteção):"],
+            ["Director PIN set.", "PIN de Director configurado.", "PIN do Diretor configurado."],
+            ["Director PIN removed — anyone can open as Director.",
+             "PIN de Director eliminado — cualquiera puede entrar como Director.",
+             "PIN do Diretor removido — qualquer um pode entrar como Diretor."],
+            ["Enter the Director PIN:", "Ingresa el PIN de Director:", "Digite o PIN do Diretor:"],
+            ["Wrong PIN.", "PIN incorrecto.", "PIN incorreto."],
+            ["Clear every MIDI mapping?", "¿Borrar todas las asignaciones MIDI?",
+             "Apagar todos os mapeamentos MIDI?"],
+            ["Name for this device (other devices see it):",
+             "Nombre de este dispositivo (lo ven los otros dispositivos):",
+             "Nome deste dispositivo (os outros dispositivos veem):"],
+            ["New position for", "Nueva posición para", "Nova posição para"],
+            ["New setlist name:", "Nombre del nuevo setlist:", "Nome do novo setlist:"],
+            ["Active setlist, set by the Director", "Setlist activo, definido por el Director",
+             "Setlist ativo, definido pelo Diretor"],
+            ["Session time", "Tiempo de sesión", "Tempo de sessão"],
+            ["Setlist", "Setlist", "Setlist"],
+            ["STOP has to be dragged across, like the Mac's slide-to-power-off.\nA stray tap cannot stop the show, and a slide half-taken is abandoned by letting go.\nTurn this off for a plain STOP button that acts on one press.",
+             "STOP hay que arrastrarlo de lado a lado, como el deslizar para apagar del Mac.\nUn toque accidental no puede parar el show, y un deslizamiento a medias se abandona soltando.\nDesactivalo para tener un botón STOP común que actúa con una sola pulsación.",
+             "O STOP tem que ser arrastado de um lado ao outro, igual ao deslizar para desligar do Mac.\nUm toque acidental não para o show, e um deslize pela metade é abandonado ao soltar.\nDesligue isso para ter um botão STOP comum, que age num toque só."],
+            ["Amber", "Ámbar", "Âmbar"],
+            ["Teal", "Verde azulado", "Verde-azulado"]
         ];
+
+        // Column order is the contract: every reader indexes by it.
+        var I18N_LANGS = ['en', 'es', 'pt'];
+        function _langIndex(lang) {
+            var i = I18N_LANGS.indexOf(lang);
+            return i === -1 ? 0 : i;   // unknown language reads as English
+        }
 
         var I18N_MAP = (function () {
             var m = {};
             for (var i = 0; i < I18N_ROWS.length; i++) {
-                var en = I18N_ROWS[i][0], es = I18N_ROWS[i][1];
-                m[en] = I18N_ROWS[i];
-                if (es !== en) m[es] = I18N_ROWS[i];
+                var row = I18N_ROWS[i];
+                for (var c = 0; c < I18N_LANGS.length; c++) {
+                    var v = row[c];
+                    // First writer wins: where two rows share a translation
+                    // (several English words are identical in Portuguese and
+                    // Spanish), the earlier row keeps the key rather than a
+                    // later one silently stealing it.
+                    if (v && !m.hasOwnProperty(v)) m[v] = row;
+                }
             }
             return m;
         })();
@@ -6141,9 +6244,12 @@
         var REASET_LANG = (function () {
             try {
                 var stored = localStorage.getItem('reaset_lang');
-                if (stored === 'en' || stored === 'es') return stored;
+                if (I18N_LANGS.indexOf(stored) !== -1) return stored;
             } catch (e) {}
-            return /^es/i.test(navigator.language || '') ? 'es' : 'en';
+            var nav = navigator.language || '';
+            if (/^pt/i.test(nav)) return 'pt';
+            if (/^es/i.test(nav)) return 'es';
+            return 'en';
         })();
 
         // For strings built in JS. Takes the English source text and returns
@@ -6152,7 +6258,7 @@
         function t(en) {
             var row = I18N_MAP[en];
             if (!row) return en;
-            return REASET_LANG === 'es' ? row[1] : row[0];
+            return row[_langIndex(REASET_LANG)] || row[0];
         }
 
         // Walk the live DOM and swap every recognised string. Deliberately not
@@ -6161,7 +6267,7 @@
         // the right language. A few hundred text nodes costs nothing at the
         // rate this runs (only on an explicit language change / boot).
         function _i18nWalk() {
-            var want = REASET_LANG === 'es' ? 1 : 0;
+            var want = _langIndex(REASET_LANG);
             var w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
             var n;
             while ((n = w.nextNode())) {
@@ -6169,7 +6275,7 @@
                 var key = raw.trim();
                 if (!key) continue;
                 var row = I18N_MAP[key];
-                if (!row || row[want] === key) continue;
+                if (!row || !row[want] || row[want] === key) continue;
                 // Preserve the surrounding whitespace exactly: several labels
                 // sit next to an icon element and rely on that spacing.
                 var at = raw.indexOf(key);
@@ -6181,13 +6287,13 @@
                     var v = els[i].getAttribute(a);
                     if (!v) return;
                     var r2 = I18N_MAP[v.trim()];
-                    if (r2 && r2[want] !== v.trim()) els[i].setAttribute(a, r2[want]);
+                    if (r2 && r2[want] && r2[want] !== v.trim()) els[i].setAttribute(a, r2[want]);
                 });
             }
         }
 
         function applyLanguage(lang, skipRerender) {
-            if (lang !== 'en' && lang !== 'es') return;
+            if (I18N_LANGS.indexOf(lang) === -1) return;
             REASET_LANG = lang;
             try { localStorage.setItem('reaset_lang', lang); } catch (e) {}
             document.documentElement.setAttribute('lang', lang);
@@ -6999,7 +7105,7 @@
                 // file has one, this one doesn't), so it would silently never
                 // appear. A destructive "overwrite your local setlist" action
                 // needs a confirmation that is guaranteed to be visible.
-                if (window.confirm('¿Reemplazar tu setlist local por el compartido? Esto sobreescribe tus cambios no sincronizados.')) doApply();
+                if (window.confirm(t('Replace your local setlist with the shared one? This overwrites your unsynced changes.'))) doApply();
             } else {
                 doApply();
             }
@@ -7108,14 +7214,14 @@
         // write is a silent no-op from a Player, this check just avoids a
         // confusing "nothing happened" for someone who taps it anyway.
         function setDirectorPin() {
-            if (REASET_MODE !== 'director') { window.alert('Solo un Director puede configurar el PIN.'); return; }
-            var next = window.prompt('Nuevo PIN de Director (dejar vacío para quitar la protección):');
+            if (REASET_MODE !== 'director') { window.alert(t('Only a Director can set the PIN.')); return; }
+            var next = window.prompt(t('New Director PIN (leave empty to remove the protection):'));
             if (next === null) return; // cancelled
             next = next.trim();
             var hash = next ? _pinHash(next) : '';
             wwr_req('SET/EXTSTATEPERSIST/ReaSet/directorPinHash/' + hash);
             _directorPinHash = hash; // optimistic — next probe reply confirms it
-            window.alert(next ? 'PIN de Director configurado.' : 'PIN de Director eliminado — cualquiera puede entrar como Director.');
+            window.alert(next ? t('Director PIN set.') : t('Director PIN removed — anyone can open as Director.'));
         }
 
         // ── Director conflict detection (heartbeat) ──────────────────────────────
@@ -7160,7 +7266,7 @@
             return _guessDeviceLabel();
         }
         function renameDevice() {
-            var next = window.prompt('Nombre de este dispositivo (lo ven otros en modo Director/Player):', _deviceName());
+            var next = window.prompt(t('Name for this device (other devices see it):'), _deviceName());
             if (next === null) return; // cancelled
             next = next.trim();
             try {
@@ -8316,9 +8422,9 @@
         function chooseMode(mode) {
             if (mode === 'director') {
                 if (_directorPinHash) {
-                    var entered = window.prompt('Ingresa el PIN de Director:');
+                    var entered = window.prompt(t('Enter the Director PIN:'));
                     if (entered === null) return; // cancelled — stay on the selector
-                    if (_pinHash(entered.trim()) !== _directorPinHash) { window.alert('PIN incorrecto.'); return; }
+                    if (_pinHash(entered.trim()) !== _directorPinHash) { window.alert(t('Wrong PIN.')); return; }
                 }
                 // BLOCKED BY DEFAULT, not warned about.
                 //
@@ -9881,7 +9987,7 @@
             var item, i;
             for (i = 0; i < displayList.length; i++) { if (displayList[i].id == id) { item = displayList[i]; break; } }
             if (!item) return;
-            var newPos = parseInt(prompt('Nueva posici\u00f3n para "' + item.name + '"?'));
+            var newPos = parseInt(prompt(t('New position for') + ' "' + item.name + '"?'));
             if (!newPos || newPos < 1 || newPos > displayList.length) return;
             displayList.splice(newPos - 1, 0, displayList.splice(i, 1)[0]);
             var newOrder = [];
@@ -12624,7 +12730,7 @@
 
         function createSetlist() {
             if (!canEditSetlist()) { RSDiag.blocked('createSetlist', 'role-cannot-edit-setlist'); return; }
-            var name = prompt("New setlist name:");
+            var name = prompt(t('New setlist name:'));
             if (name && !setlists[name]) {
                 setlists[name] = displayList.map(function (r) { return { id: r.id, chain: r.chain, skipped: r.skipped, loop: r.loop }; });
                 currentSetlistName = name; saveCurrentState(); updateSetlistDropdown(); displayList = []; initialized = false; syncRegions();
@@ -13133,7 +13239,7 @@
         }
 
         function clearAllMidiMappings() {
-            if (!confirm('¿Borrar todas las asignaciones MIDI?')) return;
+            if (!confirm(t('Clear every MIDI mapping?'))) return;
             g_midiMappings = {};
             saveMidiMappings();
             renderMidiMappingsList();

@@ -1073,3 +1073,139 @@ def test_reconnect_does_not_share_the_loop_glyph() -> None:
         "the loop button no longer uses ↻ — if it moved to something else, "
         "check this test still compares the two controls that sit side by side"
     )
+
+
+# ── i18n ─────────────────────────────────────────────────────────────────────
+# Nothing FAILS when a string bypasses the translation table. It renders, it is
+# readable to whoever wrote it, and only a user in the other language sees the
+# seam — which is how a phone set to English ended up showing
+#
+#     ⚠ El dispositivo "Mac · Chrome" is now the Director — this device is read-only
+#
+# one sentence in two languages. A reviewer will not reliably catch that. These
+# will.
+
+def _i18n_rows() -> list[list[str]]:
+    html = REASET_HTML.read_text(encoding="utf-8")
+    start = html.index("var I18N_ROWS = [")
+    end = html.index("\n        ];", start) + len("\n        ];")
+    out = run_node(html[start:end] + "\nconsole.log(JSON.stringify(I18N_ROWS));")
+    return json.loads(out)
+
+
+@requires_node
+def test_i18n_table_is_complete_and_unambiguous() -> None:
+    """Three full columns, and every cell usable as a lookup key.
+
+    The table's whole design is that BOTH — now all three — sides are keys, so
+    translation needs no markup annotations and re-running the DOM walk is
+    idempotent. That only holds if a cell identifies exactly one row: if two
+    rows share a translation, a node holding it would flip to whichever row won,
+    and switching language twice would land it in the wrong string.
+    """
+    rows = _i18n_rows()
+    assert len(rows) > 150, f"the table shrank to {len(rows)} rows — check what was deleted"
+
+    for row in rows:
+        assert len(row) == 3, f"row is not [en, es, pt]: {row}"
+        for cell in row:
+            assert isinstance(cell, str) and cell.strip(), (
+                f"empty cell in {row[0]!r} — an untranslated cell renders blank, "
+                f"and a blank label on stage is worse than an English one"
+            )
+
+    owner: dict[str, list[str]] = {}
+    for row in rows:
+        for cell in row:
+            if cell in owner and owner[cell] is not row:
+                raise AssertionError(
+                    f"{cell!r} is a cell of two different rows "
+                    f"({owner[cell][0]!r} and {row[0]!r}) — a node holding it "
+                    f"cannot be translated deterministically"
+                )
+            owner.setdefault(cell, row)
+
+
+@requires_node
+def test_every_language_is_reachable(script_body: str) -> None:
+    """The readers must index by language, not by a boolean.
+
+    `REASET_LANG === 'es' ? 1 : 0` is what limited the table to two columns.
+    Both readers — t() for strings built in JS, and the DOM walk for markup —
+    have to take an index, or a third language silently renders as English.
+    """
+    body = strip_comments(script_body)
+    langs = re.search(r"var\s+I18N_LANGS\s*=\s*\[([^\]]*)\]", body)
+    assert langs, "I18N_LANGS is gone — the column order is the table's contract"
+    assert [x.strip().strip("'\"") for x in langs.group(1).split(",")] == ["en", "es", "pt"]
+
+    for fn in ("t", "_i18nWalk"):
+        src = strip_comments(extract_function(body, fn))
+        assert "_langIndex" in src, (
+            f"{fn}() does not index by language — with a binary conditional the "
+            f"third column can never be read"
+        )
+        assert "=== 'es'" not in src, f"{fn}() still branches on Spanish specifically"
+
+    switcher = REASET_HTML.read_text(encoding="utf-8")
+    for lang in ("en", "es", "pt"):
+        assert f"""data-lang="{lang}\"""" in switcher, (
+            f"{lang} is in the table but not in the language switcher, so no "
+            f"user can select it"
+        )
+
+    detect = body[body.index("var REASET_LANG ="):body.index("function t(")]
+    assert "/^pt/i" in detect, (
+        "a browser set to Portuguese is not detected, so a pt-BR device still "
+        "opens in English"
+    )
+
+
+def test_no_dialog_bypasses_the_translation_table(script_body: str) -> None:
+    """A hardcoded string in a prompt/confirm/alert is invisible until someone
+    in the wrong language is on stage.
+
+    This is the check that keeps the fix from decaying: without it the next
+    feature adds another inline string and nobody notices.
+    """
+    body = strip_comments(script_body)
+    offenders = []
+    for m in re.finditer(r"\b(?:window\.)?(prompt|confirm|alert)\s*\(\s*(['\"])(.*?)(?<!\\)\2",
+                         body, re.S):
+        text = m.group(3)
+        # Punctuation-only and single-token arguments (a key, a number, a glyph)
+        # are not prose and have nothing to translate.
+        if len(text) < 4 or " " not in text.strip():
+            continue
+        offenders.append(f"{m.group(1)}({text[:70]!r}...)")
+    assert not offenders, (
+        "these dialogs hold their text inline instead of going through t():\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+@requires_node
+def test_markup_prose_is_in_the_table() -> None:
+    """The mode-selector card was Spanish-only in the markup regardless of the
+    language setting — and it is the FIRST screen a new device ever sees.
+
+    Rather than police every text node in a 12k-line file, this pins the
+    surfaces that have actually gone wrong: any block that is prose a user
+    reads before choosing anything.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    keys = {cell for row in _i18n_rows() for cell in row}
+
+    card = re.search(r'<div id="mode-select-overlay".*?\n    </div>', html, re.S)
+    assert card, "the mode selector is gone"
+    prose = re.findall(r">\s*([^<>{}]{12,})\s*<", card.group(0))
+    missing = []
+    for text in prose:
+        flat = " ".join(text.split())
+        if flat and flat not in keys:
+            missing.append(flat[:70])
+    assert not missing, (
+        "the mode selector — the first screen a new device sees — holds prose "
+        "that is not in the translation table, so it renders in one language "
+        "whatever the user picked:\n  " + "\n  ".join(missing)
+    )
