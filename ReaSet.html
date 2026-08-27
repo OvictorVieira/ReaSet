@@ -1297,6 +1297,14 @@
            nothing to see you could tap. It is an ordinary panel row now, with
            the same switch Loop and Skip use on the right of it. */
         .ctx-block-scope { margin-top: 10px; }
+        .ctx-scope-hint {
+            display: block;
+            margin-top: 2px;
+            font-size: 10.5px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.38);
+            letter-spacing: 0;
+        }
 
         .ctx-color-swatch.selected {
             border-color: #fff;
@@ -1371,6 +1379,7 @@
 
         .song-row.has-mapped-color {
             background: var(--mapped-theme-color-dark, rgba(255, 255, 255, 0.07));
+            border-color: var(--mapped-theme-color-edge, rgba(255, 255, 255, 0.14));
             border-left: none;
         }
 
@@ -6454,6 +6463,10 @@
             ["Total setlist duration", "Duración total del setlist", "Duração total do setlist"],
             ["New setlist", "Nuevo setlist", "Novo setlist"],
             ["Create", "Crear", "Criar"],
+            ["songs play as one block here", "canciones suenan como un bloque aquí",
+             "músicas tocam como um bloco aqui"],
+            ["this song is a block on its own", "esta canción es un bloque por sí sola",
+             "esta música é um bloco sozinha"],
             ["Name", "Nombre", "Nome"],
             ["It starts as a copy of the list on screen.",
              "Empieza como una copia de la lista en pantalla.",
@@ -8347,11 +8360,17 @@
             return 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + alpha + ')';
         }
 
+        // A row's colour was painted at 0.10 alpha, which is under the 0.13
+        // the plain playing-row highlight uses — so a song you had deliberately
+        // coloured read as less marked than one you had not. Raised until the
+        // colour is the first thing you see on the row, and given a border of
+        // its own, which is what makes it read as chosen rather than tinted.
         function buildColorVarsFromHex(hex) {
             return '--mapped-theme-color: ' + hex
-                + '; --mapped-theme-color-dark: ' + hexToRgba(hex, 0.10)
-                + '; --mapped-theme-color-hover: ' + hexToRgba(hex, 0.16)
-                + '; --mapped-theme-color-fill: ' + hexToRgba(hex, 0.32) + ';';
+                + '; --mapped-theme-color-dark: ' + hexToRgba(hex, 0.24)
+                + '; --mapped-theme-color-hover: ' + hexToRgba(hex, 0.34)
+                + '; --mapped-theme-color-edge: ' + hexToRgba(hex, 0.52)
+                + '; --mapped-theme-color-fill: ' + hexToRgba(hex, 0.46) + ';';
         }
 
         var SONG_COLOR_PALETTE = [
@@ -8471,8 +8490,15 @@
                 // because picking a colour and then reaching for a modifier is
                 // backwards: the choice of scope comes first.
                 + '<div class="song-ctx-row ctx-block-scope">'
-                +   '<span class="song-ctx-label">' + t('Apply to the whole block') + '</span>'
-                +   '<label class="song-ctx-toggle"><input type="checkbox" id="_ctx_blockscope_' + rowUid + '">'
+                +   '<span class="song-ctx-label">' + t('Apply to the whole block')
+                // A block is a run of songs that plays without stopping. With
+                // Auto-Stop on and every song left on Auto, every block is one
+                // song — so this switch correctly colours exactly one, and
+                // looks broken while doing it. Say the size out loud.
+                +     '<span class="ctx-scope-hint">' + _blockScopeHint(rowUid) + '</span>'
+                +   '</span>'
+                +   '<label class="song-ctx-toggle"><input type="checkbox" id="_ctx_blockscope_' + rowUid + '"'
+                +     ' onchange="_ctxScopeChanged(\'' + rowUid + '\', this.checked)">'
                 +   '<span class="song-ctx-track"><span class="song-ctx-thumb"></span></span></label>'
                 + '</div>'
                 + '<button class="ctx-clear-btn" onclick="_ctxClearColor(\'' + rowUid + '\')">\u2715 ' + t('Remove colour') + '</button>'
@@ -8667,13 +8693,65 @@
             return changed;
         }
 
+        function _blockScopeHint(uid) {
+            var n = _blockRegionIdsFor(uid).length;
+            return n > 1
+                ? (n + ' ' + t('songs play as one block here'))
+                : t('this song is a block on its own');
+        }
+
         function _ctxBlockScope(uid) {
             var cb = document.getElementById('_ctx_blockscope_' + uid);
             return !!(cb && cb.checked);
         }
 
+        // Which swatch is lit right now, or null. The panel is the record of
+        // what you picked, so it is what the scope switch acts on.
+        function _ctxSelectedHex() {
+            if (!_ctxPanel) return null;
+            var el = _ctxPanel.querySelector('.ctx-color-swatch.selected');
+            return el ? el.getAttribute('data-color') : null;
+        }
+
+        // Staged values of the OTHER songs in the block, from before the scope
+        // was switched on, so switching it back off puts them where they were
+        // instead of leaving the block half-painted.
+        var _ctxScopePrev = null;
+
+        // The switch used to be read only at the moment a swatch was tapped:
+        // picking a colour and THEN asking for the whole block did nothing at
+        // all, which is indistinguishable from broken.
+        function _ctxScopeChanged(uid, on) {
+            var id = _uidToRegionId(uid); if (id === null) return;
+            var hex = _ctxSelectedHex();
+            var ids = _blockRegionIdsFor(uid);
+
+            if (on) {
+                if (!hex) return;              // nothing picked yet: the switch only aims the next pick
+                _ctxScopePrev = {};
+                for (var i = 0; i < ids.length; i++) {
+                    var rid = ids[i];
+                    if (rid === id) continue;  // the song you opened keeps whatever it has
+                    _ctxScopePrev[rid] = g_stagedColors.hasOwnProperty(rid) ? g_stagedColors[rid] : undefined;
+                }
+                _stageColor(ids, hex);
+                return;
+            }
+
+            if (!_ctxScopePrev) return;
+            for (var rid2 in _ctxScopePrev) {
+                if (!_ctxScopePrev.hasOwnProperty(rid2)) continue;
+                if (_ctxScopePrev[rid2] === undefined) delete g_stagedColors[rid2];
+                else g_stagedColors[rid2] = _ctxScopePrev[rid2];
+            }
+            _ctxScopePrev = null;
+            lastRenderChecksum = '';
+            renderSetlist();
+        }
+
         function _ctxPickColor(uid, hex, whole) {
             var id = _uidToRegionId(uid); if (id === null) return;
+            _ctxScopePrev = null;   // a new pick supersedes what the switch remembered
             _stageColor(whole ? _blockRegionIdsFor(uid) : [id], hex);
             if (_ctxPanel) {
                 var sw = _ctxPanel.querySelectorAll('.ctx-color-swatch');
@@ -8684,7 +8762,10 @@
 
         function _ctxClearColor(uid) {
             var id = _uidToRegionId(uid); if (id === null) return;
-            _stageColor([id], null);
+            // Removing is the same operation as picking, over the same set.
+            // It used to ignore the scope switch and clear one song, so a
+            // block you had coloured as a unit could not be un-coloured as one.
+            _stageColor(_ctxBlockScope(uid) ? _blockRegionIdsFor(uid) : [id], null);
             var cb = document.getElementById('_ctx_coloron_' + uid);
             if (cb) { cb.checked = false; _ctxToggleColor(id, false); }
             else closeOpenCtxPanel();

@@ -424,6 +424,11 @@ all, check that before anything else.
 | **Z2c** | Pick a colour, press APPLY, and wait about six seconds without REAPER's script running. | It tells you REAPER did not confirm, and names the likely cause. Silence was the old failure: the write is swallowed with no error. | | |
 | **Z03** | Save the REAPER project, close it, reopen. | The colour is still there. It belongs to the project now, not to a browser. | | |
 | **Z04** | Tick **Apply to the whole block**, then pick a colour. | Every song in that block takes it — including the ones above the one you opened. | | |
+| **Z4b** | Read the line under that switch **before** touching it. | It says how many songs the block holds, or that this song is a block on its own. A block is a run that plays **without stopping**: with Auto-Stop on and every song left on Auto, each song is its own block, and the switch correctly colours one. | | |
+| **Z4c** | Pick a colour **first**, then turn the switch on. | The rest of the block takes it straight away. It used to be read only at the moment you tapped a swatch, so this order did nothing. | | |
+| **Z4d** | Turn the switch back off. | The other songs go back to what they had; the one you opened keeps the colour. | | |
+| **Z4e** | With the switch on, press **Remove colour**. | The whole block clears, not just the row you opened. | | |
+| **Z4f** | Colour a song and look at the row next to an uncoloured one. | The colour is clearly the strongest thing on the row. It was painted at 0.10 alpha — weaker than the plain playing highlight at 0.13 — so a song you had deliberately marked read as less marked than one you had not. | | |
 | **Z05** | Do Z04 from the **middle** of a block. | Still the whole block, not just the tail. | | |
 | **Z06** | Press **Remove colour**. | The region goes back to REAPER's own default. Not black. | | |
 | **Z07** | On a **Controller**, open a song menu. | No colour picker, or it refuses. This is an edit, and edits are the Director's. | | |

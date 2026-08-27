@@ -219,6 +219,51 @@ const snap = () => ({
     check('and the block is still one write',
           /1:abcdef;2:abcdef/.test(blockColour.wrote), blockColour.wrote);
 
+    // ── 3b. The block-scope switch ──────────────────────────────────────
+    // It used to be read only at the instant a swatch was tapped, so picking a
+    // colour and THEN asking for the whole block did nothing — which is
+    // indistinguishable from a broken switch. And "Remove colour" ignored it
+    // entirely, so a block coloured as a unit could not be cleared as one.
+    console.log('\n3b. Apply to the whole block');
+    const scope = await page.evaluate('(function(){' + `
+        // Section 3 left a colour staged and unconfirmed (no REGION poll ran
+        // to answer it), and these assertions read the whole staging map.
+        g_stagedColors = {};
+        enterEditMode();
+        setSongEnd(displayList[0].id, 'continue');   // rows 1 and 2 play as one block
+        renderSetlist();
+        var uid = displayList[1].uid;                 // opened from the SECOND row
+        openSongMenu({ stopPropagation: function () {}, currentTarget:
+            document.querySelector('#row-' + uid + ' .song-dotmenu-btn') }, uid);
+        var hint = _ctxPanel.querySelector('.ctx-scope-hint').textContent;
+        var cb = document.getElementById('_ctx_blockscope_' + uid);
+
+        _ctxPickColor(uid, '#FF453A', false);
+        var afterPick = JSON.stringify(g_stagedColors);
+        cb.checked = true;  _ctxScopeChanged(uid, true);
+        var afterOn  = JSON.stringify(g_stagedColors);
+        cb.checked = false; _ctxScopeChanged(uid, false);
+        var afterOff = JSON.stringify(g_stagedColors);
+        cb.checked = true;  _ctxScopeChanged(uid, true);
+        _ctxClearColor(uid);
+        var afterClear = JSON.stringify(g_stagedColors);
+        return { hint: hint, afterPick: afterPick, afterOn: afterOn,
+                 afterOff: afterOff, afterClear: afterClear };
+    ` + '})()');
+    check('the switch says how many songs the block holds',
+          /^2 /.test(scope.hint), `"${scope.hint}"`);
+    check('picking with the switch off colours one song',
+          scope.afterPick === '{"2":"#FF453A"}', scope.afterPick);
+    check('turning the switch ON applies the colour already picked',
+          /"1":"#FF453A"/.test(scope.afterOn) && /"2":"#FF453A"/.test(scope.afterOn),
+          scope.afterOn);
+    check('turning it back OFF puts the other songs back',
+          scope.afterOff === '{"2":"#FF453A"}', scope.afterOff);
+    check('Remove colour clears the whole block when the switch is on',
+          /"1":null/.test(scope.afterClear) && /"2":null/.test(scope.afterClear),
+          scope.afterClear);
+    await page.evaluate('(function(){ discardEdits(); })()');
+
     // ── 4. The revert has to reach the other devices ────────────────────
     // The Director's own screen going back is half the job. saveCurrentState()
     // is what persists the restored order and schedules the push, so if
