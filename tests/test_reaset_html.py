@@ -2384,3 +2384,153 @@ def test_an_automatic_session_reset_is_not_director_gated(script_body: str) -> N
         "overwritten by the next published tick half a second later"
     )
     assert "_sessionClear(" in press, "the two reset paths have drifted apart"
+
+
+# ── The phone transport bar ─────────────────────────────────────────────────
+#
+# Four controls share about 340px on a phone. Split by flex weight, STOP landed
+# at ~75px: "SLIDE TO STOP" wrapped to three lines, the button grew to ~70px
+# tall, the thumb — which stretches top to bottom — became a 46x62 blob that
+# read as an oversized circle spilling out of its track, and the gesture had
+# 23px of travel. Every one of those is a separate rule below, because each one
+# on its own is enough to make the control unusable in front of an audience.
+
+
+def _css_decls(html: str, selector: str) -> str:
+    """The declaration block of the LAST rule whose selector list matches.
+
+    Last, not first: CSS cascade means a later rule of equal specificity wins,
+    so asserting against the first one would pass while the screen disagrees.
+
+    Anchored to the start of a line, because an unanchored ".stop-ctl.is-slide"
+    also matches inside ".app-transport .stop-ctl.is-slide" — which is how a
+    mutation that gutted the base rule survived: the phone override still
+    carried the declaration and the test read that instead.
+    """
+    pat = re.compile(r"(?m)^[ \t]*" + re.escape(selector) + r"\s*\{([^{}]*)\}")
+    found = pat.findall(html)
+    assert found, f"no CSS rule for {selector!r} — it was renamed or deleted"
+    return found[-1]
+
+
+def test_slide_label_cannot_wrap() -> None:
+    """A wrapped label is what broke the slider, and it broke everything else.
+
+    The label taking a second line grows the button, the taller button stretches
+    the absolutely-positioned thumb, and the stretched thumb stops looking like
+    something you drag. One declaration prevents the whole cascade, and a second
+    caps the thumb so a tall button can never produce the blob again.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    label = _css_decls(html, ".stop-ctl .stop-label")
+    assert "white-space: nowrap" in label, (
+        "the Stop label may wrap again — on a narrow phone 'SLIDE TO STOP' "
+        "takes three lines and drags the thumb's geometry with it"
+    )
+
+    thumb = _css_decls(html, ".stop-ctl.is-slide .ss-thumb")
+    assert "max-height" in thumb, (
+        "nothing caps the thumb's height, so a button that grows for any reason "
+        "stretches it back into an oversized blob"
+    )
+
+    slide_label = _css_decls(html, ".stop-ctl.is-slide .stop-label")
+    assert "text-overflow: ellipsis" in slide_label, (
+        "the label has no truncation fallback — on a 320px phone the Portuguese "
+        "sentence cannot fit beside the thumb at any readable size, and a hard "
+        "mid-letter cut is what made this control look broken in the first place"
+    )
+
+
+def test_slide_label_never_sits_under_the_thumb() -> None:
+    """The thumb is absolutely positioned, so padding is what reserves its lane.
+
+    The first attempt centred the label with auto margins AND pushed it right
+    with its own padding. The two fought for the same pixels: on a wide button
+    the text sat off-centre, and on a narrow one it was squeezed to nothing
+    underneath the thumb. Padding on the button — which the label cannot spend
+    — is the only thing that holds the lane open at every width.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    slide = _css_decls(html, ".stop-ctl.is-slide")
+    label = _css_decls(html, ".stop-ctl.is-slide .stop-label")
+
+    assert "padding-left" in slide, (
+        "the slide track no longer reserves a lane for the thumb, so the label "
+        "renders underneath it"
+    )
+    assert "margin-left: auto" not in label and "padding-left" not in label, (
+        "the label is positioning itself again — that is the arrangement that "
+        "put the text under the thumb"
+    )
+
+
+def test_phone_bar_drops_words_from_play_and_loop_but_never_from_stop() -> None:
+    """Space for the slider comes from the two controls a glyph fully explains.
+
+    PLAY and Loop are unambiguous as symbols. STOP is not: it is the control
+    whose mistake happens in front of an audience, and in slide mode its label
+    is the only thing that says a tap will not do anything. Hiding that word to
+    win a few pixels would reintroduce exactly the silent-Stop failure the
+    slider was built to end.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    phone = [
+        block
+        for block in re.findall(r"@media \(max-width: 600px\)\s*\{(.*?)\n        \}", html, re.S)
+        if ".app-transport" in block
+    ]
+    assert len(phone) == 1, (
+        f"expected one phone rule block for the transport bar, found {len(phone)}"
+    )
+    block = phone[0]
+
+    assert re.search(r"\.t-lbl\s*\{[^{}]*display:\s*none", block), (
+        "the phone bar no longer hides the PLAY and Loop words, so the four "
+        "controls are back to sharing the width by flex weight and the slider "
+        "has no travel"
+    )
+    assert not re.search(r"\.stop-label\s*\{[^{}]*display:\s*none", block), (
+        "the phone bar hides the Stop label — a Stop that will not answer a tap "
+        "and does not say so is the failure this control replaced"
+    )
+    assert re.search(r"\.t-btn-stop\s*\{[^{}]*flex:\s*1", block), (
+        "STOP is no longer the control that absorbs the freed width, so removing "
+        "the words bought the slider nothing"
+    )
+
+
+def test_play_button_keeps_its_word_in_a_span(script_body: str) -> None:
+    """Every writer of the PLAY button must emit the same two spans.
+
+    The label used to be written as a flat string on every play/pause. The phone
+    hides .t-lbl and keeps .t-ico, so the first transport change after load put
+    the word back and re-crammed the bar the slider needs — a layout that is
+    correct only until someone presses play.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    markup = re.search(r'<button[^>]*id="main-play-btn"[^>]*>(.*?)</button>', html, re.S)
+    assert markup, "the main PLAY button is gone"
+    assert 't-ico' in markup.group(1) and 't-lbl' in markup.group(1), (
+        "PLAY's glyph and word are not separate spans, so the phone cannot drop "
+        "the word without dropping the symbol too"
+    )
+
+    # Not "up to the next semicolon": the spans contain HTML entities, and
+    # &#9646; ends in one. A fixed window past the assignment is enough to see
+    # the whole expression and immune to what the value happens to contain.
+    stripped = strip_comments(script_body)
+    writes = [
+        stripped[m.end():m.end() + 320]
+        for m in re.finditer(r"playBtn\.innerHTML\s*=", stripped)
+    ]
+    assert writes, "nothing writes the PLAY button any more"
+    for write in writes:
+        assert "t-ico" in write and "t-lbl" in write, (
+            "a writer of the PLAY button emits a flat label instead of the two "
+            f"spans, so the phone bar re-crams on the next transport change: {write.strip()[:90]}"
+        )

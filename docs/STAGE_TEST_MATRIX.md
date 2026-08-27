@@ -300,6 +300,30 @@ nobody else in the room, and the banner named a takeover that never happened.
 | **K06** | Open a different REAPER project. | Clock at 0:00. | | |
 | **K07** | Long-press the clock on the Director. | Zeroes on every device. On a Controller the long-press still does nothing. | | |
 
+### The phone transport bar
+
+Four controls share about 340px on a phone. Split by flex weight, STOP landed
+at ~75px: "SLIDE TO STOP" wrapped to three lines, the button grew to ~70px
+tall, the absolutely-positioned thumb stretched with it into a blob that read
+as an oversized circle spilling out of its track, and the gesture was left with
+23px of travel. PLAY and Loop are unambiguous as glyphs, so on a phone their
+words come off and the space goes to the slider. STOP keeps its word.
+
+Measured in Chromium at each width before shipping; these cases confirm it on
+real hardware, where the font metrics and the safe-area inset are not the same.
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **P01** | Open ReaSet on the phone in Controller mode, Stop set to Slide. | STOP is a track with a red thumb at the left and the words beside it on **one line**. Nothing overflows the button. | | |
+| **P02** | Same screen, look at PLAY and Loop. | Glyphs only — ▶ and ↻, no words. Both still obviously themselves. | | |
+| **P03** | Drag the STOP thumb slowly to the right. | It follows the finger the whole way, reaches the far end, and the label changes to RELEASE TO STOP. Transport stops on release. | | |
+| **P04** | Press PLAY, then look at the bar again. | PLAY became ▮▮ — still a glyph, still the same width. The bar does **not** re-cram. This is the regression a flat label string caused. | | |
+| **P05** | Rotate the phone to landscape. | Bar re-lays out, slider keeps a usable track, label still one line. | | |
+| **P06** | Switch Stop to Tap in the sidebar, on the phone. | STOP is a plain red button reading STOP, no thumb, and a tap stops. The setting is **per device** — the desktop keeps whatever it had. | | |
+| **P07** | Set the language to Português and repeat P01. | "DESLIZE PARA PARAR" on one line. On a 320px-class phone it may end in an ellipsis; it must never wrap or cut mid-letter. | | |
+| **P08** | Open Live View and Canvas and look at their Stop. | Same slider, same proportions, same label as the footer's. | | |
+| **P09** | Widen a desktop window past 600px. | The words PLAY and Loop come back. | | |
+
 ---
 
 ## 5. Visual block scenarios

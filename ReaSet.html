@@ -1785,8 +1785,14 @@
            Canvas copies cannot drift apart again — the last time each carried
            its own markup, two of the three never updated their label at all. */
         .stop-ctl .ss-thumb { display: none; }
+        /* A wrapped label is what broke this control on a phone: "SLIDE TO
+           STOP" took three lines, the button grew to ~70px tall, and the thumb
+           — which stretches top-to-bottom — became a 46x62 blob that reads as
+           an oversized circle spilling out of the track. One rule prevents the
+           whole cascade. */
+        .stop-ctl .stop-label { white-space: nowrap; }
         .stop-ctl.is-slide {
-            justify-content: flex-start;
+            justify-content: center;
             background: rgba(252, 60, 68, 0.20);
             color: rgba(255, 255, 255, 0.66);
             box-shadow: none;
@@ -1797,15 +1803,34 @@
             touch-action: none;
         }
         .stop-ctl.is-slide .ss-icon { display: none; }
+        /* The thumb is absolutely positioned, so it takes no space in the flex
+           row: the padding is what reserves its lane. Centring the label in
+           what is left keeps it clear of the thumb at every width, which the
+           old auto-margins plus a 42px label padding did not — they fought
+           each other for the same pixels and the text lost. */
+        .stop-ctl.is-slide {
+            padding-left: 54px;
+            padding-right: 12px;
+        }
         .stop-ctl.is-slide .stop-label {
-            margin-left: auto; margin-right: auto;
-            padding-left: 42px;
+            /* The sentence is 13 characters in English and 18 in Portuguese
+               ("DESLIZE PARA PARAR"), and on a 320px phone the widest of them
+               does not fit beside the thumb at any readable size. It degrades
+               to an ellipsis rather than a hard mid-letter cut: truncation the
+               eye reads as truncation, not as the control being broken —
+               which is what the wrapped label looked like. Every phone from
+               360px up shows the whole sentence in all three languages. */
+            min-width: 0; overflow: hidden;
+            text-overflow: ellipsis;
             font-size: 11.5px; letter-spacing: 0.07em;
         }
         .stop-ctl.is-slide .ss-thumb {
             display: flex; align-items: center; justify-content: center;
             position: absolute; left: 4px; top: 4px; bottom: 4px;
-            width: 44px;
+            width: 46px;
+            /* Nothing is allowed to stretch it past a squircle, whatever the
+               button's height turns out to be. */
+            max-height: 46px; margin: auto 0;
             border-radius: var(--radius-pill);
             background: var(--color-active); color: #fff;
             font-size: 14px; line-height: 1;
@@ -1826,10 +1851,59 @@
            wide the word STOP happens to render — and a slide with 40px of
            travel is a tap with extra steps. The footer copy is flex:1 and
            already has room. */
-        .lt-stop.is-slide { min-width: 210px; padding-left: 6px; padding-right: 16px; }
+        .lt-stop.is-slide { min-width: 210px; }
 
         /* The hold fill has no meaning once nothing holds. */
         .stop-ctl.is-slide::before { display: none; }
+
+        /* ── Phone transport bar ────────────────────────────────────────
+           Four controls share ~340px on a phone. Split by flex weight, STOP
+           landed at ~75px — and a slider whose track is 23px long is a tap
+           with extra steps, which is the one thing Slide to Stop exists to
+           stop being. PLAY and Loop are unambiguous as glyphs, so their words
+           come off and every pixel they were holding goes to the slider.
+           STOP keeps its word: it is the control whose mistake happens in
+           front of an audience, and it is the one that has to say what it
+           wants from you. */
+        @media (max-width: 600px) {
+            .app-transport { gap: 5px; padding-left: 10px; padding-right: 10px; }
+            .app-transport .t-lbl { display: none; }
+            .app-transport .t-btn-play,
+            .app-transport .t-btn-loop,
+            .app-transport .t-btn-sync {
+                flex: 0 0 auto;
+                padding-left: 4px; padding-right: 4px;
+            }
+            .app-transport .t-btn-play { min-width: 62px; }
+            .app-transport .t-btn-loop,
+            .app-transport .t-btn-sync { min-width: 52px; }
+            .app-transport .t-btn-play .t-ico,
+            .app-transport .t-btn-loop .t-ico { font-size: 19px; }
+            /* Everything left over is travel. */
+            .app-transport .t-btn-stop { flex: 1 1 auto; min-width: 0; }
+            .app-transport .stop-ctl.is-slide {
+                padding-left: 52px; padding-right: 8px;
+            }
+            .app-transport .stop-ctl.is-slide .stop-label {
+                font-size: 10.5px; letter-spacing: 0.04em;
+            }
+        }
+
+        /* 320px-class phones. At the tier above, the STOP word is 85px wide and
+           the track is 59px: the one label that has to be readable was the one
+           getting clipped. The glyph buttons give back what the word needs. */
+        @media (max-width: 360px) {
+            .app-transport { gap: 4px; padding-left: 8px; padding-right: 8px; }
+            .app-transport .t-btn-play { min-width: 54px; }
+            .app-transport .t-btn-loop,
+            .app-transport .t-btn-sync { min-width: 44px; }
+            .app-transport .stop-ctl.is-slide {
+                padding-left: 50px; padding-right: 6px;
+            }
+            .app-transport .stop-ctl.is-slide .stop-label {
+                font-size: 9.5px; letter-spacing: 0.02em;
+            }
+        }
 
         .t-btn-loop {
             background: transparent;
@@ -4802,11 +4876,11 @@
 
         <!-- TRANSPORT FOOTER -->
         <div class="app-transport">
-            <button class="t-btn t-btn-play" id="main-play-btn" onclick="togglePlay()">▶ PLAY</button>
+            <button class="t-btn t-btn-play" id="main-play-btn" onclick="togglePlay()"><span class="t-ico">▶</span><span class="t-lbl">PLAY</span></button>
             <button class="t-btn t-btn-stop stop-ctl" id="main-stop-btn"
                 style="user-select:none;-webkit-user-select:none"><span class="ss-icon">■</span>
                 <span class="stop-label">STOP</span><span class="ss-thumb" aria-hidden="true">■</span></button>
-            <button id="footer-loop-btn" class="t-btn t-btn-loop" onclick="toggleCurrentLoop()">↻ Loop</button>
+            <button id="footer-loop-btn" class="t-btn t-btn-loop" onclick="toggleCurrentLoop()"><span class="t-ico">↻</span><span class="t-lbl">Loop</span></button>
             <!-- wwr_start() restarts REAPER's polling loop. This said SYNC,
                  which beside PLAY / STOP / Loop reads as "sync the setlist" —
                  the one thing it does not do. It is the recovery a musician has
@@ -10743,7 +10817,12 @@
 
             // Play button text
             var playBtn = document.getElementById("main-play-btn");
-            if (playBtn) playBtn.innerHTML = isPlaying ? "&#9646;&#9646; PAUSE" : "&#9654; PLAY";
+            // Same two spans as the markup: the phone hides .t-lbl and keeps
+            // .t-ico, so a flat string here would put the word back on every
+            // play/pause and re-cram the bar the slider needs.
+            if (playBtn) playBtn.innerHTML = isPlaying
+                ? '<span class="t-ico">&#9646;&#9646;</span><span class="t-lbl">PAUSE</span>'
+                : '<span class="t-ico">&#9654;</span><span class="t-lbl">PLAY</span>';
 
             // Reset old song duration display
             if (lastActiveID && (!activeRegion || activeRegion.uid !== lastActiveID)) {
