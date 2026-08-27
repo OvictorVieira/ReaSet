@@ -2212,7 +2212,7 @@ def test_an_automatic_session_reset_is_not_director_gated(script_body: str) -> N
 
 
 def _css_decls(html: str, selector: str) -> str:
-    """The declaration block of the LAST rule whose selector list matches.
+    """The declaration block of the LAST rule whose selector list includes one.
 
     Last, not first: CSS cascade means a later rule of equal specificity wins,
     so asserting against the first one would pass while the screen disagrees.
@@ -2224,9 +2224,21 @@ def _css_decls(html: str, selector: str) -> str:
     override intact. And a merely line-anchored one matches rules nested in a
     @media block, which are indented further: the last match became a tablet
     override carrying one font-size, and the base rule went unread.
+
+    Matches a GROUPED selector too — `.a, .b { }` is one rule that styles both,
+    and an exact-string match silently reported it missing, which reads as "you
+    deleted this" when the truth is "two selectors now share a block".
     """
-    pat = re.compile(r"(?m)^ {8}" + re.escape(selector) + r"\s*\{([^{}]*)\}")
-    found = pat.findall(html)
+    # Comments first. A rule's explanation sits directly above it at the same
+    # indentation, so without this the match starts at the comment and the
+    # "selector list" is a paragraph of prose with the selector glued on the
+    # end — which reports every documented rule as missing.
+    css = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
+    pat = re.compile(r"(?m)^ {8}(?! )([^{}]*?)\{([^{}]*)\}")
+    found = [
+        body for sels, body in pat.findall(css)
+        if selector in [s.strip() for s in sels.split(",")]
+    ]
     assert found, f"no CSS rule for {selector!r} — it was renamed or deleted"
     return found[-1]
 
@@ -2619,3 +2631,67 @@ def test_the_sidebar_switches_survived_the_stop_removal() -> None:
         ("queueModeToggle", "queue mode"),
     ]:
         assert f'id="{toggle}"' in html, f"the {what} switch is gone from the sidebar"
+
+
+# ── Row state ───────────────────────────────────────────────────────────────
+
+
+def test_row_states_are_surfaces_not_outlines() -> None:
+    """A 2px ring around the playing card was the loudest thing on the screen.
+
+    It fought the PLAY button for the same green, on the one row whose progress
+    fill already said everything, and stacking .cued on .active drew it twice.
+    Each state is a tinted surface now — what the row IS, not a box drawn round
+    it — and the fill growing across that surface is the marker.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    for sel in (".song-row.active", ".song-row.cued", ".grid-card.active",
+                ".grid-card.cued"):
+        decls = _css_decls(html, sel)
+        assert "background:" in decls, f"{sel} has no surface, so only its border says anything"
+        # A solid brand-coloured border IS the ring this replaced.
+        assert not re.search(r"border-color:\s*var\(--color-brand\)", decls), (
+            f"{sel} is outlined in solid brand green again"
+        )
+        assert not re.search(r"box-shadow:\s*inset", decls), (
+            f"{sel} draws an inset bar — the state is meant to be the surface"
+        )
+
+    # Playing beats cued: both at once must not paint two states on one row.
+    both = _css_decls(html, ".song-row.active.cued")
+    active = _css_decls(html, ".song-row.active")
+    assert both.split() == active.split(), (
+        "a row that is playing AND cued no longer renders as merely playing"
+    )
+
+
+def test_a_looping_section_is_marked_where_it_happens(script_body: str) -> None:
+    """A pip in the corner says a loop exists; the row has to say WHERE.
+
+    Standing at a mic, the question is not "does this song loop" — it is "is the
+    loop coming up, or am I already past it". That is a position, so it is drawn
+    as one: the bracket spans the looping section's real place inside the song.
+
+    Percentages of the song's own duration, so it survives every row width
+    without measuring anything.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    body = strip_comments(script_body)
+
+    assert "loop-marks" in html and "loop-mark" in html, "the loop bracket is gone"
+    marks = body[body.index("var loopMarks"):body.index("rowDiv.innerHTML")]
+    assert "sb.loop" in marks, "the bracket no longer follows the section's loop flag"
+    assert "r.duration" in marks and "%" in marks, (
+        "the bracket is no longer positioned as a fraction of the song, so it "
+        "cannot be right at more than one row width"
+    )
+    assert re.search(r"if\s*\(\s*!\(\s*lEnd\s*>\s*lStart\s*\)\s*\)\s*continue", marks), (
+        "a zero-or-negative-width section would still emit a bracket"
+    )
+
+    whole = _css_decls(html, ".loop-mark.is-whole")
+    assert "border: none" in whole, (
+        "a whole-song loop traces the card again — that is a second outline "
+        "around a row that already has one"
+    )

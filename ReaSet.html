@@ -797,37 +797,63 @@
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
         }
 
+        /* ── Row state ──────────────────────────────────────────────────
+           Three states that mean genuinely different things and must never
+           be read for one another on a dark stage:
+
+             .active   REAPER is playing this right now       (observed)
+             .cued     Play starts here                       (intent, idle)
+             .queued   this is next                           (intent, playing)
+
+           Each is a tinted surface plus a bar down its leading edge — the
+           same idiom the view tabs and the action pips already use. What
+           this replaces was a 2px neon ring around the whole card: the
+           loudest thing on the screen, fighting the PLAY button for the
+           same green, on a row whose progress fill already said everything.
+
+           Colour carries the meaning, weight carries the certainty. Brand
+           green for both green states, because they are the same thread —
+           what is playing and what plays next — and the bar is heavier on
+           the one that is actually happening. */
         .song-row.active {
-            background: rgba(255, 255, 255, 0.12);
-            border-color: rgba(255, 255, 255, 0.18);
-            box-shadow: 0 4px 28px rgba(0, 0, 0, 0.5);
+            background: rgba(30, 215, 96, 0.13);
+            border-color: rgba(30, 215, 96, 0.20);
+            box-shadow: none;
         }
+        .song-row.active .song-index { color: var(--color-brand); }
 
         .song-row.skipped {
             opacity: 0.28;
             filter: grayscale(1);
         }
 
-        .song-row.queued {
-            border-color: rgba(255, 159, 10, 0.35);
+        .song-row.queued, .grid-card.queued {
+            background: rgba(255, 159, 10, 0.10);
+            border-color: rgba(255, 159, 10, 0.20);
+            box-shadow: none;
         }
 
-        /* Three states that mean genuinely different things and must never be
-           read for one another on a dark stage:
-             .active   REAPER is playing this right now      (observed)
-             .cued     the user picked this; Play starts here (intent, idle)
-             .queued   the user picked this as next          (intent, playing)
-           .cued gets the brand colour and a left edge because it is the one
-           the performer is about to act on — it answers "what happens if I
-           hit Play", which is the question being asked while stopped. */
         .song-row.cued {
-            border-color: var(--color-brand);
-            box-shadow: inset 3px 0 0 0 var(--color-brand);
+            background: rgba(30, 215, 96, 0.08);
+            border-color: rgba(30, 215, 96, 0.16);
+            box-shadow: none;
         }
 
+        /* Playing wins. "What happens if I press Play" is not a question
+           about the row that is already playing, and stacking the two put a
+           ring around the one card that least needed one. */
+        .song-row.active.cued {
+            background: rgba(30, 215, 96, 0.13);
+            border-color: rgba(30, 215, 96, 0.20);
+            box-shadow: none;
+        }
+
+        /* A grid card is read top-down, so its bar runs along the top edge
+           where a left bar would be read as part of the card beside it. */
         .grid-card.cued {
-            border-color: var(--color-brand);
-            box-shadow: inset 0 3px 0 0 var(--color-brand);
+            background: rgba(30, 215, 96, 0.08);
+            border-color: rgba(30, 215, 96, 0.16);
+            box-shadow: none;
         }
 
         .section-row.cued {
@@ -875,20 +901,58 @@
 
         .song-container { position: relative; }
 
-        /* Progress fill */
+        /* Progress fill.
+           A flat block of colour with a hard vertical edge in the middle of a
+           card reads as something broken, not as elapsed time. A gradient has
+           no edge to misread, and the one edge that IS meaningful — where the
+           playhead is — gets a bright line so it looks aimed rather than cut. */
         .card-bg-fill {
             position: absolute;
             top: 0;
             left: 0;
             height: 100%;
-            background: rgba(30, 215, 96, 0.15);
+            /* Flat, not a gradient, and no leading line.
+               The whole row is green while it plays, so this is not a block of
+               colour sitting on a neutral card — it is the lit part of a bar
+               whose unlit part is right beside it, and the boundary between
+               two greens reads as a position rather than as an edge. That is
+               the only reason the earlier version needed a bright playhead and
+               a fade to look deliberate: it was drawn on a row that gave it no
+               context. */
+            background: rgba(30, 215, 96, 0.20);
             pointer-events: none;
             z-index: 0;
             border-radius: 0;
             transition: width 0.3s linear;
         }
 
-        .song-row>*:not(.card-bg-fill) {
+        /* Sits above the progress fill and below everything readable, so the
+           bracket is something the row is wearing rather than something laid
+           over the words. */
+        .loop-marks {
+            position: absolute;
+            top: 0; right: 0; bottom: 0; left: 0;
+            pointer-events: none;
+            z-index: 0;
+        }
+        .loop-mark {
+            position: absolute;
+            top: 9px; bottom: 9px;
+            border: 1px solid rgba(191, 90, 242, 0.42);
+            border-radius: 5px;
+            background: rgba(191, 90, 242, 0.06);
+            box-sizing: border-box;
+        }
+        /* A loop over the entire song has no interesting edges to mark, and
+           any border here traces the card — a second outline around a row
+           that already has one. The wash alone says it. */
+        .loop-mark.is-whole {
+            border: none;
+            border-radius: 0;
+            background: rgba(191, 90, 242, 0.05);
+        }
+
+        .song-row>*:not(.card-bg-fill):not(.loop-marks) {
             position: relative;
             z-index: 1;
         }
@@ -1621,13 +1685,60 @@
             background: rgba(255, 255, 255, 0.12);
         }
 
-        .grid-card.active {
-            border-color: rgba(252, 60, 68, 0.4);
+        /* This was drawn in --color-active, the STOP red, on the one card
+           that is playing — the opposite of what red means everywhere else
+           in this app. Same language as the list now. */
+        .grid-card.active, .grid-card.active.cued {
+            background: rgba(30, 215, 96, 0.13);
+            border-color: rgba(30, 215, 96, 0.20);
+            box-shadow: none;
         }
+        .grid-card.active .grid-card-index { color: var(--color-brand); }
 
         .grid-card.skipped {
             opacity: 0.28;
             filter: grayscale(1);
+        }
+
+        /* The end-state, the loop and the skip, at the size of a hint rather
+           than a control: in this view they report, they do not edit. */
+        .gc-pips {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 18px;
+        }
+        .gc-pips > * + * { margin-left: 5px; }
+        .gc-pip {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px; height: 18px;
+            border-radius: 50%;
+            font-size: 10px;
+            line-height: 1;
+            color: rgba(255, 255, 255, 0.34);
+            background: rgba(255, 255, 255, 0.06);
+        }
+        .gc-pip.chain-on { color: var(--color-brand);  background: rgba(30, 215, 96, 0.14); }
+        .gc-pip.stop-on  { color: var(--color-active); background: rgba(252, 60, 68, 0.14); }
+        .gc-pip.wait-on  { color: #ff9f0a;             background: rgba(255, 159, 10, 0.14); }
+        .gc-pip.loop-on  { color: var(--color-loop);   background: rgba(191, 90, 242, 0.16); }
+        .gc-pip.skip-on  { color: rgba(255, 255, 255, 0.5); }
+
+        /* A block break, drawn where a grid can actually show one. The list
+           opens a gap above the card that starts a block; a wrapping grid
+           would move that gap sideways into the middle of a row, so the break
+           becomes a rule down the card's leading edge instead — read as "the
+           show stops before this one", the same thing the gap says. */
+        .grid-card.block-start:not(:first-child)::after {
+            content: '';
+            position: absolute;
+            left: 0; top: 14%; bottom: 14%;
+            width: 3px;
+            border-radius: 0 2px 2px 0;
+            background: rgba(255, 255, 255, 0.22);
+            pointer-events: none;
         }
 
         .grid-card-index {
@@ -1664,7 +1775,8 @@
         }
 
         .grid-card.active .grid-card-name {
-            color: var(--color-active);
+            color: #fff;
+            font-weight: 800;
         }
 
         .grid-card-dur {
@@ -10133,9 +10245,23 @@
 
                     // Feature 8: nosong items show no index number
                     var gridIndex = r.nosong ? '' : (i + 1) + '.';
+                    // The grid used to show a number, a name and a duration and
+                    // nothing else — so the one thing a performer reads a
+                    // setlist for, where the show pauses, was invisible in this
+                    // view and spelled out in the other. The end-state pip is
+                    // the same mark the list draws; a run of them ending in a
+                    // stop IS the block, which is what the list says with a gap
+                    // it cannot use here (a wrapping grid moves a top margin
+                    // sideways, where it means nothing).
+                    var gEnd = songEndVisual(r);
+                    var gPips = '<span class="gc-pip ' + gEnd.cls.replace('sa-btn', '').trim()
+                        + '" title="' + gEnd.title + '">' + gEnd.icon + '</span>'
+                        + (r.loop ? '<span class="gc-pip loop-on" title="Loop">&#8635;</span>' : '')
+                        + (r.skipped ? '<span class="gc-pip skip-on" title="Skipped">&#10005;</span>' : '');
                     li.innerHTML = '<div class="card-bg-fill" id="bg-' + r.uid + '" style="border-radius: var(--radius-card);"></div>'
                         + '<span class="grid-card-index">' + gridIndex + '</span>'
                         + '<div class="grid-card-name">' + rDisplayName + (r.markerInfo ? '<span class="song-name-info">' + r.markerInfo + '</span>' : '') + '</div>'
+                        + '<div class="gc-pips">' + gPips + '</div>'
                         + '<span class="grid-card-dur" id="dur-' + r.uid + '" data-length="' + formatTime(r.duration) + '">' + formatTime(r.duration) + '</span>';
                     listEl.appendChild(li);
                 }
@@ -10210,8 +10336,35 @@
                         + (r.markerInfo ? '<span class="song-name-info">' + r.markerInfo + '</span>' : '')
                         + descHtml;
 
+                    // Where a looping section sits INSIDE the song, drawn at
+                    // its real position and width. A purple pip in the corner
+                    // says "this song has a loop somewhere"; this says WHERE,
+                    // which is what a performer standing at a mic needs from a
+                    // glance — is the loop coming up, or am I already past it.
+                    //
+                    // Percentages of the song's own duration, so it survives
+                    // every row width without measuring anything.
+                    var loopMarks = '';
+                    if (r.duration > 0) {
+                        for (var lm = 0; lm < subs.length; lm++) {
+                            var sb = subs[lm];
+                            if (!sb.loop) continue;
+                            var lStart = ((sb.start - r.start) / r.duration) * 100;
+                            var lEnd   = ((sb.end   - r.start) / r.duration) * 100;
+                            if (!(lEnd > lStart)) continue;
+                            lStart = Math.max(0, Math.min(100, lStart));
+                            lEnd   = Math.max(0, Math.min(100, lEnd));
+                            loopMarks += '<span class="loop-mark" style="left:' + lStart.toFixed(2)
+                                + '%;width:' + (lEnd - lStart).toFixed(2) + '%"></span>';
+                        }
+                    }
+                    // The whole song loops: bracket the whole row rather than
+                    // a slice of it, because that is what is true.
+                    if (r.loop) loopMarks += '<span class="loop-mark is-whole" style="left:0;width:100%"></span>';
+
                     rowDiv.innerHTML =
                         '<div class="card-bg-fill" id="bg-' + r.uid + '"></div>'
+                        + (loopMarks ? '<div class="loop-marks">' + loopMarks + '</div>' : '')
                         + '<div class="drag-handle">⋮⋮</div>'
                         + '<button class="song-remove-btn" title="' + t('Remove from setlist') + '" onclick="event.stopPropagation(); removeFromSetlist(\'' + r.uid + '\')">&#10005;</button>'
                         + '<button class="song-dotmenu-btn" onclick="event.stopPropagation(); openSongMenu(event,\'' + r.uid + '\')"><svg width="4" height="18" viewBox="0 0 4 18" fill="currentColor"><circle cx="2" cy="2" r="2"/><circle cx="2" cy="9" r="2"/><circle cx="2" cy="16" r="2"/></svg></button>'
