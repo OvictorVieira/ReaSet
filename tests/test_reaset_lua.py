@@ -13,6 +13,7 @@ times it walks the project, and only running it can count that.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -373,3 +374,46 @@ def test_generate_spreads_the_lines_across_a_real_span() -> None:
         "with no span it invented one — forty items land somewhere nobody chose"
     )
     assert "region" in lua.globals()["ui_msg"], "it refused without saying why"
+
+
+def test_the_track_template_round_trips_its_notes() -> None:
+    """A generated file nobody can read back is how a format bug ships.
+
+    ReaSet reads Item Notes, not the take name, so the whole point of emitting a
+    track template instead of MIDI is the `<NOTES>` block. This proves the chunk
+    is balanced and every lyric survives it — including the ones carrying `<`,
+    `>` and `|`, which are chunk syntax and would otherwise be read as
+    structure.
+    """
+    sys.path.insert(0, str(ROOT / "Tools"))
+    import lyrics_to_reaper as gen
+
+    lyrics = [
+        "I'm tired of being what you want me to be",
+        "a line with <angle> brackets",
+        "a pipe | inside",
+        "> leading angle",
+        "acentuação e ç",
+    ]
+    chunk = gen.build_template("Numb", lyrics, 4.0, "Lyrics")
+    assert gen.notes_from_template(chunk) == lyrics, (
+        "a lyric did not survive the chunk"
+    )
+    assert chunk.count("<ITEM") == len(lyrics), "one item per line"
+    assert "NAME Lyrics" in chunk, "the track does not arrive with the exact name"
+
+    # Re-running on an unchanged sheet must produce an identical file, or the
+    # output churns on every run and cannot be reviewed in a diff.
+    assert gen.build_template("Numb", lyrics, 4.0, "Lyrics") == chunk
+
+    parsed, skipped = gen.parse_lines("Chorus\num verso\n\n  mais um  \n")
+    assert parsed == ["um verso", "mais um"] and skipped == 1
+
+    # A collision worth knowing about rather than discovering on stage: "outro"
+    # is an English section name and the Portuguese word for "another". A line
+    # that is exactly "outro" is dropped. --keep-sections is the way out, and
+    # the Lyrics Tapper's list has the same overlap.
+    parsed, skipped = gen.parse_lines("outro\n")
+    assert parsed == [] and skipped == 1
+    parsed, _ = gen.parse_lines("outro\n", keep_sections=True)
+    assert parsed == ["outro"], "--keep-sections must be the escape hatch"
