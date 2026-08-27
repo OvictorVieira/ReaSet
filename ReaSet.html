@@ -6202,7 +6202,6 @@
             ["Name for this device (other devices see it):",
              "Nombre de este dispositivo (lo ven los otros dispositivos):",
              "Nome deste dispositivo (os outros dispositivos veem):"],
-            ["New position for", "Nueva posición para", "Nova posição para"],
             ["New setlist name:", "Nombre del nuevo setlist:", "Nome do novo setlist:"],
             ["Active setlist, set by the Director", "Setlist activo, definido por el Director",
              "Setlist ativo, definido pelo Diretor"],
@@ -6211,6 +6210,8 @@
             ["STOP has to be dragged across, like the Mac's slide-to-power-off.\nA stray tap cannot stop the show, and a slide half-taken is abandoned by letting go.\nTurn this off for a plain STOP button that acts on one press.",
              "STOP hay que arrastrarlo de lado a lado, como el deslizar para apagar del Mac.\nUn toque accidental no puede parar el show, y un deslizamiento a medias se abandona soltando.\nDesactivalo para tener un botón STOP común que actúa con una sola pulsación.",
              "O STOP tem que ser arrastado de um lado ao outro, igual ao deslizar para desligar do Mac.\nUm toque acidental não para o show, e um deslize pela metade é abandonado ao soltar.\nDesligue isso para ter um botão STOP comum, que age num toque só."],
+            ["Note about the song…", "Nota sobre la canción…", "Nota sobre a música…"],
+            ["Remove colour", "Quitar color", "Remover cor"],
             ["Amber", "Ámbar", "Âmbar"],
             ["Teal", "Verde azulado", "Verde-azulado"]
         ];
@@ -6336,6 +6337,9 @@
         var isPlaying = false;
         var currentPos = 0.0;
         var queuedRegion = null;
+        // Holds a UID, not a region id — its only job is to find the element
+        // painted last time so it can be un-painted, and with a repeat the
+        // region id names two of them.
         var lastActiveID = null;
         var lastRenderChecksum = "";
         var isDragging = false;
@@ -6756,7 +6760,11 @@
                 autoStop: !!(document.getElementById('autoStopToggle') || {}).checked,
                 setlist: displayList.map(function (r) {
                     return {
-                        id: r.id, chain: !!r.chain, skipped: !!r.skipped, loop: !!r.loop,
+                        // uid so a follower keys its DOM off the SAME value the
+                        // Director does. "The phone highlights the row the Mac is
+                        // playing" then holds by construction rather than by
+                        // coincidence of ordering.
+                        id: r.id, uid: r.uid, chain: !!r.chain, skipped: !!r.skipped, loop: !!r.loop,
                         // The resolved end-state, because the two inputs it is
                         // built from are NOT shared: stopAfter and delayAfter
                         // live in g_songOverrides, which is this browser's
@@ -7031,35 +7039,45 @@
 
             var doApply = function () {
                 _syncLastAppliedRev = payload.rev;
-                var reordered = [];
+                // The follower BUILDS a row per payload entry rather than
+                // looking one up and reusing it. The old first-match-with-break
+                // bound two payload entries for a repeated song to the SAME
+                // local object and pushed it in twice — one object at two
+                // indices, so every per-row flag was shared, and the leftover
+                // pass below then skipped it. Two rows means two objects, here
+                // as everywhere else.
+                //
+                // The Director's uid is adopted verbatim, so both devices key
+                // their DOM off the same value.
+                //
+                // syncedEnd / syncedWait are stored on the row rather than
+                // written into g_songOverrides: overrides are this device's
+                // authoring data, and a follower must not end up owning a copy
+                // of the Director's. getSongEnd() reads syncedEnd only where
+                // this device does not author, so a Director's own overrides
+                // are never shadowed by something it received.
+                var byRegion = {};
+                for (var bk = 0; bk < displayList.length; bk++) {
+                    if (!byRegion.hasOwnProperty(displayList[bk].id)) byRegion[displayList[bk].id] = displayList[bk];
+                }
+                var reordered = [], adopted = {};
                 for (var j = 0; j < payload.setlist.length; j++) {
-                    var found = null;
-                    for (var k = 0; k < displayList.length; k++) {
-                        if (displayList[k].id === payload.setlist[j].id) { found = displayList[k]; break; }
+                    var ent = payload.setlist[j];
+                    var src = byRegion[ent.id];
+                    if (!src) continue;   // this follower's project has no such region
+                    var built = _makeInstance(src, ent.uid || _newUid(ent.id), ent);
+                    if (ent.end) {
+                        built.syncedEnd  = ent.end;
+                        built.syncedWait = ent.wait || 0;
                     }
-                    if (found) {
-                        found.chain   = !!payload.setlist[j].chain;
-                        found.skipped = !!payload.setlist[j].skipped;
-                        found.loop    = !!payload.setlist[j].loop;
-                        // Stored on the region rather than written into
-                        // g_songOverrides: overrides are this device's
-                        // authoring data, and a follower must not end up
-                        // owning a copy of the Director's. syncedEnd is read
-                        // by getSongEnd() only when this device does not
-                        // author, so a Director's own overrides are never
-                        // shadowed by something it received.
-                        if (payload.setlist[j].end) {
-                            found.syncedEnd  = payload.setlist[j].end;
-                            found.syncedWait = payload.setlist[j].wait || 0;
-                        }
-                        reordered.push(found);
-                    }
+                    adopted[ent.id] = true;
+                    reordered.push(built);
                 }
                 // Anything local the shared payload doesn't mention (e.g. a
                 // region that only exists on THIS device's view) is kept,
                 // appended at the end, instead of silently vanishing.
                 for (var m = 0; m < displayList.length; m++) {
-                    if (reordered.indexOf(displayList[m]) === -1) reordered.push(displayList[m]);
+                    if (!adopted[displayList[m].id]) reordered.push(displayList[m]);
                 }
                 displayList = reordered;
 
@@ -7735,7 +7753,13 @@
             _ctxPanel = null; _ctxBtnRef = null;
         }
 
-        function openSongMenu(event, songId) {
+        // Takes a UID. The panel spans both identity axes and has to keep them
+        // straight: Loop and Skip are per-ROW, while the end-state, the note and
+        // the colour are per-SONG so both instances of a repeat agree. Every
+        // control here is handed the ROW's uid and the _ctx* handlers resolve
+        // the song from it — one convention beats two, and the element ids have
+        // to be per-row regardless or two panels would collide.
+        function openSongMenu(event, rowUid) {
             event.stopPropagation();
             var btn = event.currentTarget;
             if (_ctxPanel && _ctxBtnRef === btn) { closeOpenCtxPanel(); return; }
@@ -7743,13 +7767,15 @@
             btn.classList.add('active');
             _ctxBtnRef = btn;
 
-            var ov = getOverride(songId);
+            var _song = _instanceForAction(rowUid, 'openSongMenu');
+            if (!_song) { closeOpenCtxPanel(); return; }
+            rowUid = _song.uid;
+
+            var ov = getOverride(_song.id);
             var delayAfter = ov.delayAfter || 0;
-            var _song = null;
-            for (var _i = 0; _i < displayList.length; _i++) if (displayList[_i].id == songId) { _song = displayList[_i]; break; }
-            var endState = _song ? getSongEnd(_song) : 'auto';
-            var isLoop = !!(_song && _song.loop);
-            var isSkip = !!(_song && _song.skipped);
+            var endState = getSongEnd(_song);
+            var isLoop = !!_song.loop;
+            var isSkip = !!_song.skipped;
             // Spells out what "Auto" resolves to right now, so the global
             // setting is legible from here instead of only in the sidebar.
             var _asEl = document.getElementById('autoStopToggle');
@@ -7759,16 +7785,13 @@
             var colorHex   = ov.colorHex || '';
             var colorOn    = !!colorHex;
 
-            var songName = '';
-            for (var i = 0; i < displayList.length; i++) {
-                if (displayList[i].id == songId) { songName = displayList[i].displayName || displayList[i].name; break; }
-            }
+            var songName = _song.displayName || _song.name;
 
             var paletteHtml = '';
             for (var c = 0; c < SONG_COLOR_PALETTE.length; c++) {
                 var cx = SONG_COLOR_PALETTE[c];
                 var sel = (colorHex === cx) ? ' selected' : '';
-                paletteHtml += '<div class="ctx-color-swatch' + sel + '" style="background:' + cx + '" data-color="' + cx + '" onclick="_ctxPickColor(\'' + songId + '\',\'' + cx + '\')"></div>';
+                paletteHtml += '<div class="ctx-color-swatch' + sel + '" style="background:' + cx + '" data-color="' + cx + '" onclick="_ctxPickColor(\'' + rowUid + '\',\'' + cx + '\')"></div>';
             }
 
             var panel = document.createElement('div');
@@ -7778,34 +7801,34 @@
                 + '<div class="song-ctx-section">'
                 + '<div class="song-ctx-sublabel">' + t('When this song ends') + '</div>'
                 + '<div class="ap-seg ctx-end-seg">'
-                +   '<button' + (endState === 'auto'     ? ' class="active"' : '') + ' onclick="_ctxSetEnd(\'' + songId + '\',\'auto\')">'     + t('Auto')     + '</button>'
-                +   '<button' + (endState === 'continue' ? ' class="active"' : '') + ' onclick="_ctxSetEnd(\'' + songId + '\',\'continue\')">' + t('Continue') + '</button>'
-                +   '<button' + (endState === 'stop'     ? ' class="active"' : '') + ' onclick="_ctxSetEnd(\'' + songId + '\',\'stop\')">'     + t('Stop')     + '</button>'
-                +   '<button' + (endState === 'wait'     ? ' class="active"' : '') + ' onclick="_ctxSetEnd(\'' + songId + '\',\'wait\')">'     + t('Wait')     + '</button>'
+                +   '<button' + (endState === 'auto'     ? ' class="active"' : '') + ' onclick="_ctxSetEnd(\'' + rowUid + '\',\'auto\')">'     + t('Auto')     + '</button>'
+                +   '<button' + (endState === 'continue' ? ' class="active"' : '') + ' onclick="_ctxSetEnd(\'' + rowUid + '\',\'continue\')">' + t('Continue') + '</button>'
+                +   '<button' + (endState === 'stop'     ? ' class="active"' : '') + ' onclick="_ctxSetEnd(\'' + rowUid + '\',\'stop\')">'     + t('Stop')     + '</button>'
+                +   '<button' + (endState === 'wait'     ? ' class="active"' : '') + ' onclick="_ctxSetEnd(\'' + rowUid + '\',\'wait\')">'     + t('Wait')     + '</button>'
                 + '</div>'
-                + '<div class="song-ctx-row" id="_ctx_waitrow_' + songId + '"' + (endState === 'wait' ? '' : ' style="display:none"') + '>'
-                +   '<input type="number" min="1" max="300" step="1" class="song-ctx-input num-input" id="_ctx_delay_' + songId + '" value="' + (delayAfter || 5) + '" onchange="_ctxSetEnd(\'' + songId + '\',\'wait\',this.value)">'
+                + '<div class="song-ctx-row" id="_ctx_waitrow_' + rowUid + '"' + (endState === 'wait' ? '' : ' style="display:none"') + '>'
+                +   '<input type="number" min="1" max="300" step="1" class="song-ctx-input num-input" id="_ctx_delay_' + rowUid + '" value="' + (delayAfter || 5) + '" onchange="_ctxSetEnd(\'' + rowUid + '\',\'wait\',this.value)">'
                 +   '<span class="song-ctx-label" style="font-size:11px;color:rgba(255,255,255,0.38)">' + t('seconds before the next song') + '</span></div>'
                 + '<div class="song-ctx-sublabel" style="margin-top:8px;opacity:.7">' + autoHint + '</div>'
                 + '</div>'
                 + '<div class="song-ctx-section"><div class="song-ctx-row">'
                 + '<span class="song-ctx-label">&#8635; ' + t('Loop') + '</span>'
-                + '<label class="song-ctx-toggle"><input type="checkbox"' + (isLoop ? ' checked' : '') + ' onchange="toggleLoop(\'' + songId + '\');closeOpenCtxPanel()"><span class="song-ctx-track"><span class="song-ctx-thumb"></span></span></label>'
+                + '<label class="song-ctx-toggle"><input type="checkbox"' + (isLoop ? ' checked' : '') + ' onchange="toggleLoop(\'' + rowUid + '\');closeOpenCtxPanel()"><span class="song-ctx-track"><span class="song-ctx-thumb"></span></span></label>'
                 + '</div></div>'
                 + '<div class="song-ctx-section"><div class="song-ctx-row">'
                 + '<span class="song-ctx-label">&#10005; ' + t('Skip') + '</span>'
-                + '<label class="song-ctx-toggle"><input type="checkbox"' + (isSkip ? ' checked' : '') + ' onchange="toggleSkip(\'' + songId + '\');closeOpenCtxPanel()"><span class="song-ctx-track"><span class="song-ctx-thumb"></span></span></label>'
+                + '<label class="song-ctx-toggle"><input type="checkbox"' + (isSkip ? ' checked' : '') + ' onchange="toggleSkip(\'' + rowUid + '\');closeOpenCtxPanel()"><span class="song-ctx-track"><span class="song-ctx-thumb"></span></span></label>'
                 + '</div></div>'
                 + '<div class="song-ctx-section">'
                 + '<div class="song-ctx-sublabel"><svg width="13" height="13" viewBox="0 0 13 13" style="display:inline;vertical-align:-2px"><rect x="2" y="1.5" width="9" height="10" rx="1.2" stroke="rgba(255,255,255,0.65)" stroke-width="1.2" fill="none"/><path d="M4.5 5h4M4.5 7h4M4.5 9h2.5" stroke="rgba(255,255,255,0.65)" stroke-width="1.1" stroke-linecap="round"/></svg> Nota / Descripci\u00f3n</div>'
-                + '<textarea class="song-ctx-input" rows="2" id="_ctx_desc_' + songId + '" placeholder="Nota sobre la canci\u00f3n\u2026" style="resize:none" onchange="_ctxSetDesc(\'' + songId + '\',this.value)">' + desc + '</textarea>'
+                + '<textarea class="song-ctx-input" rows="2" id="_ctx_desc_' + rowUid + '" placeholder="' + t('Note about the song…') + '" style="resize:none" onchange="_ctxSetDesc(\'' + rowUid + '\',this.value)">' + desc + '</textarea>'
                 + '</div>'
                 + '<div class="song-ctx-section"><div class="song-ctx-row">'
                 + '<span class="song-ctx-label"><svg width="13" height="13" viewBox="0 0 13 13" style="display:inline;vertical-align:-2px"><circle cx="6.5" cy="6.5" r="5" stroke="rgba(255,255,255,0.65)" stroke-width="1.2" fill="none"/><circle cx="4.2" cy="5" r="1.1" fill="rgba(255,255,255,0.65)"/><circle cx="8.8" cy="5" r="1.1" fill="rgba(255,255,255,0.65)"/><circle cx="6.5" cy="9" r="1.1" fill="rgba(255,255,255,0.65)"/></svg> Color</span>'
-                + '<label class="song-ctx-toggle"><input type="checkbox" id="_ctx_coloron_' + songId + '"' + (colorOn ? ' checked' : '') + ' onchange="_ctxToggleColor(\'' + songId + '\',this.checked)"><span class="song-ctx-track"><span class="song-ctx-thumb"></span></span></label>'
-                + '</div><div id="_ctx_palette_' + songId + '"' + (!colorOn ? ' style="display:none"' : '') + '>'
+                + '<label class="song-ctx-toggle"><input type="checkbox" id="_ctx_coloron_' + rowUid + '"' + (colorOn ? ' checked' : '') + ' onchange="_ctxToggleColor(\'' + rowUid + '\',this.checked)"><span class="song-ctx-track"><span class="song-ctx-thumb"></span></span></label>'
+                + '</div><div id="_ctx_palette_' + rowUid + '"' + (!colorOn ? ' style="display:none"' : '') + '>'
                 + '<div class="song-ctx-palette">' + paletteHtml + '</div>'
-                + '<button class="ctx-clear-btn" onclick="_ctxClearColor(\'' + songId + '\')">\u2715 Quitar color</button>'
+                + '<button class="ctx-clear-btn" onclick="_ctxClearColor(\'' + rowUid + '\')">\u2715 ' + t('Remove colour') + '</button>'
                 + '</div></div>';
 
             document.body.appendChild(panel);
@@ -7831,21 +7854,26 @@
             }, 10);
         }
 
-        function _ctxSetEnd(id, state, seconds) {
+        // These take the ROW's uid (see openSongMenu) and resolve the song
+        // from it, because what they write is keyed on the region.
+        function _ctxSetEnd(uid, state, seconds) {
+            var id = _uidToRegionId(uid); if (id === null) return;
             setSongEnd(id, state, seconds);
             // Repaint in place so the segment highlight and the seconds row
             // follow the new state without the panel closing under the user.
             var btn = _ctxBtnRef;
             closeOpenCtxPanel();
-            if (btn) openSongMenu({ stopPropagation: function () {}, currentTarget: btn }, id);
+            if (btn) openSongMenu({ stopPropagation: function () {}, currentTarget: btn }, uid);
         }
 
-        function _ctxSetDesc(id, val) {
+        function _ctxSetDesc(uid, val) {
+            var id = _uidToRegionId(uid); if (id === null) return;
             setSongOverride(id, 'description', val.trim());
         }
 
-        function _ctxToggleColor(id, on) {
-            var pal = document.getElementById('_ctx_palette_' + id);
+        function _ctxToggleColor(uid, on) {
+            var id = _uidToRegionId(uid); if (id === null) return;
+            var pal = document.getElementById('_ctx_palette_' + uid);
             if (pal) pal.style.display = on ? '' : 'none';
             if (!on) {
                 setSongOverride(id, 'colorHex', null);
@@ -7856,7 +7884,8 @@
             }
         }
 
-        function _ctxPickColor(id, hex) {
+        function _ctxPickColor(uid, hex) {
+            var id = _uidToRegionId(uid); if (id === null) return;
             setSongOverride(id, 'colorHex', hex);
             if (_ctxPanel) {
                 var sw = _ctxPanel.querySelectorAll('.ctx-color-swatch');
@@ -7865,9 +7894,10 @@
             }
         }
 
-        function _ctxClearColor(id) {
+        function _ctxClearColor(uid) {
+            var id = _uidToRegionId(uid); if (id === null) return;
             setSongOverride(id, 'colorHex', null);
-            var cb = document.getElementById('_ctx_coloron_' + id);
+            var cb = document.getElementById('_ctx_coloron_' + uid);
             if (cb) { cb.checked = false; _ctxToggleColor(id, false); }
             else closeOpenCtxPanel();
         }
@@ -8892,10 +8922,7 @@
                 // published a position for that neighbour — an older
                 // Reaset.lua without prevPos/nextPos leaves pPos/nPos as NaN,
                 // and clamping is simply skipped (today's behaviour).
-                var _lyActiveIdx = -1;
-                for (var _lai = 0; _lai < displayList.length; _lai++) {
-                    if (currentPos >= displayList[_lai].start && currentPos < displayList[_lai].end) { _lyActiveIdx = _lai; break; }
-                }
+                var _lyActiveIdx = activeInstanceIdx();
                 if (_lyActiveIdx !== -1) {
                     var _lyActiveSong = displayList[_lyActiveIdx];
                     var _lyPrevPos = parseFloat(xr_lyrics_prev_pos);
@@ -9422,42 +9449,53 @@
 
             g_subRegionMap = subMap;
 
+            // `delete mainMap[id]` used to double as the "already placed" mark.
+            // That idiom cannot represent a repeat AT ALL: the second saved entry
+            // for the same song finds the key already gone and is dropped without
+            // a trace. Consumption is tracked separately now, so the map stays a
+            // plain lookup and a song may be placed as often as the set asks.
             if (displayList.length === 0 && !initialized) {
                 var saved = setlists[currentSetlistName];
+                var placed = {};
                 for (var j = 0; j < saved.length; j++) {
                     var item = saved[j];
-                    if (mainMap.hasOwnProperty(item.id)) {
-                        var d = mainMap[item.id];
-                        d.chain = item.chain; d.skipped = (item.skipped === true); d.loop = (item.loop === true);
-                        displayList.push(d); delete mainMap[item.id];
-                    }
+                    if (!mainMap.hasOwnProperty(item.id)) continue;   // region left the project
+                    placed[item.id] = true;
+                    displayList.push(_makeInstance(mainMap[item.id], _newUid(item.id), item));
                 }
                 var newItems = [];
-                for (var k in mainMap) { if (mainMap.hasOwnProperty(k)) newItems.push(mainMap[k]); }
+                for (var k in mainMap) { if (mainMap.hasOwnProperty(k) && !placed[k]) newItems.push(mainMap[k]); }
                 newItems.sort(function (a, b) { return a.start - b.start; });
-                for (var n = 0; n < newItems.length; n++) { newItems[n].chain = false; newItems[n].skipped = !!newItems[n].defaultSkip; newItems[n].loop = false; displayList.push(newItems[n]); }
+                for (var n = 0; n < newItems.length; n++) {
+                    displayList.push(_makeInstance(newItems[n], _newUid(newItems[n].id),
+                                                   { skipped: !!newItems[n].defaultSkip }));
+                }
                 if (displayList.length > 0 && !isPlaying) wwr_req("SET/POS/" + displayList[0].start, "setlist-init-cursor");
                 initialized = true;
             } else {
-                var activeIDs = {};
+                // Refresh in place. Rows KEEP the uid they were given: it is a
+                // DOM key, and reassigning it on every REGION poll would churn
+                // every element id once a second and force a full repaint.
+                var kept = [], present = {};
                 for (var m = 0; m < displayList.length; m++) {
                     var itm = displayList[m];
-                    if (mainMap.hasOwnProperty(itm.id)) {
-                        var rd = mainMap[itm.id];
-                        itm.name = rd.name; itm.start = rd.start; itm.end = rd.end; itm.duration = rd.duration; itm.color = rd.color;
-                        activeIDs[itm.id] = true; delete mainMap[itm.id];
-                    }
+                    if (!mainMap.hasOwnProperty(itm.id)) continue;    // region left the project
+                    var rd = mainMap[itm.id];
+                    itm.name = rd.name; itm.start = rd.start; itm.end = rd.end; itm.duration = rd.duration; itm.color = rd.color;
+                    if (!itm.uid) itm.uid = _newUid(itm.id);
+                    present[itm.id] = true;
+                    kept.push(itm);
                 }
-                var filtered = [];
-                for (var p = 0; p < displayList.length; p++) { if (activeIDs[displayList[p].id]) filtered.push(displayList[p]); }
-                displayList = filtered;
+                displayList = kept;
                 var newItems2 = [];
-                for (var k2 in mainMap) { if (mainMap.hasOwnProperty(k2)) newItems2.push(mainMap[k2]); }
+                for (var k2 in mainMap) { if (mainMap.hasOwnProperty(k2) && !present[k2]) newItems2.push(mainMap[k2]); }
                 newItems2.sort(function (a, b) { return a.start - b.start; });
-                for (var n2 = 0; n2 < newItems2.length; n2++) { newItems2[n2].chain = false; newItems2[n2].skipped = false; newItems2[n2].loop = false; displayList.push(newItems2[n2]); }
+                for (var n2 = 0; n2 < newItems2.length; n2++) {
+                    displayList.push(_makeInstance(newItems2[n2], _newUid(newItems2[n2].id), null));
+                }
             }
             saveCurrentState();
-            var cs = JSON.stringify(displayList.map(function (r) { return { id: r.id, chain: r.chain, skipped: r.skipped, loop: r.loop, name: r.name, color: r.color }; })) + (_hideSkippedEffective() ? 1 : 0) + JSON.stringify(g_subRegionMap) + JSON.stringify(g_songOverrides);
+            var cs = JSON.stringify(displayList.map(function (r) { return { id: r.id, uid: r.uid, chain: r.chain, skipped: r.skipped, loop: r.loop, name: r.name, color: r.color }; })) + (_hideSkippedEffective() ? 1 : 0) + JSON.stringify(g_subRegionMap) + JSON.stringify(g_songOverrides);
             if (cs !== lastRenderChecksum) { lastRenderChecksum = cs; renderSetlist(); updatePlaybackUI(); }
         }
 
@@ -9758,21 +9796,22 @@
 
         // --- 6. RENDER ---
         // Toggle expand/collapse for a song
-        function toggleExpand(id, hasSections) {
+        // expandedSongs keys on the UID: expanding one instance of a repeated
+        // song must not open the other. It is per-session state that nothing
+        // persists, so a uid is a safe key for it.
+        function toggleExpand(uid, hasSections) {
+            var inst = _instanceForAction(uid, 'toggleExpand');
             if (!hasSections) {
-                // No sections: just play directly
-                for (var k = 0; k < displayList.length; k++) {
-                    if (displayList[k].id == id) { playRegion(displayList[k].start, id); return; }
-                }
+                if (inst) playRegion(inst.start, inst.id, inst.uid);
                 return;
             }
-            expandedSongs[id] = !expandedSongs[id];
-            var sl = document.getElementById("slist-" + id);
-            var chev = document.getElementById("chev-" + id);
-            var row = document.getElementById("row-" + id);
-            if (sl) sl.classList.toggle("open", !!expandedSongs[id]);
-            if (chev) chev.classList.toggle("open", !!expandedSongs[id]);
-            if (row) row.classList.toggle("expanded", !!expandedSongs[id]);
+            expandedSongs[uid] = !expandedSongs[uid];
+            var sl = document.getElementById("slist-" + uid);
+            var chev = document.getElementById("chev-" + uid);
+            var row = document.getElementById("row-" + uid);
+            if (sl) sl.classList.toggle("open", !!expandedSongs[uid]);
+            if (chev) chev.classList.toggle("open", !!expandedSongs[uid]);
+            if (row) row.classList.toggle("expanded", !!expandedSongs[uid]);
         }
 
         function renderSetlist() {
@@ -9791,8 +9830,8 @@
                     if (_hideSkippedEffective() && r.skipped) continue;
                     var li = document.createElement("li");
                     li.className = "song-row" + (r.skipped ? " skipped" : "");
-                    li.id = "row-" + r.id; li.setAttribute("data-id", r.id);
-                    li.setAttribute("onclick", "playRegion(" + r.start + ",'" + r.id + "')");
+                    li.id = "row-" + r.uid; li.setAttribute("data-id", r.id); li.setAttribute("data-uid", r.uid);
+                    li.setAttribute("onclick", "playRegion(" + r.start + ",'" + r.id + "','" + r.uid + "')");
                     // Use REAPER color directly (exact hex, no palette snap)
                     var reapColor = r.color || null;
                     var classAdds = reapColor ? " has-mapped-color" : "";
@@ -9805,10 +9844,10 @@
 
                     // Feature 8: nosong items show no index number
                     var gridIndex = r.nosong ? '' : (i + 1) + '.';
-                    li.innerHTML = '<div class="card-bg-fill" id="bg-' + r.id + '" style="border-radius: var(--radius-card);"></div>'
-                        + '<span class="grid-card-index" onclick="event.stopPropagation(); reorderPrompt(\'' + r.id + '\')">' + gridIndex + '</span>'
+                    li.innerHTML = '<div class="card-bg-fill" id="bg-' + r.uid + '" style="border-radius: var(--radius-card);"></div>'
+                        + '<span class="grid-card-index">' + gridIndex + '</span>'
                         + '<div class="grid-card-name">' + rDisplayName + (r.markerInfo ? '<span class="song-name-info">' + r.markerInfo + '</span>' : '') + '</div>'
-                        + '<span class="grid-card-dur" id="dur-' + r.id + '" data-length="' + formatTime(r.duration) + '">' + formatTime(r.duration) + '</span>';
+                        + '<span class="grid-card-dur" id="dur-' + r.uid + '" data-length="' + formatTime(r.duration) + '">' + formatTime(r.duration) + '</span>';
                     listEl.appendChild(li);
                 }
             } else {
@@ -9822,7 +9861,7 @@
 
                     var subs = g_subRegionMap[r.name] || [];
                     var hasSubs = subs.length > 0;
-                    var isExp = !!expandedSongs[r.id];
+                    var isExp = !!expandedSongs[r.uid];
 
                     var _endVis = songEndVisual(r);
                     var chainIcon = _endVis.icon;
@@ -9847,11 +9886,14 @@
                     // Chorus.
                     li.className = "song-container" + (isBlockStart(i) ? " block-start" : "");
                     li.setAttribute("data-id", r.id);
+                    // The ORDER is rebuilt from these on drag-end, so a row has
+                    // to be identifiable as a ROW, not merely as a song.
+                    li.setAttribute("data-uid", r.uid);
 
                     // --- Song row ---
                     var rowDiv = document.createElement("div");
                     rowDiv.className = "song-row" + (r.skipped ? " skipped" : "") + (isExp ? " expanded" : "") + classAdds + extraClass;
-                    rowDiv.id = "row-" + r.id;
+                    rowDiv.id = "row-" + r.uid;
                     // Apply color: manual override > REAPER region color (both use exact hex)
                     var ovColor = getOverride(r.id).colorHex;
                     if (ovColor) {
@@ -9880,28 +9922,28 @@
                         + descHtml;
 
                     rowDiv.innerHTML =
-                        '<div class="card-bg-fill" id="bg-' + r.id + '"></div>'
+                        '<div class="card-bg-fill" id="bg-' + r.uid + '"></div>'
                         + '<div class="drag-handle">⋮⋮</div>'
-                        + '<button class="song-dotmenu-btn" onclick="event.stopPropagation(); openSongMenu(event,\'' + r.id + '\')"><svg width="4" height="18" viewBox="0 0 4 18" fill="currentColor"><circle cx="2" cy="2" r="2"/><circle cx="2" cy="9" r="2"/><circle cx="2" cy="16" r="2"/></svg></button>'
-                        + '<span class="song-index" onclick="event.stopPropagation(); reorderPrompt(\'' + r.id + '\')">' + songIndex + stopHtml + '</span>'
-                        + '<button class="' + chevClass + '" id="chev-' + r.id + '" onclick="event.stopPropagation();toggleExpand(\'' + r.id + '\',' + hasSubs + ')">' + chevIcon + '</button>'
-                        + '<div class="song-title-area" onclick="playRegion(' + r.start + ',\'' + r.id + '\')">'
+                        + '<button class="song-dotmenu-btn" onclick="event.stopPropagation(); openSongMenu(event,\'' + r.uid + '\')"><svg width="4" height="18" viewBox="0 0 4 18" fill="currentColor"><circle cx="2" cy="2" r="2"/><circle cx="2" cy="9" r="2"/><circle cx="2" cy="16" r="2"/></svg></button>'
+                        + '<span class="song-index">' + songIndex + stopHtml + '</span>'
+                        + '<button class="' + chevClass + '" id="chev-' + r.uid + '" onclick="event.stopPropagation();toggleExpand(\'' + r.uid + '\',' + hasSubs + ')">' + chevIcon + '</button>'
+                        + '<div class="song-title-area" onclick="playRegion(' + r.start + ',\'' + r.id + '\',\'' + r.uid + '\')">'
                         + '  <div class="song-name">' + songNameHtml + '</div>'
                         + '</div>'
-                        + '<span id="loop-counter-' + r.id + '" class="loop-counter-badge"></span>'
+                        + '<span id="loop-counter-' + r.uid + '" class="loop-counter-badge"></span>'
                         + '<div class="song-actions">'
-                        + '  <button class="sa-author ' + chainClass + '" title="' + _endVis.title + '" onclick="event.stopPropagation(); cycleSongEnd(\'' + r.id + '\')">' + chainIcon + '</button>'
-                        + '  <button class="sa-author ' + loopClass + '" onclick="event.stopPropagation(); toggleLoop(\'' + r.id + '\')">' + loopIcon + '</button>'
-                        + '  <button class="sa-author ' + skipClass + '" onclick="event.stopPropagation(); toggleSkip(\'' + r.id + '\')">' + skipIcon + '</button>'
+                        + '  <button class="sa-author ' + chainClass + '" title="' + _endVis.title + '" onclick="event.stopPropagation(); cycleSongEnd(\'' + r.uid + '\')">' + chainIcon + '</button>'
+                        + '  <button class="sa-author ' + loopClass + '" onclick="event.stopPropagation(); toggleLoop(\'' + r.uid + '\')">' + loopIcon + '</button>'
+                        + '  <button class="sa-author ' + skipClass + '" onclick="event.stopPropagation(); toggleSkip(\'' + r.uid + '\')">' + skipIcon + '</button>'
                         + '</div>'
-                        + '<span class="song-duration" id="dur-' + r.id + '" data-length="' + formatTime(r.duration) + '">' + formatTime(r.duration) + delayHtml + '</span>';
+                        + '<span class="song-duration" id="dur-' + r.uid + '" data-length="' + formatTime(r.duration) + '">' + formatTime(r.duration) + delayHtml + '</span>';
 
                     li.appendChild(rowDiv);
 
                     // --- Section list (always rendered but hidden unless expanded) ---
                     var slDiv = document.createElement("div");
                     slDiv.className = "section-list" + (isExp ? " open" : "");
-                    slDiv.id = "slist-" + r.id;
+                    slDiv.id = "slist-" + r.uid;
 
                     var slHtml = "";
                     // Sections (sub-regions)
@@ -9939,16 +9981,16 @@
                         var subDotBtn = sub.markerType === 'stop' ? '' :
                             '<button class="sub-dotmenu-btn" onclick="event.stopPropagation(); openSubMenu(event,\'' + sub.id + '\')"><svg width="3" height="14" viewBox="0 0 3 14" fill="currentColor"><circle cx="1.5" cy="1.5" r="1.5"/><circle cx="1.5" cy="7" r="1.5"/><circle cx="1.5" cy="12.5" r="1.5"/></svg></button>';
                         var actionsHtml = sub.markerType === 'stop' ? '' :
-                            '<span id="loop-counter-sub-' + sub.id + '" class="loop-counter-badge"></span>'
+                            '<span id="loop-counter-sub-' + _subUid(r, sub) + '" class="loop-counter-badge"></span>'
                             + '<div class="section-actions" onclick="event.stopPropagation()">'
                             + '  <button class="sa-btn sa-transport" onclick="smartStop()">&#9632;</button>'
                             + '  <button class="sa-author ' + scloop + '" onclick="toggleSubLoop(\'' + sub.id + '\')">&#8635;</button>'
                             + '  <button class="sa-author ' + scskip + '" onclick="toggleSubSkip(\'' + sub.id + '\')">&#10005;</button>'
                             + '</div>';
 
-                        slHtml += '<div class="section-row' + subClassAdds + '" id="subrow-' + sub.id + '"'
-                            + ' onclick="' + (sub.markerType === 'stop' ? '' : 'playRegion(' + sub.start + ',\'' + sub.id + '\')') + '" ' + subStyleAttr + '>'
-                            + '<div class="card-bg-fill" id="bg-' + sub.id + '"></div>'
+                        slHtml += '<div class="section-row' + subClassAdds + '" id="subrow-' + _subUid(r, sub) + '"'
+                            + ' onclick="' + (sub.markerType === 'stop' ? '' : 'playRegion(' + sub.start + ',\'' + sub.id + '\',\'' + _subUid(r, sub) + '\')') + '" ' + subStyleAttr + '>'
+                            + '<div class="card-bg-fill" id="bg-' + _subUid(r, sub) + '"></div>'
                             + subDotBtn
                             + '<span class="section-row-name">' + nameHtml + '</span>'
                             + durHtml
@@ -9981,25 +10023,13 @@
         }
 
         // --- 7. ACTIONS ---
-        // F9: Reorder by number prompt (global regions only)
-        function reorderPrompt(id) {
-            if (!canEditSetlist()) { RSDiag.blocked('reorderPrompt', 'role-cannot-edit-setlist'); return; }
-            var item, i;
-            for (i = 0; i < displayList.length; i++) { if (displayList[i].id == id) { item = displayList[i]; break; } }
-            if (!item) return;
-            var newPos = parseInt(prompt(t('New position for') + ' "' + item.name + '"?'));
-            if (!newPos || newPos < 1 || newPos > displayList.length) return;
-            displayList.splice(newPos - 1, 0, displayList.splice(i, 1)[0]);
-            var newOrder = [];
-            lastRenderChecksum = JSON.stringify(displayList.map(function (r) {
-                newOrder.push({ id: r.id, chain: r.chain, skipped: r.skipped, loop: r.loop });
-                return { id: r.id, chain: r.chain, skipped: r.skipped, loop: r.loop, name: r.name, color: r.color };
-            })) + (_hideSkippedEffective() ? 1 : 0) + JSON.stringify(g_subRegionMap);
-            setlists[currentSetlistName] = newOrder;
-            saveCurrentState();
-            renderSetlist();
-        }
-
+        // reorderPrompt() lived here. It was a SECOND reorder path, bound to the
+        // song's index number, and the only one that raised a native prompt() —
+        // a modal asking a musician to type a position, on a phone, during a
+        // show. Dragging by the handle is the whole feature and has worked all
+        // along; a redundant path discoverable only by tapping a number nobody
+        // knew was a button is how a UI acquires two ways to do one thing and a
+        // bug in each.
         function toggleHideSkipped() {
             hideSkippedMode = document.getElementById("hideSkippedToggle").checked;
             localStorage.setItem("reaper_hide_skipped", hideSkippedMode);
@@ -10114,14 +10144,15 @@
         // Tap order for the row button. 'wait' needs a number, so it is set
         // from the ⋮ panel only; tapping a song that is on 'wait' returns it
         // to 'auto' rather than silently discarding the seconds elsewhere.
-        function cycleSongEnd(id) {
+        function cycleSongEnd(uid) {
             if (!canEditSetlist()) { RSDiag.blocked('cycleSongEnd', 'role-cannot-edit-setlist'); return; }
-            var song = null;
-            for (var i = 0; i < displayList.length; i++) if (displayList[i].id == id) { song = displayList[i]; break; }
+            var song = _instanceForAction(uid, 'cycleSongEnd');
             if (!song) return;
             var cur = getSongEnd(song);
             var next = (cur === 'auto') ? 'continue' : (cur === 'continue') ? 'stop' : 'auto';
-            setSongEnd(id, next);
+            // setSongEnd writes the override, keyed on the REGION — both
+            // instances of a repeat agree about where the song ends.
+            setSongEnd(song.id, next);
         }
 
         // How the button LOOKS. On 'auto' it shows a dimmed version of whatever
@@ -10169,21 +10200,45 @@
             closeOpenCtxPanel();
         }
 
-        function toggleChain(id) {
+        // chain / loop / skip are PER-ROW, not per-song: "play this one twice,
+        // and loop it the second time" is the whole reason repeats exist. They
+        // resolve by uid. Contrast getOverride(), which stays on the region id
+        // because stop/wait/colour/description describe the song itself.
+        //
+        // The region-id fallback keeps any call site that still passes one
+        // working while that song appears exactly once — which is every set
+        // that has not used a repeat yet.
+        function _instanceForAction(uidOrId, why) {
+            var inst = _findInstanceByUid(uidOrId);
+            if (inst) return inst;
+            for (var i = 0; i < displayList.length; i++) {
+                if (displayList[i].id == uidOrId) return displayList[i];
+            }
+            RSDiag.log('INSTANCE_MISS', { uid: String(uidOrId), why: why || '?' });
+            return null;
+        }
+        function toggleChain(uid) {
             if (!canEditSetlist()) { RSDiag.blocked('toggleChain', 'role-cannot-edit-setlist'); return; }
-            for (var i = 0; i < displayList.length; i++) { if (displayList[i].id == id) { displayList[i].chain = !displayList[i].chain; break; } }
+            var inst = _instanceForAction(uid, 'toggleChain');
+            if (!inst) return;
+            inst.chain = !inst.chain;
             saveCurrentState(); lastRenderChecksum = ""; syncRegions();
         }
-        function toggleLoop(id) {
+        function toggleLoop(uid) {
             if (!canEditSetlist()) { RSDiag.blocked('toggleLoop', 'role-cannot-edit-setlist'); return; }
-            for (var i = 0; i < displayList.length; i++) { if (displayList[i].id == id) { displayList[i].loop = !displayList[i].loop; break; } }
+            var inst = _instanceForAction(uid, 'toggleLoop');
+            if (!inst) return;
+            inst.loop = !inst.loop;
             saveCurrentState(); lastRenderChecksum = ""; syncRegions();
         }
         function toggleCurrentLoop(e) {
             if (e) e.stopPropagation();
             if (!canEditSetlist()) { RSDiag.blocked('toggleCurrentLoop', 'role-cannot-edit-setlist'); return; }
             var activeIdx = -1;
-            for (var i = 0; i < displayList.length; i++) {
+            // Starts at the resolved instance rather than at 0, so a repeat's
+            // second row gets its own loop toggled instead of the first row's.
+            var _tclIdx = activeInstanceIdx();
+            for (var i = (_tclIdx === -1 ? displayList.length : _tclIdx); i < displayList.length; i++) {
                 var r = displayList[i];
                 if (currentPos >= r.start && currentPos < r.end) {
                     var subs = g_subRegionMap[r.name] || [];
@@ -10225,9 +10280,11 @@
             if (!canEditSetlist()) { RSDiag.blocked('toggleSubSkip', 'role-cannot-edit-setlist'); return; }
             if (window.subStates[id]) { window.subStates[id].skipped = !window.subStates[id].skipped; lastRenderChecksum = ""; syncRegions(); }
         }
-        function toggleSkip(id) {
+        function toggleSkip(uid) {
             if (!canEditSetlist()) { RSDiag.blocked('toggleSkip', 'role-cannot-edit-setlist'); return; }
-            for (var i = 0; i < displayList.length; i++) { if (displayList[i].id == id) { displayList[i].skipped = !displayList[i].skipped; break; } }
+            var inst = _instanceForAction(uid, 'toggleSkip');
+            if (!inst) return;
+            inst.skipped = !inst.skipped;
             saveCurrentState(); lastRenderChecksum = ""; syncRegions();
         }
         function findNextValidSong(startIdx) {
@@ -10238,8 +10295,8 @@
             for (var i = startIdx - 1; i >= 0; i--) { if (!displayList[i].skipped) return displayList[i]; }
             return null;
         }
-        function flashRow(id) {
-            var btn = document.querySelector("#row-" + id + " .load-btn");
+        function flashRow(uid) {
+            var btn = document.querySelector("#row-" + uid + " .load-btn");
             if (btn) { btn.style.backgroundColor = "#2196F3"; btn.style.color = "#fff"; setTimeout(function () { btn.style.backgroundColor = ""; btn.style.color = ""; }, 200); }
         }
 
@@ -10257,11 +10314,7 @@
             var prevSubs = document.querySelectorAll('.section-row.active');
             for (var p = 0; p < prevSubs.length; p++) prevSubs[p].classList.remove('active');
 
-            var activeIdx = -1;
-            for (var j = 0; j < displayList.length; j++) {
-                var r = displayList[j];
-                if (currentPos >= r.start && currentPos < r.end) { activeIdx = j; break; }
-            }
+            var activeIdx = activeInstanceIdx();
             var activeRegion = (activeIdx !== -1) ? displayList[activeIdx] : null;
 
             // Show progress, refreshed on every transport tick.
@@ -10288,7 +10341,7 @@
             if (playBtn) playBtn.innerHTML = isPlaying ? "&#9646;&#9646; PAUSE" : "&#9654; PLAY";
 
             // Reset old song duration display
-            if (lastActiveID && (!activeRegion || activeRegion.id !== lastActiveID)) {
+            if (lastActiveID && (!activeRegion || activeRegion.uid !== lastActiveID)) {
                 var oldDur = document.getElementById("dur-" + lastActiveID);
                 if (oldDur) { oldDur.innerText = oldDur.getAttribute("data-length"); oldDur.classList.remove("live-time"); }
                 var oldBg = document.getElementById("bg-" + lastActiveID);
@@ -10329,14 +10382,14 @@
                     }
                 })();
 
-                var row = document.getElementById("row-" + activeRegion.id);
+                var row = document.getElementById("row-" + activeRegion.uid);
                 if (row) {
                     row.classList.add('active');
-                    if (activeRegion.id !== lastActiveID) {
-                        lastActiveID = activeRegion.id;
+                    if (activeRegion.uid !== lastActiveID) {
+                        lastActiveID = activeRegion.uid;
                         // Auto-expand active song if it has sections
                         var subs2 = g_subRegionMap[activeRegion.name] || [];
-                        if (subs2.length > 0 && !expandedSongs[activeRegion.id]) {
+                        if (subs2.length > 0 && !expandedSongs[activeRegion.uid]) {
                             toggleExpand(activeRegion.id, true);
                         }
                         if (document.getElementById('autoScrollToggle').checked && row.scrollIntoView) {
@@ -10353,10 +10406,10 @@
                 var pct = ((currentPos - activeRegion.start) / activeRegion.duration) * 100;
                 pct = Math.min(100, Math.max(0, pct));
                 // Card BG fill
-                var bgFill = document.getElementById("bg-" + activeRegion.id);
+                var bgFill = document.getElementById("bg-" + activeRegion.uid);
                 if (bgFill) bgFill.style.width = pct + "%";
                 // Duration countdown
-                var durEl = document.getElementById("dur-" + activeRegion.id);
+                var durEl = document.getElementById("dur-" + activeRegion.uid);
                 if (durEl) {
                     var rem = activeRegion.end - currentPos; if (rem < 0) rem = 0;
                     durEl.innerText = "-" + formatTime(rem); durEl.classList.add("live-time");
@@ -10379,11 +10432,11 @@
                     }
                     for (var s2 = 0; s2 < subs.length; s2++) {
                         var subObj = subs[s2];
-                        var subEl = document.getElementById("subrow-" + subObj.id);
+                        var subEl = document.getElementById("subrow-" + _subUid(activeRegion, subObj));
                         var isThisActive = (activeSub && subObj.id === activeSub.id);
                         if (subEl) subEl.classList.toggle("active", !!isThisActive);
 
-                        var subBg = document.getElementById("bg-" + subObj.id);
+                        var subBg = document.getElementById("bg-" + _subUid(activeRegion, subObj));
                         if (subBg) {
                             if (isThisActive) {
                                 var pctSub = ((currentPos - activeSub.start) / activeSub.duration) * 100;
@@ -10396,16 +10449,18 @@
                 }
 
                 // ── Loop counter badge (fraction N/loopMax) — song row + section row ──
-                var _lcEl    = document.getElementById('loop-counter-' + activeRegion.id);
-                var _lcSubEl = activeSub ? document.getElementById('loop-counter-sub-' + activeSub.id) : null;
+                var _lcEl    = document.getElementById('loop-counter-' + activeRegion.uid);
+                var _lcSubEl = activeSub ? document.getElementById('loop-counter-sub-' + _subUid(activeRegion, activeSub)) : null;
                 if (activeSub && activeSub.loop && activeSub.loopMax > 1) {
                     var _lcState   = window.subStates[activeSub.id] || {};
                     var _lcCurrent = (_lcState.loopCount || 0) + 1;
                     var _lcText    = _lcCurrent + '/' + activeSub.loopMax;
                     if (_lcEl)    { _lcEl.style.display    = 'flex'; _lcEl.textContent    = _lcText; }
                     if (_lcSubEl) { _lcSubEl.style.display = 'flex'; _lcSubEl.textContent = _lcText; }
-                    window._loopCounterSongId = activeRegion.id;
-                    window._loopCounterSubId  = activeSub.id;
+                    // UIDs: these exist only to find the badge element again on
+                    // the way out, and a region id names two of them.
+                    window._loopCounterSongId = activeRegion.uid;
+                    window._loopCounterSubId  = _subUid(activeRegion, activeSub);
                 } else {
                     // Clear song-level counter
                     if (window._loopCounterSongId) {
@@ -10714,6 +10769,7 @@
                     // only then does the queue decide WHERE it continues to.
                     var _endState = effectiveSongEnd(activeRegion);
                     if (queuedRegion && _endState === 'continue') {
+                        noteActiveInstance(_uidOf(queuedRegion), 'queued-at-region-end');
                         wwr_req("SET/POS/" + queuedRegion.start, "queued-at-region-end");
                         clearQueuedRegion('consumed-at-region-end');
                         return;
@@ -10738,6 +10794,7 @@
                         var _nrd = (queuedRegion || findNextValidSong(activeIdx));
                         if (_nrd === queuedRegion) clearQueuedRegion('consumed-at-wait-boundary');
                         if (_nrd) {
+                            noteActiveInstance(_uidOf(_nrd), 'delay-after-resume');
                             window._endOfRegionLocked = Date.now() + 400; // lock before async — same guard as autoStop/shouldPlayNext
                             wwr_req(1016, "song-delay-after");
                             (function(nxt, delaySec) {
@@ -10755,6 +10812,10 @@
                     if (shouldPlayNext) {
                         var nextR = findNextValidSong(activeIdx);
                         if (nextR) {
+                            // findNextValidSong took activeIdx, which is now the
+                            // ACTIVE INSTANCE's index — so a chain out of the
+                            // second copy of a song follows the second copy.
+                            noteActiveInstance(_uidOf(nextR), 'auto-chain');
                             // Lock for 400ms: prevents the dedup reset (timeRem > 0.5 in region B)
                             // from allowing a second end-of-A trigger when A.end === B.start.
                             window._endOfRegionLocked = Date.now() + 400;
@@ -11015,7 +11076,131 @@
         // "what does Play start". The old code answered that question from
         // currentPos alone, which is a value that — by construction — describes
         // the moment BEFORE the user acted.
-        var selectedRegion = null;   // { id, start, end, at } or null
+        var selectedRegion = null;   // { id, uid, start, end, at } or null
+
+        // selectedRegion is a SNAPSHOT, not a reference: it has to survive the
+        // list being rebuilt under it. One constructor, so the shape cannot
+        // drift between the four places that build one.
+        function _selectionOf(region) {
+            return { id: region.id, uid: _uidOf(region), start: region.start, end: region.end, at: Date.now() };
+        }
+
+        // A tap identifies a ROW. Resolve by uid first; fall back to the region
+        // id for any caller not given one (MIDI actions, the keyboard, a row
+        // rendered before the last refresh), and finally to the raw coordinates.
+        function _resolveTapTarget(id, uid, start) {
+            var inst = uid ? _findInstanceByUid(uid) : null;
+            if (inst) return inst;
+            return _findRegionById(id) || { id: id, uid: uid || id, start: start, end: start };
+        }
+
+        // ── Instance identity ───────────────────────────────────────────────
+        // A region id says WHICH SONG. It cannot say WHICH ROW, because the
+        // same song may appear twice in one set — and two instances occupy the
+        // exact same time range in REAPER, so nothing about the transport can
+        // tell them apart either.
+        //
+        //   r.id    which REAPER region this is      — shared by repeats
+        //   r.uid   which ENTRY in tonight's list    — unique per row
+        //
+        // Every DOM id, every element lookup and the expansion state key off
+        // the UID. Keying them on the region id is not merely ambiguous: two
+        // elements would carry the SAME id attribute, and getElementById
+        // returns the first — so the progress fill, the countdown and the
+        // active highlight would all silently paint the earlier row while the
+        // later one played.
+        //
+        // Overrides stay keyed on the REGION id, deliberately. Stop/wait/colour
+        // /description describe the SONG, and a repeat is the same song — both
+        // rows must agree about them. (Per-instance overrides would be a
+        // separate decision, not an accident of which key was nearest to hand.)
+        //
+        // The uid is stable for the life of the page, not across reloads:
+        // persistence stores region ids and order, and uids are handed out again
+        // on the next build. Nothing durable is keyed on a uid.
+        var _uidSeq = 0;
+        function _newUid(regionId) { return String(regionId) + '#' + (++_uidSeq); }
+
+        // Falls back to the region id so any path not yet carrying a uid still
+        // resolves to something, rather than to 'undefined' shared by every row.
+        function _uidOf(r) { return (r && r.uid) || (r && r.id) || ''; }
+        // Sections belong to a song by NAME, so two instances share one section
+        // list. Their rows must not share DOM ids, hence the parent's uid.
+        function _subUid(r, sub) {
+            return _uidOf(r) + '.' + ((sub && sub.id !== undefined) ? sub.id : sub);
+        }
+
+        // A row is its OWN object. Two instances of one region need independent
+        // chain/skipped/loop, so pushing the shared mainMap entry twice — which
+        // is what the old code did — would make them one row wearing two hats.
+        function _makeInstance(region, uid, flags) {
+            var inst = {};
+            for (var k in region) { if (region.hasOwnProperty(k)) inst[k] = region[k]; }
+            inst.uid     = uid;
+            inst.chain   = !!(flags && flags.chain);
+            inst.skipped = !!(flags && flags.skipped);
+            inst.loop    = !!(flags && flags.loop);
+            return inst;
+        }
+
+        // ── Which INSTANCE is playing ───────────────────────────────────────
+        // currentPos says which REGION. It can never say which ROW: two
+        // instances of one song occupy the identical time range in REAPER, so
+        // the positional test matches BOTH, and every scan in this file took
+        // the first match.
+        //
+        // The ambiguity about which row highlights is the cosmetic half. The
+        // dangerous half is findNextValidSong(activeIdx): playing instance #2
+        // would advance from instance #1's index, so the show jumps to whatever
+        // follows the EARLIER copy. A repeat near the top of the set would send
+        // the band back to song 2 in the middle of the encore.
+        //
+        // The answer is the observed-vs-intent split #3/#4/#9 already built.
+        // When playback was commanded to a specific row, that row is the active
+        // one for as long as the transport is inside its region. Only when there
+        // is no intent to consult — playback started from REAPER, or somebody
+        // dragged the cursor — does it fall back to the first matching instance.
+        // That fallback is the best answer available, and saying so here is the
+        // difference between a documented rule and behaviour that merely looks
+        // arbitrary.
+        var _activeUidHint = null;
+
+        function noteActiveInstance(uid, reason) {
+            if (_activeUidHint === (uid || null)) return;
+            _activeUidHint = uid || null;
+            RSDiag.log('ACTIVE_HINT', { uid: _activeUidHint || '-', reason: reason || '?' });
+        }
+
+        function activeInstanceIdx() {
+            var first = -1;
+            for (var i = 0; i < displayList.length; i++) {
+                var r = displayList[i];
+                if (currentPos < r.start || currentPos >= r.end) continue;
+                if (first === -1) first = i;
+                // Deliberately does NOT break at the first match: with a repeat
+                // the hinted instance may be the later one, and breaking early
+                // is exactly the bug.
+                if (_activeUidHint && r.uid === _activeUidHint) return i;
+            }
+            // The hint points at a row the transport has left, or one that no
+            // longer exists. Drop it, or a stale intent steers the NEXT song.
+            if (_activeUidHint && first !== -1) noteActiveInstance(null, 'transport-left-hinted-row');
+            return first;
+        }
+
+        function _findInstanceByUid(uid) {
+            for (var i = 0; i < displayList.length; i++) {
+                if (displayList[i].uid === uid) return displayList[i];
+            }
+            return null;
+        }
+
+        // Row uid -> the region it points at. Null when the row is gone, which
+        // is a real case: a context panel can outlive its row across a refresh.
+        function _uidToRegionId(uid) {
+            var inst = _instanceForAction(uid, 'ctx-panel');
+            return inst ? inst.id : null;
+        }
 
         function _findRegionById(id) {
             for (var i = 0; i < displayList.length; i++) {
@@ -11031,9 +11216,12 @@
             return null;
         }
 
-        function _rowElFor(id) {
-            return document.getElementById('row-' + id) ||
-                   document.getElementById('subrow-' + id);
+        // Takes a UID, not a region id: with a repeat there are two 'row-'
+        // elements for one song, and getElementById would hand back the first
+        // regardless of which one the user actually acted on.
+        function _rowElFor(uid) {
+            return document.getElementById('row-' + uid) ||
+                   document.getElementById('subrow-' + uid);
         }
 
         // Intent classes are painted from state, never accumulated on the DOM.
@@ -11046,12 +11234,14 @@
                 stale[i].classList.remove('cued');
                 stale[i].classList.remove('queued');
             }
+            // By uid: the highlight has to land on the row the user tapped, not
+            // on whichever row happens to hold the same song first.
             if (selectedRegion) {
-                var c = _rowElFor(selectedRegion.id);
+                var c = _rowElFor(_uidOf(selectedRegion));
                 if (c) c.classList.add('cued');
             }
             if (queuedRegion) {
-                var q = _rowElFor(queuedRegion.id);
+                var q = _rowElFor(_uidOf(queuedRegion));
                 if (q) q.classList.add('queued');
             }
         }
@@ -11065,7 +11255,7 @@
 
         function _setQueuedRegion(region, reason) {
             queuedRegion = region;
-            RSDiag.log('QUEUE_SET', { song: region.id, start: _fmtPos(region.start), reason: reason || '?' });
+            RSDiag.log('QUEUE_SET', { song: region.id, uid: _uidOf(region), start: _fmtPos(region.start), reason: reason || '?' });
             _paintIntent();
         }
 
@@ -11076,9 +11266,9 @@
         function promoteQueuedToSelected(reason) {
             if (!queuedRegion) return null;
             var q = queuedRegion;
-            selectedRegion = { id: q.id, start: q.start, end: q.end, at: Date.now() };
+            selectedRegion = _selectionOf(q);
             queuedRegion = null;
-            RSDiag.log('QUEUE_PROMOTE', { song: q.id, reason: reason || '?' });
+            RSDiag.log('QUEUE_PROMOTE', { song: q.id, uid: _uidOf(q), reason: reason || '?' });
             _paintIntent();
             return q;
         }
@@ -11097,8 +11287,9 @@
         function selectRegionForCue(region, reason) {
             // An explicit cue is a new user command and outranks the guard.
             clearManualTransportGuard('user-cue');
-            selectedRegion = { id: region.id, start: region.start, end: region.end, at: Date.now() };
-            RSDiag.log('USER_SELECT', { song: region.id, start: _fmtPos(region.start), reason: reason || 'tap' });
+            selectedRegion = _selectionOf(region);
+            noteActiveInstance(_uidOf(region), 'cue');
+            RSDiag.log('USER_SELECT', { song: region.id, uid: _uidOf(region), start: _fmtPos(region.start), reason: reason || 'tap' });
             // The cue lands on the EXACT region start, with no MIDI-init
             // pre-roll. Pre-roll exists so plugins receive MIDI before the song
             // is audible — it belongs to the moment playback starts, not to the
@@ -11114,7 +11305,7 @@
             // back of it, landing at REAPER after the user's command.
             window._playRegionLocked = Date.now() + 500;
             _paintIntent();
-            flashRow(region.id);
+            flashRow(_uidOf(region));
         }
 
         // What Play should start, in the order #3 requires:
@@ -11129,16 +11320,17 @@
         // trustworthy — and it started song 1 instead.
         function resolvePlayTarget() {
             if (selectedRegion) return { region: selectedRegion, via: 'selected-region' };
-            for (var i = 0; i < displayList.length; i++) {
-                var r = displayList[i];
-                if (currentPos >= r.start && currentPos < r.end) {
-                    return { region: r, via: 'cursor-region' };
-                }
-            }
+            var idx = activeInstanceIdx();
+            if (idx !== -1) return { region: displayList[idx], via: 'cursor-region' };
             return { region: null, via: 'cursor-freeform' };
         }
 
-        function playRegion(start, id) {
+        // uid is what makes a tap unambiguous. #3 established that currentPos
+        // is EVIDENCE and selectedRegion is a DECISION; with repeats the
+        // evidence gets strictly weaker — two instances occupy the same time
+        // range, so no reading of the transport can ever say which row the user
+        // meant. The decision has to carry it, and this is where it is made.
+        function playRegion(start, id, uid) {
             // Semantic gate, not just a CSS one. Player rows are
             // pointer-events:none, so this should be unreachable — but without
             // it a Player would still record a selection and paint a cued row
@@ -11148,7 +11340,7 @@
             if (!canControlTransport()) { RSDiag.blocked('playRegion', 'role-cannot-control-transport'); return; }
             // Coordinates from the caller are a fallback only: a row rendered
             // before the last region refresh can carry a stale start.
-            var region = _findRegionById(id) || { id: id, start: start, end: start };
+            var region = _resolveTapTarget(id, uid, start);
 
             if (!isPlaying) {
                 // STOPPED or PAUSED: a tap is a cue and nothing else.
@@ -11175,8 +11367,8 @@
             if (legacySeek) {
                 window._playRegionLocked = Date.now() + 500;
                 window._pendingCuePos    = null;
-                window._playIntent       = { id: id, start: region.start };
-                RSDiag.log('USER_SEEK', { song: region.id, reason: 'edit-mode-immediate-jump' });
+                window._playIntent       = { id: id, uid: _uidOf(region), start: region.start };
+                RSDiag.log('USER_SEEK', { song: region.id, uid: _uidOf(region), reason: 'edit-mode-immediate-jump' });
                 seekManualTransport(midiInitPreroll(region.start), true);
                 clearQueuedRegion('replaced-by-immediate-seek');
                 return;
@@ -11186,38 +11378,46 @@
             // restart it — on stage that is never what a thumb landing on the
             // active row means. It clears the queue instead, which is the one
             // reading that is both useful and impossible to regret.
-            if (queuedRegion && queuedRegion.id == region.id) {
+            // Compared by ROW: re-tapping the queued row clears the queue, but
+            // tapping the OTHER instance of the same song is a different request
+            // and must queue it instead.
+            if (queuedRegion && _uidOf(queuedRegion) === _uidOf(region)) {
                 clearQueuedRegion('re-tapped-queued-song');
                 return;
             }
+            // Positional, so with a repeat it is true of BOTH rows. Acceptable
+            // here and only here: the branch does nothing except decline to
+            // restart, and declining to restart is right for either instance of
+            // a song that is currently sounding.
             if (currentPos >= region.start && currentPos < region.end) {
-                RSDiag.log('TAP_ACTIVE', { song: region.id, reason: 'no-restart-by-design' });
+                RSDiag.log('TAP_ACTIVE', { song: region.id, uid: _uidOf(region), reason: 'no-restart-by-design' });
                 clearQueuedRegion('tapped-active-song');
-                flashRow(region.id);
+                flashRow(_uidOf(region));
                 return;
             }
 
             _setQueuedRegion(region, 'tap-while-playing');
         }
 
-        function cueRegion(start, id) {
+        function cueRegion(start, id, uid) {
             if (!canControlTransport()) { RSDiag.blocked('cueRegion', 'role-cannot-control-transport'); return; }
-            var region = _findRegionById(id) || { id: id, start: start, end: start };
+            var region = _resolveTapTarget(id, uid, start);
             // Next / Previous and the MIDI navigation actions land here. They
             // stop first — existing product behaviour, unchanged — but the
             // target is now recorded as an explicit selection, so the Play that
             // usually follows is deterministic instead of depending on whether
             // the SET/POS reply has come back yet.
             clearManualTransportGuard('user-cue-nav');
-            selectedRegion = { id: region.id, start: region.start, end: region.end, at: Date.now() };
-            RSDiag.log('USER_SELECT', { song: region.id, start: _fmtPos(region.start), reason: 'cue-nav' });
+            selectedRegion = _selectionOf(region);
+            noteActiveInstance(_uidOf(region), 'cue-nav');
+            RSDiag.log('USER_SELECT', { song: region.id, uid: _uidOf(region), start: _fmtPos(region.start), reason: 'cue-nav' });
             window._playRegionLocked = Date.now() + 500;
             window._pendingCuePos    = null;
             // One compound request: REAPER executes in order within it, so stop
             // and reposition can no longer arrive the wrong way round.
             wwr_req("1016;SET/POS/" + region.start, "user-cue-nav");
             _paintIntent();
-            flashRow(region.id);
+            flashRow(_uidOf(region));
         }
         // Manual Stop. Everything that could still move the transport is
         // cancelled BEFORE the command goes out, so a callback that was already
@@ -11233,6 +11433,10 @@
             // 1. The queue is an instruction about what to play next. Stop
             //    means there is no next until a human says so.
             clearQueuedRegion('manual-stop');
+            // The row the user committed to is no longer playing. Keeping the
+            // hint would let it steer the next auto-advance after a Play from
+            // somewhere else entirely.
+            noteActiveInstance(null, 'manual-stop');
             // 2. A cue left pending by auto-stop fires on the first reply that
             //    reports playState 0 — which is the reply confirming THIS stop.
             window._pendingCuePos = null;
@@ -11249,11 +11453,7 @@
             window._lastTransitionTriggerPos = undefined;
             window._lastPauseTriggerPos      = undefined;
 
-            var activeIdx = -1;
-            for (var i = 0; i < displayList.length; i++) {
-                var r = displayList[i];
-                if (currentPos >= r.start && currentPos < r.end) { activeIdx = i; break; }
-            }
+            var activeIdx = activeInstanceIdx();
             // No displayList[0] fallback. It was the same race that made Play
             // start song 1: when the cursor has not resolved to a region, "song
             // 1" is a guess, and rewinding a show to its first song is not a
@@ -11308,6 +11508,7 @@
             var target = resolvePlayTarget();
             RSDiag.log('USER_PLAY', {
                 target: target.region ? target.region.id : '-',
+                uid: target.region ? _uidOf(target.region) : '-',
                 via: target.via
             });
 
@@ -11320,12 +11521,20 @@
                 //
                 // The pre-roll belongs here, not on the cue: playback is what
                 // needs plugins to have seen MIDI a few ms early.
-                window._playIntent       = { id: target.region.id, start: target.region.start };
+                window._playIntent       = { id: target.region.id, uid: _uidOf(target.region), start: target.region.start };
+                // The user chose a ROW and this request seeks to it. Recording
+                // which one is what lets activeInstanceIdx() answer correctly
+                // once the transport arrives inside a region two rows share.
+                noteActiveInstance(_uidOf(target.region), 'play-selected');
                 window._playRegionLocked = Date.now() + 500;
                 window._pendingCuePos    = null;
                 wwr_req('SET/POS/' + midiInitPreroll(target.region.start) + ';1007',
                         'user-play-selected');
             } else {
+                // Playing from wherever the cursor is: no row-level intent to
+                // record, so activeInstanceIdx() falls back to the first
+                // matching instance and says so in the diagnostics.
+                noteActiveInstance(target.region ? _uidOf(target.region) : null, 'play-' + target.via);
                 // The cursor is already where playback should begin — inside a
                 // region, or wherever the user last left it. Play from there and
                 // do NOT seek to the region start: pause mid-song then Play must
@@ -12280,7 +12489,7 @@
         // F12: Canvas navigation helper
         function canvasNav(dir) {
             var activeIdx = -1;
-            for (var i = 0; i < displayList.length; i++) { var r = displayList[i]; if (currentPos >= r.start && currentPos < r.end) { activeIdx = i; break; } }
+            activeIdx = activeInstanceIdx();
             var target = null;
             if (dir === 'next') { target = findNextValidSong(activeIdx); }
             else if (dir === 'prev') {
@@ -12600,7 +12809,7 @@
         function liveNav(dir, e) {
             if (e) e.stopPropagation();
             var activeIdx = -1;
-            for (var i = 0; i < displayList.length; i++) { var r = displayList[i]; if (currentPos >= r.start && currentPos < r.end) { activeIdx = i; break; } }
+            activeIdx = activeInstanceIdx();
             var target = null;
             if (dir === "next") { target = findNextValidSong(activeIdx); }
             else if (dir === "prev") {
@@ -12894,19 +13103,20 @@
                     lastRenderChecksum = ''; renderSetlist();
                     return;
                 }
+                // Rebuilt from data-uid, not data-id. With a repeat both rows
+                // carry the same data-id, and a first-match scan would bind them
+                // to the same object — so dragging either would silently collapse
+                // the pair into a single entry on the next save.
                 var items = document.querySelectorAll("#setlist .song-container");
                 var newOrder = []; var sortedDisplay = [];
                 for (var i = 0; i < items.length; i++) {
-                    var id = items[i].getAttribute("data-id");
-                    for (var k = 0; k < displayList.length; k++) {
-                        if (displayList[k].id == id) {
-                            newOrder.push({ id: id, chain: displayList[k].chain, skipped: displayList[k].skipped, loop: displayList[k].loop });
-                            sortedDisplay.push(displayList[k]); break;
-                        }
-                    }
+                    var inst = _findInstanceByUid(items[i].getAttribute("data-uid"));
+                    if (!inst) continue;
+                    newOrder.push({ id: inst.id, chain: inst.chain, skipped: inst.skipped, loop: inst.loop });
+                    sortedDisplay.push(inst);
                 }
                 setlists[currentSetlistName] = newOrder; saveCurrentState(); displayList = sortedDisplay;
-                lastRenderChecksum = JSON.stringify(displayList.map(function (r) { return { id: r.id, chain: r.chain, skipped: r.skipped, loop: r.loop, name: r.name, color: r.color }; }));
+                lastRenderChecksum = JSON.stringify(displayList.map(function (r) { return { id: r.id, uid: r.uid, chain: r.chain, skipped: r.skipped, loop: r.loop, name: r.name, color: r.color }; }));
             }
         });
 
@@ -12942,7 +13152,7 @@
                 return;
             }
             var activeIdx = -1;
-            for (var i = 0; i < displayList.length; i++) { var r = displayList[i]; if (currentPos >= r.start && currentPos < r.end) { activeIdx = i; break; } }
+            activeIdx = activeInstanceIdx();
             switch (event.code) {
                 case 'Escape':
                     event.preventDefault();
@@ -13038,13 +13248,7 @@
         };
 
         // ── Navigation helpers ─────────────────────────────────────
-        function midiGetActiveIdx() {
-            for (var i = 0; i < displayList.length; i++) {
-                var r = displayList[i];
-                if (currentPos >= r.start && currentPos < r.end) return i;
-            }
-            return -1;
-        }
+        function midiGetActiveIdx() { return activeInstanceIdx(); }
 
         function midiNextSong() {
             var idx  = midiGetActiveIdx();

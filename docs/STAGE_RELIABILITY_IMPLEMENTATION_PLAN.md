@@ -1106,3 +1106,154 @@ Set a phone to pt-BR and open ReaSet: every screen, every dialog, every banner,
 and no sentence mixing two languages. Switch language at runtime and confirm
 what is already on screen follows — the DOM walk does this, so anything that
 does not follow is a string still outside the table.
+
+---
+
+## 17. Instance identity: the same song, twice in one set
+
+Issue #13, first half. Membership and the `+` picker are still to come; this is
+the foundation they need, and it is the part that touches transport.
+
+### The problem is identity, not UI
+
+Two instances of a song occupy the **identical time range in REAPER**. So the
+test every scan in this file used —
+
+```js
+if (currentPos >= r.start && currentPos < r.end) { activeIdx = j; break; }
+```
+
+— matches **both** rows, and `break` takes the earlier one. Nine scans did this.
+
+The wrong row highlighting is the cosmetic half. The dangerous half is
+`findNextValidSong(activeIdx)`: playing instance #2 advanced from instance #1's
+index, so the show jumped to whatever follows the *earlier* copy. A repeat near
+the top of the set would send the band back to song 2 in the middle of the
+encore — and nothing would look broken until it happened.
+
+### Two ids, and a rule about which is which
+
+```text
+r.id    which REAPER region this is      — shared by repeats
+r.uid   which ENTRY in tonight's list    — unique per row
+```
+
+| Keyed on the **row** (uid) | Keyed on the **song** (region id) |
+|---|---|
+| every DOM id: `row-`, `bg-`, `dur-`, `chev-`, `slist-`, `loop-counter-`, `_ctx_*` | `getOverride` / `setSongOverride` |
+| `expandedSongs` | stop / wait / colour / description |
+| `chain`, `loop`, `skipped` | `g_subRegionMap` (already keyed by song *name*) |
+| `selectedRegion`, `queuedRegion`, `_playIntent`, `lastActiveID` | |
+| `data-uid`, and the order Sortable rebuilds from it | |
+
+The split is a judgement, stated once so it is not re-derived at each call site:
+*"play this one twice, and loop it the second time"* is the whole reason repeats
+exist, so `loop` is per-row — while stop/wait/colour describe the **song**, and a
+repeat is the same song, so both rows must agree. Per-instance overrides may be a
+reasonable feature one day; they should be a decision, not a side effect of an
+identity refactor, and a test asserts they have not become one by accident.
+
+DOM ids are not merely *ambiguous* if keyed on the region — two elements would
+carry the same `id` attribute, and `getElementById` returns the first. The
+progress fill, the countdown, the active highlight and the loop badge would all
+paint the earlier row while the later one played, silently, with no error
+anywhere.
+
+Sections belong to a song by **name**, so two instances share one section list.
+Their rows are scoped as `_subUid(parent, sub)` = `<parentUid>.<subId>`.
+
+### Resolving which instance is playing
+
+`currentPos` cannot answer it — not "does not currently", *cannot*, because the
+two rows are indistinguishable to the transport. So it is not asked to. This is
+the observed-vs-intent split #3/#4/#9 already built, and repeats make the
+evidence strictly weaker while leaving the decision exactly as good.
+
+`activeInstanceIdx()` consults `_activeUidHint`, set wherever playback is
+**commanded** to a specific row: Play from a selection, a cue, a queued song
+consumed at a boundary, an auto-chain, a wait-resume. It is cleared on a manual
+Stop and dropped automatically when the transport leaves the hinted row.
+
+It deliberately does **not** `break` at the first match — the hinted instance may
+be the later one, and stopping early is precisely the bug. With no hint it
+returns the first match, which is the best answer available when playback started
+from REAPER or the cursor was dragged by hand; that is documented as a fallback
+rather than left to look arbitrary.
+
+`findNextValidSong` / `findPrevValidSong` needed no change at all: they were
+already index-based, and every fragility was upstream in the nine scans.
+
+### Three places that silently collapsed duplicates
+
+- **`syncRegions()`** used `delete mainMap[id]` as the "already placed" mark.
+  That idiom cannot represent a repeat *at all*: the second saved entry finds the
+  key gone and is dropped without a trace. Consumption is tracked separately now.
+  Rows are also built by `_makeInstance()` rather than pushing the shared map
+  entry, because the same object at two indices means one row's Loop toggles the
+  other's.
+- **`Sortable.onEnd`** rebuilt the order from `data-id` with a first-match scan.
+  Both rows carry the same `data-id`, so dragging either would have collapsed the
+  pair into one entry on the next save. It reads `data-uid` now.
+- **`_syncApplyPayload`** bound two payload entries to the same local object and
+  pushed it in twice. A follower now *builds* a row per entry and adopts the
+  Director's uid verbatim, so both devices key their DOM off the same value.
+
+### The numeric reorder prompt is gone
+
+It was a second reorder path bound to the song's index number, and the only one
+that raised a native `prompt()` — a modal asking a musician to type a position,
+on a phone, during a show. Dragging by the handle is the feature and has worked
+all along.
+
+### Persistence is unchanged
+
+`setlists[name]` still stores `{id, chain, skipped, loop}`. Uids are handed out
+at build time and are stable for the life of the page only; nothing durable is
+keyed on one. An old setlist therefore loads unchanged, which is acceptance test
+7 satisfied by construction rather than by a migration.
+
+### A defect found in the test helper itself
+
+`strip_comments()` — which most static assertions in `tests/test_reaset_html.py`
+are built on — did not understand **regex literals**. ReaSet contains
+
+```js
+subOv.description.replace(/"/g, '&quot;')
+```
+
+and the `"` inside that regex opened a string literal that never closed. Every
+one of the ~210,000 characters after it came back **unstripped**, so any
+assertion of the form `"X" not in strip_comments(body)` could be satisfied — or
+defeated — by prose in a comment, anywhere past that point.
+
+It surfaced only because a new test looked for a function that had been deleted
+and found the comment explaining the deletion. It had been quietly weakening
+assertions before that. The scan now handles regex literals, and
+`test_strip_comments_survives_a_regex_containing_a_quote` guards the helper the
+other tests depend on.
+
+### Locked by tests
+
+`test_no_scan_resolves_the_active_row_positionally`,
+`test_dom_ids_key_off_the_instance`, `test_overrides_stay_keyed_on_the_song`,
+`test_the_numeric_reorder_prompt_is_gone`, `test_every_row_is_its_own_object`,
+and `test_auto_advance_follows_the_playing_instance` — the last **executes** the
+real `activeInstanceIdx()` and `findNextValidSong()` against a list holding the
+same song at index 0 and index 2, and asserts that playing the second copy
+advances to what follows the *second* copy. That is acceptance test 10, and it is
+the case that would have caught the old behaviour.
+
+Nine mutations were run and all nine caught, including two that initially passed
+and forced better tests: pushing the shared map entry instead of a constructed
+row, and a constructor that returns its source.
+
+### Still to do on #13
+
+Membership as its own concept (show mode listing only the set), the `+` picker,
+`✕` removing rather than skipping, and the roles guard on those new paths.
+
+### Still requires a real-device test
+
+Everything here. Acceptance tests 8–15 of #13 need REAPER, and 12 (playback
+started outside ReaSet must not flicker the highlight between two instances)
+cannot be reasoned about from here at all.

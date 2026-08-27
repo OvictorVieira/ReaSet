@@ -95,17 +95,32 @@ def _else_branch(source: str, header: str) -> str:
     return body
 
 
+# A `/` begins a regex literal, rather than a division, when the last
+# significant character before it cannot end an expression.
+_REGEX_MAY_FOLLOW = set("(,=:[!&|?{};+-*%~^<>") | {""}
+
+
 def strip_comments(js: str) -> str:
     """Remove JS comments, leaving string literals intact.
 
-    Needed because the fix being locked below is also *explained* in a comment
-    right where it used to live — the first run of this test failed on its own
-    prose. A naive regex would also have to be trusted not to cut inside a
+    Needed because the fixes locked below are also *explained* in comments right
+    where the old code lived — the first run of one of these tests failed on its
+    own prose. A naive regex would also have to be trusted not to cut inside a
     string containing "//", so this scans instead of guessing.
+
+    REGEX LITERALS ARE PART OF THE SCAN, and skipping them is not a nicety.
+    ReaSet contains `subOv.description.replace(/"/g, '&quot;')`. Without this
+    branch the `"` inside that regex opened a string that never closed, and
+    every one of the ~210k characters after it came back UNSTRIPPED — so an
+    assertion of the form `"X" not in strip_comments(body)` could be satisfied
+    by prose in a comment, or defeated by it, anywhere past that point. The bug
+    surfaced when a test looking for a deleted function found the comment that
+    replaced it; it had been silently weakening assertions before that.
     """
     out = []
     i, n = 0, len(js)
     quote = None
+    last_significant = ""
     while i < n:
         ch = js[i]
         if quote:
@@ -121,6 +136,7 @@ def strip_comments(js: str) -> str:
         if ch in "\"'`":
             quote = ch
             out.append(ch)
+            last_significant = ch
             i += 1
             continue
         if js.startswith("//", i):
@@ -132,9 +148,55 @@ def strip_comments(js: str) -> str:
             end = js.find("*/", i + 2)
             i = n if end == -1 else end + 2
             continue
+        if ch == "/" and last_significant in _REGEX_MAY_FOLLOW:
+            # Copy the literal through verbatim, honouring escapes and classes,
+            # so nothing inside it is mistaken for a quote or a comment.
+            out.append(ch)
+            i += 1
+            in_class = False
+            while i < n:
+                c = js[i]
+                out.append(c)
+                if c == "\\" and i + 1 < n:
+                    out.append(js[i + 1])
+                    i += 2
+                    continue
+                if c == "[":
+                    in_class = True
+                elif c == "]":
+                    in_class = False
+                elif c == "/" and not in_class:
+                    i += 1
+                    break
+                elif c == "\n":
+                    break   # not a regex after all; bail rather than run away
+                i += 1
+            last_significant = "/"
+            continue
         out.append(ch)
+        if not ch.isspace():
+            last_significant = ch
         i += 1
     return "".join(out)
+
+
+def test_strip_comments_survives_a_regex_containing_a_quote() -> None:
+    """Guards the helper the other tests are built on.
+
+    Every `X not in strip_comments(body)` assertion in this file is only as
+    trustworthy as this scan. When it broke, it broke SILENTLY and for the whole
+    remainder of the file.
+    """
+    src = 'var a = s.replace(/"/g, "x");  // comment one\nvar b = 1; // comment two\n'
+    out = strip_comments(src)
+    assert "comment one" not in out and "comment two" not in out, (
+        "a regex literal containing a quote swallowed the rest of the input"
+    )
+    assert 'replace(/"/g, "x")' in out, "the regex itself was mangled"
+    assert strip_comments('var re = /a[/]b/; // gone\n').count("gone") == 0
+    assert "kept" in strip_comments('var s = "// kept";'), (
+        "a comment marker inside a string literal was stripped"
+    )
 
 
 def run_node(script: str) -> str:
@@ -1041,12 +1103,17 @@ def test_controller_list_excludes_songs_outside_the_set(script_body: str) -> Non
         "happens to move the checksum — which is worse than not filtering at "
         "all, because it is intermittent"
     )
-    for site in ("_hideSkippedEffective() && r.skipped",
-                 "(_hideSkippedEffective() ? 1 : 0)"):
-        assert body.count(site) == 2, (
-            f"expected both {site!r} sites (list view and grid view), found "
-            f"{body.count(site)}"
-        )
+    assert body.count("_hideSkippedEffective() && r.skipped") == 2, (
+        "expected the filter at both render sites (list view and grid view), "
+        f"found {body.count('_hideSkippedEffective() && r.skipped')}"
+    )
+    # One checksum site, in syncRegions(). There were two until reorderPrompt()
+    # was deleted with the numeric reorder path — this count going back to 2
+    # would mean a second, competing place that decides when to repaint.
+    assert body.count("(_hideSkippedEffective() ? 1 : 0)") == 1, (
+        "expected exactly one render checksum to hash the filter, found "
+        f"{body.count('(_hideSkippedEffective() ? 1 : 0)')}"
+    )
 
 
 def test_reconnect_does_not_share_the_loop_glyph() -> None:
@@ -1209,3 +1276,235 @@ def test_markup_prose_is_in_the_table() -> None:
         "that is not in the translation table, so it renders in one language "
         "whatever the user picked:\n  " + "\n  ".join(missing)
     )
+
+
+# ── Instance identity (#13) ──────────────────────────────────────────────────
+# A song may appear twice in one set. Two instances occupy the IDENTICAL time
+# range in REAPER, so `currentPos >= r.start && currentPos < r.end` matches both
+# and every scan in this file used to take the first. The cosmetic half of that
+# is the wrong row highlighting; the dangerous half is auto-advance following
+# the earlier copy, which sends the band back to song 2 mid-encore.
+
+def test_no_scan_resolves_the_active_row_positionally(script_body: str) -> None:
+    """One resolver, and nothing may go around it.
+
+    Nine separate list scans used to answer "which row is playing", each with
+    `break` on the first match. They now all defer to activeInstanceIdx(), which
+    consults intent before falling back to the first match.
+    """
+    body = strip_comments(script_body)
+    scans = re.findall(r"for\s*\([^)]*displayList\.length[^)]*\)\s*\{?[^{}]*"
+                       r"currentPos\s*>=\s*\w+\.start", body)
+    assert len(scans) <= 1, (
+        f"{len(scans)} positional scans still resolve the active row directly. "
+        f"Each one takes the FIRST region whose time range contains the cursor, "
+        f"which with a repeat is always the earlier row:\n  "
+        + "\n  ".join(x[:90] for x in scans)
+    )
+
+    resolver = strip_comments(extract_function(body, "activeInstanceIdx"))
+    assert "_activeUidHint" in resolver, "the resolver ignores intent entirely"
+    assert "break" not in resolver, (
+        "activeInstanceIdx() breaks out of its scan — the hinted instance may be "
+        "the LATER one, and stopping at the first match is precisely the bug"
+    )
+    assert "return i" in resolver and "return first" in resolver, (
+        "the resolver no longer has both the intent answer and the documented "
+        "first-match fallback"
+    )
+
+
+def test_dom_ids_key_off_the_instance() -> None:
+    """Two rows for one song must not carry the same DOM id.
+
+    getElementById returns the FIRST match, so a region-keyed id would make the
+    progress fill, the countdown, the active highlight and the loop badge all
+    paint the earlier row while the later one plays — silently, with no error
+    anywhere.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    scripts = inline_scripts(html)[0]
+
+    for prefix in ("row-", "bg-", "dur-", "chev-", "slist-", "loop-counter-"):
+        for m in re.finditer(r'"' + re.escape(prefix) + r'"\s*\+\s*([\w.]+)', scripts):
+            ref = m.group(1)
+            assert "uid" in ref.lower() or ref == "lastActiveID", (
+                f'a DOM id is still built as "{prefix}" + {ref} — with a repeat '
+                f"that names two elements"
+            )
+
+    # The row itself has to be addressable AS a row for the drag reorder.
+    assert 'setAttribute("data-uid"' in scripts, (
+        "rows no longer carry data-uid, so Sortable cannot tell two instances "
+        "apart when it rebuilds the order"
+    )
+    sortable = strip_comments(scripts[scripts.index("onEnd:"):])[:1200]
+    assert 'getAttribute("data-uid")' in sortable, (
+        "Sortable.onEnd still rebuilds the order from data-id, which two rows "
+        "share — dragging either would collapse the pair on the next save"
+    )
+
+
+def test_overrides_stay_keyed_on_the_song(script_body: str) -> None:
+    """Stop / wait / colour / description describe the SONG.
+
+    A repeat is the same song, so both rows must agree about them. This is the
+    one axis that deliberately does NOT move to the uid, and it is easy to
+    "fix" by mistake while converting everything else.
+    """
+    body = strip_comments(script_body)
+    for fn in ("getOverride", "setSongOverride"):
+        src = strip_comments(extract_function(body, fn))
+        assert "uid" not in src, (
+            f"{fn}() has become uid-keyed. Per-instance overrides may be a "
+            f"reasonable feature one day, but they are a decision to take "
+            f"deliberately — not a side effect of an identity refactor"
+        )
+    cycle = strip_comments(extract_function(body, "cycleSongEnd"))
+    assert "setSongEnd(song.id" in cycle, (
+        "cycleSongEnd() writes the end-state under something other than the "
+        "region id, so the two instances of a repeat would disagree"
+    )
+
+
+def test_the_numeric_reorder_prompt_is_gone() -> None:
+    """Acceptance test 4 of #13.
+
+    It was a second reorder path bound to the index number, and the only one
+    that raised a native prompt() — a modal asking a musician to type a
+    position, on a phone, during a show.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    scripts = strip_comments(inline_scripts(html)[0])
+    assert "reorderPrompt" not in scripts, "reorderPrompt is still reachable"
+    # Only the MARKUP: the note explaining why the function was deleted lives in
+    # a JS comment and naturally names it.
+    markup = re.sub(r"<script.*?</script>", "", html, flags=re.S)
+    assert "reorderPrompt" not in re.sub(r"<!--.*?-->", "", markup, flags=re.S), (
+        "the index number is still wired to the numeric reorder prompt"
+    )
+
+
+@requires_node
+def test_auto_advance_follows_the_playing_instance(script_body: str) -> None:
+    """THE test this issue exists for — acceptance test 10.
+
+    With one song listed twice, playing the SECOND copy must advance to what
+    follows the second copy. The old code took the first index whose region
+    contained the cursor, so it advanced from the FIRST copy and the show
+    jumped backwards.
+
+    Runs the real activeInstanceIdx() and findNextValidSong().
+    """
+    fns = "\n".join(extract_function(script_body, f)
+                    for f in ("activeInstanceIdx", "findNextValidSong", "noteActiveInstance"))
+
+    harness = textwrap.dedent(
+        """
+        var RSDiag = { log: function () {} };
+        var _activeUidHint = null;
+        var currentPos = 0;
+        // A, B, A again, C — the same song at index 0 and index 2, so both
+        // rows carry identical start/end.
+        var displayList = [
+            { id: 'A', uid: 'A#1', start:  0, end: 10, skipped: false },
+            { id: 'B', uid: 'B#1', start: 10, end: 20, skipped: false },
+            { id: 'A', uid: 'A#2', start:  0, end: 10, skipped: false },
+            { id: 'C', uid: 'C#1', start: 20, end: 30, skipped: false }
+        ];
+        __FNS__
+
+        var out = [];
+        currentPos = 5;   // inside A — which is BOTH row 0 and row 2
+
+        // No intent: the documented fallback is the first matching instance.
+        _activeUidHint = null;
+        out.push(['no-intent-idx', activeInstanceIdx()]);
+        out.push(['no-intent-next', (findNextValidSong(activeInstanceIdx()) || {}).uid || null]);
+
+        // Played the FIRST copy: advance to what follows the first copy.
+        noteActiveInstance('A#1', 'test');
+        out.push(['first-copy-idx', activeInstanceIdx()]);
+        out.push(['first-copy-next', (findNextValidSong(activeInstanceIdx()) || {}).uid || null]);
+
+        // Played the SECOND copy: advance to what follows the SECOND copy.
+        noteActiveInstance('A#2', 'test');
+        out.push(['second-copy-idx', activeInstanceIdx()]);
+        out.push(['second-copy-next', (findNextValidSong(activeInstanceIdx()) || {}).uid || null]);
+
+        // The transport leaves A entirely. A stale hint must not steer this.
+        currentPos = 15;
+        out.push(['moved-away-idx', activeInstanceIdx()]);
+        out.push(['hint-dropped', _activeUidHint]);
+
+        console.log(JSON.stringify(out));
+        """
+    ).replace("__FNS__", fns)
+
+    got = dict(json.loads(run_node(harness)))
+    expected = {
+        "no-intent-idx": 0,
+        "no-intent-next": "B#1",
+        "first-copy-idx": 0,
+        "first-copy-next": "B#1",
+        # The whole point: index 2, and the song after it, not after index 0.
+        "second-copy-idx": 2,
+        "second-copy-next": "C#1",
+        "moved-away-idx": 1,
+        "hint-dropped": None,
+    }
+    assert got == expected, f"\ngot      {got}\nexpected {expected}"
+
+
+@requires_node
+def test_every_row_is_its_own_object(script_body: str) -> None:
+    """Two instances must not be one object wearing two hats.
+
+    syncRegions() used to push the shared `mainMap` entry straight into
+    displayList. With a repeat that puts the SAME object at two indices, so
+    chain/loop/skip — which are per-row, and the entire reason repeats are
+    useful — would be shared between them, and setting one would set the other.
+
+    Checks both that the build path constructs rows and that the constructor
+    actually copies.
+    """
+    body = strip_comments(script_body)
+    sync = strip_comments(extract_function(body, "syncRegions"))
+    pushes = re.findall(r"displayList\.push\(([^;]*?)\);", sync, re.S)
+    assert pushes, "syncRegions() no longer builds displayList"
+    for p in pushes:
+        assert "_makeInstance(" in p, (
+            f"syncRegions() pushes a row that is not built by _makeInstance: "
+            f"{' '.join(p.split())[:100]!r}. A shared object at two indices "
+            f"means one row's Loop toggles the other's."
+        )
+
+    fn = extract_function(script_body, "_makeInstance")
+    out = run_node(fn + textwrap.dedent(
+        """
+        var region = { id: 'A', name: 'Song A', start: 0, end: 10 };
+        var a = _makeInstance(region, 'A#1', { loop: true });
+        var b = _makeInstance(region, 'A#2', null);
+        a.loop = false; b.chain = true; a.name = 'renamed';
+        console.log(JSON.stringify({
+            distinct:   a !== b,
+            notSource:  a !== region && b !== region,
+            uids:       [a.uid, b.uid],
+            carried:    b.name === 'Song A' && b.start === 0,
+            flagsFree:  [a.loop, b.loop, a.chain, b.chain],
+            sourceSafe: region.name === 'Song A' && region.loop === undefined
+        }));
+        """
+    ))
+    got = json.loads(out)
+    assert got == {
+        "distinct": True,
+        "notSource": True,
+        "uids": ["A#1", "A#2"],
+        "carried": True,
+        # a.loop set true then false; b.loop false; a.chain false; b.chain true.
+        # Nothing leaks between them.
+        "flagsFree": [False, False, False, True],
+        # and nothing leaks back into the region every row is copied from
+        "sourceSafe": True,
+    }, got
