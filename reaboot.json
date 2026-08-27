@@ -2,10 +2,10 @@
   "name": "ReaSet",
   "sub_title": "Live setlist, transport, lyrics and chords for REAPER",
   "description": "Installs ReaSet into REAPER, including its unified background script and web interface. Optional tools and recommended extensions can be selected below.",
-  "website": "https://github.com/djenttleman/ReaSet",
+  "website": "https://github.com/OvictorVieira/ReaSet",
   "skip_additional_packages": true,
   "required_packages": [
-    "https://raw.githubusercontent.com/djenttleman/ReaSet/main/reaboot/index.xml#p=ReaSet/ReaSet&v=latest"
+    "https://raw.githubusercontent.com/OvictorVieira/ReaSet/main/reaboot/index.xml#p=ReaSet/ReaSet&v=latest"
   ],
   "features": {
     "tools": {
@@ -13,7 +13,7 @@
       "default": false,
       "description": "Installs Lyrics Tapper, ReaSet Diagnose, Library Doctor and Text to MIDI Bitmap, plus the ReaImGui extension required by Lyrics Tapper.",
       "packages": [
-        "https://raw.githubusercontent.com/djenttleman/ReaSet/main/reaboot/index.xml#p=ReaSet/ReaSet%20Tools&v=latest",
+        "https://raw.githubusercontent.com/OvictorVieira/ReaSet/main/reaboot/index.xml#p=ReaSet/ReaSet%20Tools&v=latest",
         "https://raw.githubusercontent.com/ReaTeam/Extensions/master/index.xml#p=API/reaper_imgui.ext&v=latest"
       ]
     },

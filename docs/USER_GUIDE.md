@@ -185,7 +185,7 @@ save.
 
 ### Recommended — Install with ReaBoot
 
-[**Install ReaSet with ReaBoot**](https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2Fdjenttleman%2FReaSet%2Fmain%2Freaboot.json)
+[**Install ReaSet with ReaBoot**](https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2FOvictorVieira%2FReaSet%2Fmain%2Freaboot.json)
 
 ReaBoot installs ReaPack (if needed), registers `Reaset.lua` in REAPER's Main
 Action List and puts the web files in `reaper_www_root`. The installer also

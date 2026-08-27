@@ -189,7 +189,7 @@ simplemente no se guarda y no dice nada.
 
 ### Recomendado — Instalar con ReaBoot
 
-[**Instalar ReaSet con ReaBoot**](https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2Fdjenttleman%2FReaSet%2Fmain%2Freaboot.json)
+[**Instalar ReaSet con ReaBoot**](https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2FOvictorVieira%2FReaSet%2Fmain%2Freaboot.json)
 
 ReaBoot instala ReaPack (si hace falta), registra `Reaset.lua` en la lista de
 acciones Main de REAPER y coloca los archivos web en `reaper_www_root`. El

@@ -13,10 +13,10 @@ commit.
 
 ## Public links
 
-- ReaPack repository: `https://raw.githubusercontent.com/djenttleman/ReaSet/main/reaboot/index.xml`
-- ReaBoot recipe: `https://raw.githubusercontent.com/djenttleman/ReaSet/main/reaboot.json`
+- ReaPack repository: `https://raw.githubusercontent.com/OvictorVieira/ReaSet/main/reaboot/index.xml`
+- ReaBoot recipe: `https://raw.githubusercontent.com/OvictorVieira/ReaSet/main/reaboot.json`
 - ReaBoot installer page:
-  `https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2Fdjenttleman%2FReaSet%2Fmain%2Freaboot.json`
+  `https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2FOvictorVieira%2FReaSet%2Fmain%2Freaboot.json`
 
 ## Package layout
 
@@ -33,12 +33,26 @@ commit.
 ReaBoot and ReaPack intentionally do not change user preferences. Users still
 need to run `Reaset` once and optionally configure it as a Startup Action.
 
+## Where this fork stands today
+
+The recipe, the ReaPack index and every install button now point at
+`OvictorVieira/ReaSet`. **The published versions do not yet carry this fork's
+work.** `2.2` and `3.0` are pinned to full commit SHAs that came from upstream,
+so their `<source>` URLs still serve the upstream file contents — they resolve
+under this owner only because a fork shares that history.
+
+Installing through ReaBoot therefore still installs ReaSet 3.0 as upstream
+published it. Making it install this fork's build is one step, and it is the
+step below: tag a release on `main` and add a `<version>` pinned to that
+commit. Until then the button installs the right *repository* and the wrong
+*version*, which is worth knowing before telling anyone to use it.
+
 ## Adding a release
 
 1. Release and tag ReaSet first. Never point a published `<source>` at `main`.
 2. Resolve the tag to its full 40-character commit SHA, then add a new
    `<version>` to both packages in `index.xml`. Source URLs must use
-   `https://raw.githubusercontent.com/djenttleman/ReaSet/<commit-sha>/...`.
+   `https://raw.githubusercontent.com/OvictorVieira/ReaSet/<commit-sha>/...`.
 3. Do **not** add the optional ReaPack `hash` attribute while ReaBoot 1.2.0 is
    the public installer. Its downloader consumes each chunk before feeding it
    to the verifier, so every legitimate checksum is compared against the hash

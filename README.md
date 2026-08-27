@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2Fdjenttleman%2FReaSet%2Fmain%2Freaboot.json">
+  <a href="https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2FOvictorVieira%2FReaSet%2Fmain%2Freaboot.json">
     <img src="assets/install-via-reaboot.svg" alt="Install via ReaBoot" height="52">
   </a>
 </p>
@@ -51,7 +51,7 @@
 ### Recommended — ReaBoot
 
 <p>
-  <a href="https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2Fdjenttleman%2FReaSet%2Fmain%2Freaboot.json">
+  <a href="https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2FOvictorVieira%2FReaSet%2Fmain%2Freaboot.json">
     <img src="assets/install-via-reaboot.svg" alt="Install via ReaBoot" height="52">
   </a>
 </p>
