@@ -119,12 +119,14 @@ Final functional validation was performed in REAPER with real setlist usage test
 > separate loop, lyrics and chords helpers.
 
 ### Required tracks for lyrics/chords
-- A track whose name is `lyrics` — feeds the 🎤 Lyrics panel.
-- A track whose name is `chords` — feeds the 🎸 Chords panel.
-- Each item must contain text in **Item Notes**.
+- A track named **exactly** `Lyrics` — feeds the 🎤 Lyrics panel.
+- A track named **exactly** `Chords` — feeds the 🎸 Chords panel.
+- Each item must carry its text in **Item Notes**.
 
-Name matching is **case-insensitive** and tolerates prefixes/suffixes such as
-`*Lyrics`, `#Chords` or `01 Lyrics`. Both tracks are **optional**.
+The name **is** the command, and it is exact: capitalised, with nothing around
+the word. `lyrics`, `LYRICS` and `01 - Lyrics` do **not** match — but a track
+that is one rename away is recognised and named in the panel, so you are told
+what to fix rather than left with an empty screen. Both tracks are **optional**.
 See [Lyrics & Chords Track Naming](#lyrics--chords-track-naming) for the full rules.
 
 ### Script compatibility
@@ -390,35 +392,69 @@ previous and next verse, which is exactly what is useful at that moment.
 
 ### Lyrics & Chords Track Naming
 ReaSet reads lyrics and chords from **two dedicated REAPER tracks**, identified by their
-name. `Reaset.lua` scans the project and looks for these two keywords:
+name:
 
-| Panel | Track keyword |
+| Panel | Track name |
 |---|---|
-| 🎤 Lyrics | `lyrics` |
-| 🎸 Chords | `chords` |
+| 🎤 Lyrics | `Lyrics` |
+| 🎸 Chords | `Chords` |
 
-**The rule:** matching is case-insensitive, and any *symbol* decoration or *numbering*
-around the keyword is ignored. Strip the leading symbols/numbers and the trailing
-symbols — whatever remains must be **exactly** the word `lyrics` or `chords`.
+**The rule: the name is exact.** Capitalised first letter, the rest lower case,
+nothing around the word. There is one spelling and it is the one above.
 
 | Track name | Detected | Why |
 |---|---|---|
-| `lyrics` · `Lyrics` · `LYRICS` | ✅ | case is ignored |
-| `*Lyrics` · `**Chords**` | ✅ | asterisk decoration stripped |
-| `#Chords` · `-- Lyrics` · `[Chords]` · `>Lyrics` | ✅ | any leading/trailing symbols stripped |
-| `01 Lyrics` · `3 - Chords` | ✅ | leading numbering stripped |
-| `* 01 - Lyrics` | ✅ | mixed prefixes unwind in any order |
-| `Backing Lyrics` · `Lyrics Bus` · `Chords Gtr` | ❌ | an extra **word** remains |
+| `Lyrics` · `Chords` | ✅ | exactly the command |
+| `lyrics` · `LYRICS` | ❌ | wrong case — reported as a near miss |
+| `*Lyrics` · `01 - Lyrics` · `[Chords]` | ❌ | decoration is not part of the name — reported as a near miss |
+| `Backing Lyrics` · `Lyrics Bus` · `Chords Gtr` | ❌ | an ordinary audio track; not offered as a near miss |
 
-Extra words never match — that is deliberate, so ordinary audio tracks that happen to
-contain the word "lyrics"/"chords" are left alone. If two tracks match the same keyword,
-the **topmost** one in the track list wins.
+This used to be forgiving — case folded, symbols and numbering stripped — so
+eight spellings worked. That was the wrong trade: a convention that accepts
+eight spellings is not a convention, nobody converges on one, and the rule that
+decides what a lyrics track is becomes something you have to read the source to
+know.
 
-The text itself lives in **Item Notes** (double-click an item → *Notes*), one item per
-lyric/chord block; the item's position on the timeline is what syncs it to playback.
+Strict is only usable if being wrong is **loud**, so a **near miss** is
+recognised and named. A track called `lyrics` makes the panel say *"there is a
+track «lyrics» — rename it to «Lyrics»"* rather than reporting "no track". The
+Lyrics Tapper does the same: it refuses and tells you to rename, instead of
+creating a second `Lyrics` track beside the one you already have.
 
-Both tracks are **optional**: if `lyrics` or `chords` is missing, that panel simply stays
-idle and everything else (transport, loops, setlist) keeps working.
+If two tracks are named `Lyrics`, the one that **has items** wins — so a divider
+or folder track cannot silently shadow the real one.
+
+Both tracks are **optional**: if `Lyrics` or `Chords` is missing, that panel
+simply stays idle and everything else (transport, loops, setlist) keeps working.
+
+#### What kind of item?
+
+**An empty item** — no take, no audio, no MIDI. It is the REAPER equivalent of
+an empty MIDI clip in Ableton, and it is what the Lyrics Tapper creates
+(`AddMediaItemToTrack`). A MIDI or audio item works too: the bridge never looks
+*inside* the item, only at three things —
+
+| What | Decides |
+|---|---|
+| **Position** | when the line appears |
+| **Length** | how long it stays — a gap between items shows nothing |
+| **Item Notes** | the text itself |
+
+The text lives in **Item Notes** (double-click an item → *Notes*), one item per
+lyric or chord block.
+
+#### Chords inside the lyric
+
+Chords can be written **inline in the lyric text**, in the ChordPro convention,
+and they render above the syllable they land on:
+
+```
+[Am]Quando eu [F]te vi, o [C]mundo [G]parou
+```
+
+Roots, accidentals, qualities, extensions and slash basses are all recognised —
+`C`, `Am`, `F#m7`, `Bb`, `Gsus4`, `Dadd9`, `G/B`. A bracket that is **not** a
+chord is left exactly as typed, so `[intro]` and `[2x]` stay readable.
 
 ### Track List Interaction
 - Tracks containing sub-sections will display a dropdown button (Chevron). Expanding it allows individual targeting of nested sub-regions (e.g. Intro, Chorus, Outro).
