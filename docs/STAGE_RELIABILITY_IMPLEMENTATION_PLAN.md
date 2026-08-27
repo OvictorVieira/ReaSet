@@ -1685,3 +1685,59 @@ multi-edit script must be all-or-nothing, and this one was not.
 **D01–D10** in `docs/STAGE_TEST_MATRIX.md`. D01 and D02 are the reported bug:
 reload the desktop repeatedly, alone, with REAPER busy, and confirm it stays
 Director every time.
+
+---
+
+## 22. One view at a time
+
+Reported from the desktop: three tabs lit at once — LYRICS, CHORDS and CANVAS —
+with only Canvas actually on screen. *"Nunca desseleciona."*
+
+### The tab row was telling the truth
+
+`updateTopTabs()` reported exactly what was open, and three views really were.
+That is the bug: **two of these views open at once is not a layout that exists.**
+
+Lyrics, Chords, Live and Canvas are all `position: fixed; inset: 0` full-screen
+overlays at z-index 200, 210 and higher. The higher one covers the lower one
+completely. They were nonetheless tracked as four independent booleans, and
+opening one never closed the others — so Lyrics → Chords → Canvas left all three
+flagged open, two of them invisible underneath, and their tabs lit forever.
+
+An earlier fix (`f8d287c`) made the tabs *show which view is open*. It was
+correct as far as it went, and it went to the wrong layer: the tab row was
+faithfully rendering a state that should never have existed.
+
+### The fix is at the four places a view opens
+
+`closeOtherViews(keep)` runs in `toggleLyricsPanel`, `toggleChordsPanel`,
+`openCanvasMode` and `openLiveView`. Not in the tab row.
+
+Teaching the tab row to pick a winner by z-index would have made the *tabs*
+honest and left the *state* wrong — and then Escape would close a view nobody
+could see, the lyrics poll would keep running behind Canvas, and the next
+feature to ask "is Lyrics open?" would get the wrong answer. The invariant
+belongs where it can actually be maintained.
+
+Toggling still works: a second press on the open view closes it and lands on
+SHOW, because each toggle keeps its own open/close branch and only the *opening*
+branch closes the others.
+
+### Locked by a test that runs the transitions
+
+`test_only_one_view_can_be_open` executes the real toggles against stubbed DOM
+elements and asserts, **after every transition**, that at most one view is open
+and exactly one tab is lit — then checks *which* tab, for the exact sequence
+from the bug report.
+
+The tests that already existed (`test_view_tab_highlight_contract`,
+`test_view_tabs_have_one_owner`) passed throughout. They checked that the tab
+markup and its single writer were correct, which they were. Nothing checked the
+*state* the writer was rendering. That is the gap worth remembering: a contract
+test on the renderer cannot catch a bad model.
+
+Six mutations run, six caught.
+
+### Still requires a real-device test
+
+**W01–W05** in `docs/STAGE_TEST_MATRIX.md`. W01 is the reported sequence.

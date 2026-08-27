@@ -11321,6 +11321,7 @@
         var initialX, initialY, currentX, currentY;
 
         function openCanvasMode() {
+            closeOtherViews('canvas');
             canvasOpen = true;
             document.getElementById("canvas-mode").classList.add("open");
             updateTopTabs();
@@ -12322,6 +12323,7 @@
             var panel = document.getElementById("lyrics-panel");
             var btn = document.getElementById("lyrics-btn");
             if (lyricsVisible) {
+                closeOtherViews('lyrics');
                 panel.classList.add("open"); if (btn) btn.classList.add("panel-open");
                 wwr_req("GET/EXTSTATE/XR_Lyrics/text");
             } else {
@@ -12339,6 +12341,7 @@
             var panel = document.getElementById("chords-panel");
             var btn = document.getElementById("chords-btn");
             if (chordsVisible) {
+                closeOtherViews('chords');
                 panel.classList.add("open"); if (btn) btn.classList.add("panel-open");
             } else {
                 panel.classList.remove("open"); if (btn) btn.classList.remove("panel-open");
@@ -12713,6 +12716,28 @@
         // them — two mechanisms, neither complete, so any interleaving left the
         // bar disagreeing with the screen. Everything that opens or closes a
         // view calls this now and sets nothing itself.
+        // ── One view at a time ──────────────────────────────────────────────
+        // Lyrics, Chords, Live and Canvas are ALL `position: fixed; inset: 0`
+        // full-screen overlays — z-index 200, 210 and higher. Two of them being
+        // "open" at once is not a layout that exists: the higher one covers the
+        // lower one completely.
+        //
+        // They were nonetheless tracked as four independent booleans, and
+        // opening one never closed the others. So Lyrics → Chords → Canvas left
+        // all three flagged open, two of them invisible underneath, and the tab
+        // row lit three tabs at once — which is what "it never deselects" is.
+        //
+        // Closing the others HERE, at the four places a view opens, rather than
+        // teaching the tab row to pick a winner: a tab row that displays one of
+        // three open views would be honest about the tabs and still leave the
+        // state wrong, and Escape would then close a view nobody could see.
+        function closeOtherViews(keep) {
+            if (keep !== 'lyrics' && lyricsVisible) toggleLyricsPanel();
+            if (keep !== 'chords' && chordsVisible) toggleChordsPanel();
+            if (keep !== 'live'   && liveViewOpen)  closeLiveView();
+            if (keep !== 'canvas' && canvasOpen)    closeCanvasMode();
+        }
+
         function updateTopTabs() {
             var lyricsOpen = document.getElementById('lyrics-panel').classList.contains('open');
             var chordsOpen = document.getElementById('chords-panel').classList.contains('open');
@@ -13205,6 +13230,7 @@
 
         // --- 14. LIVE VIEW ---
         function openLiveView() {
+            closeOtherViews('live');
             liveViewOpen = true;
             document.getElementById("live-view").classList.add("open");
             document.getElementById("live-setlist-name").innerText = currentSetlistName;

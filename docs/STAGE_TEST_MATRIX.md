@@ -278,6 +278,16 @@ nobody else in the room, and the banner named a takeover that never happened.
 | **D09** | With it red, press it. | Reconnects. Once replies flow again it goes back to green and disabled by itself. | | |
 | **D10** | Repeat D08 with the OS set to "reduce motion". | Still red, still the broken plug — just not pulsing. The state must not depend on the animation. | | |
 
+### View tabs
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **W01** | Open LYRICS, then CHORDS, then CANVAS, then LIVE, in that order. | After **each** tap exactly **one** tab is lit — the view you are actually looking at. This sequence lit three at once. | | |
+| **W02** | With a view open, tap the **same** tab again. | It closes and SHOW lights up. | | |
+| **W03** | Close a view with its own ✕ / Exit button instead of the tab. | SHOW lights up. | | |
+| **W04** | Use the keyboard shortcuts (L, C, V, N) in a run. | Same invariant — one lit tab, one open view. | | |
+| **W05** | Open CANVAS, then press Escape. | Back to SHOW, one tab lit, and no invisible view left open behind it. | | |
+
 ---
 
 ## 5. Visual block scenarios

@@ -2155,3 +2155,106 @@ def test_a_warning_banner_does_not_cover_what_it_warns_about() -> None:
         "text wraps to one or two lines depending on width and language, so a "
         "hardcoded value is wrong on exactly the devices this matters for."
     )
+
+
+@requires_node
+def test_only_one_view_can_be_open(script_body: str) -> None:
+    """Lyrics, Chords, Live and Canvas are all `position: fixed; inset: 0`.
+
+    Two of them open at once is not a layout that exists — the higher z-index
+    covers the lower one completely. They were tracked as four independent
+    booleans and opening one never closed the others, so
+    Lyrics → Chords → Canvas left all three flagged open, two invisible
+    underneath, and the tab row lit three tabs. That is what "it never
+    deselects" was.
+
+    Runs the real toggles and asserts the invariant after every transition.
+    """
+    fns = "\n".join(extract_function(script_body, f) for f in (
+        "closeOtherViews", "toggleLyricsPanel", "toggleChordsPanel",
+        "openCanvasMode", "closeCanvasMode", "openLiveView", "closeLiveView",
+        "updateTopTabs",
+    ))
+
+    harness = textwrap.dedent(
+        """
+        var lyricsVisible = false, chordsVisible = false;
+        var liveViewOpen = false, canvasOpen = false;
+        var _lrmLastSongId = null;
+        var currentSetlistName = 'Default';
+        var classes = {};
+        function stubEl(id) {
+            classes[id] = classes[id] || {};
+            return {
+                classList: {
+                    add:      function (c) { classes[id][c] = true; },
+                    remove:   function (c) { classes[id][c] = false; },
+                    contains: function (c) { return !!classes[id][c]; },
+                    toggle:   function (c, on) { classes[id][c] = !!on; }
+                },
+                innerText: '', style: {}
+            };
+        }
+        document = { getElementById: stubEl };
+        function wwr_req() {}
+        function updatePlaybackUI() {}
+        function toggleCanvasEdit() {}
+        function closeLiveConfig() {}
+        function applyLiveSettings() {}
+        function _setViewTabActive(name, on) { classes['tab-' + name] = { active: !!on }; }
+
+        __FNS__
+
+        function openCount() {
+            return [lyricsVisible, chordsVisible, liveViewOpen, canvasOpen]
+                   .filter(Boolean).length;
+        }
+        function litTabs() {
+            return ['show','lyrics','chords','live','canvas']
+                   .filter(function (n) { return classes['tab-' + n] && classes['tab-' + n].active; });
+        }
+
+        var out = [];
+        function step(label, fn) {
+            fn();
+            updateTopTabs();
+            out.push([label, openCount(), litTabs()]);
+        }
+
+        // The exact sequence from the bug report.
+        step('lyrics',            function () { toggleLyricsPanel(); });
+        step('then-chords',       function () { toggleChordsPanel(); });
+        step('then-canvas',       function () { openCanvasMode(); });
+        step('then-live',         function () { openLiveView(); });
+        step('back-to-lyrics',    function () { toggleLyricsPanel(); });
+        // A second press on the open view closes it and lands back on SHOW.
+        step('toggle-off',        function () { toggleLyricsPanel(); });
+        // Closing an overlay directly also lands on SHOW.
+        step('canvas-then-close', function () { openCanvasMode(); closeCanvasMode(); });
+
+        console.log(JSON.stringify(out));
+        """
+    ).replace("__FNS__", fns)
+
+    rows = json.loads(run_node(harness))
+    for label, open_count, lit in rows:
+        assert open_count <= 1, (
+            f"after {label!r}: {open_count} views open at once. They are all "
+            f"full-screen overlays, so the ones underneath are invisible and "
+            f"their tabs stay lit forever."
+        )
+        assert len(lit) == 1, (
+            f"after {label!r} the tab row lights {lit} — exactly one tab must "
+            f"be active, always"
+        )
+
+    got = {r[0]: r[2][0] for r in rows}
+    assert got == {
+        "lyrics": "lyrics",
+        "then-chords": "chords",
+        "then-canvas": "canvas",
+        "then-live": "live",
+        "back-to-lyrics": "lyrics",
+        "toggle-off": "show",
+        "canvas-then-close": "show",
+    }, got
