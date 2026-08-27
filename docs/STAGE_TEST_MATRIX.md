@@ -288,6 +288,18 @@ nobody else in the room, and the banner named a takeover that never happened.
 | **W04** | Use the keyboard shortcuts (L, C, V, N) in a run. | Same invariant — one lit tab, one open view. | | |
 | **W05** | Open CANVAS, then press Escape. | Back to SHOW, one tab lit, and no invisible view left open behind it. | | |
 
+### Session clock
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **K01** | Play something. Quit REAPER. Reopen it and ReaSet. | Clock at **0:00**. This is the reported bug — it read six hours. | | |
+| **K02** | Same, but close the **browser** too before reopening. | Still 0:00. This is the case the in-memory signal alone could not catch. | | |
+| **K03** | Same again with a phone also open as Controller. | **Both** devices at 0:00. | | |
+| **K04** | Play, then leave everything running and untouched for a while. | Keeps counting. A quiet stretch mid-rehearsal is not a new session. | | |
+| **K05** | Stop `Reaset.lua` from the Actions list, leave REAPER open. | Clock does **not** reset — the script being absent is not a restart. | | |
+| **K06** | Open a different REAPER project. | Clock at 0:00. | | |
+| **K07** | Long-press the clock on the Director. | Zeroes on every device. On a Controller the long-press still does nothing. | | |
+
 ---
 
 ## 5. Visual block scenarios

@@ -9062,6 +9062,9 @@
                         if (tok[1] === "ReaSet" && tok[2] === "tick") {
                             var _tv = tok.slice(3).join('\t');
                             if (_tv !== xr_tick) { xr_tick = _tv; xr_tick_ts = Date.now(); }
+                            // Also the "did REAPER restart" signal — see the
+                            // session-clock note.
+                            _sessionObserveLuaTick(_tv);
                         }
                         if (tok[1] === "ReaSet" && tok[2] === "error") {
                             xr_error = tok.slice(3).join('\t');
@@ -12123,6 +12126,24 @@
         // played anything for hours — so that is what is measured. A six-hour
         // rehearsal with playback throughout keeps counting; a laptop that
         // played at 14:00 and is reopened at 20:00 starts over.
+        // Closing REAPER ends the session. That is the rule people expect and
+        // the one the idle rule below could not express: quit REAPER at 20:00
+        // after playing at 17:00, come back at 23:00, and the gap since the last
+        // playback is only three hours — under the idle threshold — so the clock
+        // restored and showed six. Correct by its own rule, and wrong.
+        //
+        // Reaset.lua's `tick` counter starts at 0 every time the script runs, so
+        // a tick LOWER than the highest one seen means it restarted, which means
+        // REAPER did. It needs no new key, no Lua change and no extra install
+        // step, and every device sees the same counter so they all reset
+        // together.
+        //
+        // The high-water mark is PERSISTED, because the case that actually
+        // happens is quitting REAPER *and* closing the browser. Without that the
+        // page comes back with no memory and the restart is invisible.
+        var SESSION_TICK_KEY = 'reaset_lua_tick';
+        var SESSION_TICK_WRITE_MS = 30 * 1000;   // localStorage write throttle
+
         var SESSION_IDLE_RESET_MS = 4 * 60 * 60 * 1000;
         var SESSION_SEEN_WRITE_MS = 60 * 1000;   // localStorage write throttle
         var SESSION_KEY = 'reaset_session_start';
@@ -12136,6 +12157,48 @@
         // Never the Director's own clock — see the note above.
         var _sessionRemoteSec = null;
         var _sessionRemoteAt  = 0;
+
+        var _luaTickSeen = (function () {
+            try {
+                var v = parseInt(localStorage.getItem(SESSION_TICK_KEY), 10);
+                return isNaN(v) ? null : v;
+            } catch (e) { return null; }
+        })();
+        var _luaTickWritten = 0;
+
+        function _sessionObserveLuaTick(raw) {
+            var v = parseInt(raw, 10);
+            if (isNaN(v)) return;   // '' — the script is not running, or just quit
+            if (_luaTickSeen !== null && v < _luaTickSeen) {
+                _sessionClear('reaper-restarted');
+                _luaTickWritten = 0;   // persist the new low mark immediately
+            }
+            _luaTickSeen = v;
+            // Throttled: the tick advances about twice a second, and a
+            // localStorage write at that rate is the same mistake the setlist
+            // push made. A stale high-water mark only makes the comparison more
+            // conservative, never less.
+            var now = Date.now();
+            if (now - _luaTickWritten < SESSION_TICK_WRITE_MS) return;
+            _luaTickWritten = now;
+            try { localStorage.setItem(SESSION_TICK_KEY, String(v)); } catch (e) {}
+        }
+
+        // The state half of a reset, with no role gate and no button flash —
+        // an automatic reset happens on every device, not just the one whose
+        // clock somebody long-pressed.
+        function _sessionClear(reason) {
+            RSDiag.log('SESSION_CLEAR', { reason: reason || '?' });
+            _sessionStart = null; _sessionSeen = 0; _sessionSeenWritten = 0;
+            try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+            // Drop the Director's last published value too. Without this a
+            // follower keeps extrapolating from the old anchor until the next
+            // beat arrives, so the two devices disagree for a few seconds
+            // across exactly the event that was supposed to zero them both.
+            _sessionRemoteSec = null; _sessionRemoteAt = 0;
+            _sessionPublish();
+            _tickSessionClock();
+        }
 
         (function _sessionRestore() {
             var raw;
@@ -12270,10 +12333,7 @@
         // attribute says which it is, refreshed by applyModeUI().
         function resetSessionClock() {
             if (REASET_MODE !== 'director') return;
-            _sessionStart = null; _sessionSeen = 0; _sessionSeenWritten = 0;
-            try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
-            _sessionPublish();   // immediately, not on the next beat
-            _tickSessionClock();
+            _sessionClear('long-press');
             var g = document.getElementById('tb-session-grp');
             if (g) { g.classList.add('resetting'); setTimeout(function () { g.classList.remove('resetting'); }, 450); }
         }

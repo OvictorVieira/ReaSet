@@ -1741,3 +1741,87 @@ Six mutations run, six caught.
 ### Still requires a real-device test
 
 **W01–W05** in `docs/STAGE_TEST_MATRIX.md`. W01 is the reported sequence.
+
+---
+
+## 23. Closing REAPER ends the session
+
+Reported on the current build: quit REAPER, come back, and the clock read six
+hours.
+
+### §14's rule was necessary and not sufficient
+
+The idle rule expires a session after four hours with **no playback**. The case
+that actually happens does not look like that:
+
+> Played at 17:00. Quit REAPER at 20:00. Came back at 23:00.
+
+The gap since the last playback is **three** hours — under the threshold — so
+the record restored and the clock displayed `now − 17:00` = six hours. Correct
+by its own rule, and wrong. §14 solved "yesterday's rehearsal" and left
+"quit and came back after dinner", which is the routine one.
+
+### The signal was already there
+
+`Reaset.lua` publishes a `tick` counter that **starts at 0 every time the
+script runs**. A tick *lower* than the highest one seen means it restarted —
+which means REAPER did. No new key, no Lua change, no extra install step, and
+every device sees the same counter, so they all reset together.
+
+The high-water mark is **persisted**, because the case that actually happens is
+quitting REAPER *and* closing the browser. Without that the page comes back
+with no memory and the restart is invisible — which is precisely the report.
+
+Written to `localStorage` at most every 30s. The tick advances about twice a
+second, and a write at that rate is the same mistake the setlist push made in
+`8dc40f9`. A stale high-water mark only ever makes the comparison *more*
+conservative, never less.
+
+`''` is not a restart. It means the script is not running — or has just quit —
+and treating it as one would zero the clock every time `Reaset.lua` is stopped.
+
+### The reset now has two paths, gated differently
+
+| | gate | why |
+|---|---|---|
+| `resetSessionClock()` — the long-press | **Director only** | a follower's would be overwritten by the next published tick half a second later |
+| `_sessionClear()` — automatic | **none** | a REAPER restart happens to every device at once; gating it would leave every Controller counting from a session that ended |
+
+`_sessionClear()` also drops the Director's last **published anchor**
+(`_sessionRemoteSec` / `_sessionRemoteAt`). Without that a follower keeps
+extrapolating from the old value until the next beat arrives, so the two devices
+disagree for a few seconds across exactly the event that was meant to zero them
+both.
+
+### The rule, complete
+
+The clock resets when **any** of these happens, and they compose:
+
+1. REAPER restarts
+2. Nobody plays anything for four hours
+3. The REAPER project changes
+4. The Director long-presses the clock
+
+### The accepted consequence
+
+**If REAPER crashes mid-show and you reopen it, the clock zeroes.** That is the
+same signal as a deliberate restart and cannot be told apart from it. A crash
+mid-show is a disaster in which the clock is the smallest problem; "quit and
+came back" happens weekly and was confusing every time. The routine case wins.
+
+### Locked by tests
+
+`test_closing_reaper_ends_the_session` **executes** the real observer across six
+cases: ticking upward keeps the clock, a restart clears it, a fresh browser
+against a still-running REAPER keeps it, a fresh browser after a restart clears
+it (**the reported case**), `''` keeps it, and the persistence is throttled.
+
+`test_an_automatic_session_reset_is_not_director_gated` keeps the two paths from
+collapsing into one.
+
+Seven mutations run, seven caught.
+
+### Still requires a real-device test
+
+Quit REAPER with the browser open and with it closed, in both orders, and
+confirm the clock is at `0:00` on **both** devices when everything comes back.

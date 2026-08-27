@@ -2258,3 +2258,129 @@ def test_only_one_view_can_be_open(script_body: str) -> None:
         "toggle-off": "show",
         "canvas-then-close": "show",
     }, got
+
+
+@requires_node
+def test_closing_reaper_ends_the_session(script_body: str) -> None:
+    """The idle rule alone could not express this, and that is why it shipped
+    showing six hours.
+
+    Quit REAPER at 20:00 after playing at 17:00, come back at 23:00: the gap
+    since the last playback is three hours, under the four-hour idle threshold,
+    so the clock restored and displayed six. Correct by its own rule, and wrong.
+
+    Reaset.lua's `tick` starts at 0 on every run, so a tick LOWER than the
+    highest one seen means it restarted — which means REAPER did.
+    """
+    fns = "\n".join(extract_function(script_body, f)
+                    for f in ("_sessionObserveLuaTick", "_sessionClear"))
+
+    harness = textwrap.dedent(
+        """
+        var NOW = 1000000000000;
+        Date.now = function () { return NOW; };
+        var RSDiag = { log: function () {} };
+        var SESSION_TICK_KEY = 'reaset_lua_tick', SESSION_KEY = 'reaset_session_start';
+        var SESSION_TICK_WRITE_MS = 30 * 1000;
+        var store = {};
+        var localStorage = {
+            getItem: function (k) { return store.hasOwnProperty(k) ? store[k] : null; },
+            setItem: function (k, v) { store[k] = String(v); },
+            removeItem: function (k) { delete store[k]; }
+        };
+        var _sessionStart = null, _sessionSeen = 0, _sessionSeenWritten = 0;
+        var _sessionRemoteSec = null, _sessionRemoteAt = 0;
+        var _luaTickSeen = null, _luaTickWritten = 0;
+        var published = [];
+        function _sessionPublish() { published.push(_sessionStart); }
+        function _tickSessionClock() {}
+
+        __FNS__
+
+        function armed(startAgoMs) {
+            _sessionStart = NOW - startAgoMs; _sessionSeen = NOW; _sessionSeenWritten = NOW;
+            store[SESSION_KEY] = 'x';
+            _sessionRemoteSec = 300; _sessionRemoteAt = NOW;
+        }
+        var out = [];
+
+        // A run of REAPER, ticking upward. Nothing resets.
+        armed(6 * 3600 * 1000);
+        _sessionObserveLuaTick('0');
+        NOW += 40000; _sessionObserveLuaTick('75');
+        NOW += 40000; _sessionObserveLuaTick('150');
+        out.push(['ticking-up-keeps-clock', _sessionStart !== null, _luaTickSeen]);
+
+        // REAPER restarts: the counter goes back to 0.
+        NOW += 3 * 3600 * 1000;
+        _sessionObserveLuaTick('0');
+        out.push(['restart-clears', _sessionStart, store[SESSION_KEY] || null,
+                  _sessionRemoteSec, _sessionRemoteAt]);
+
+        // A fresh browser, REAPER still running past the persisted mark.
+        store[SESSION_TICK_KEY] = '5000';
+        _luaTickSeen = 5000; _luaTickWritten = 0;
+        armed(600000);
+        _sessionObserveLuaTick('6000');
+        out.push(['still-running-keeps-clock', _sessionStart !== null]);
+
+        // A fresh browser, REAPER restarted while it was closed. THE REPORTED CASE.
+        store[SESSION_TICK_KEY] = '5000';
+        _luaTickSeen = 5000; _luaTickWritten = 0;
+        armed(6 * 3600 * 1000);
+        _sessionObserveLuaTick('15');
+        out.push(['reopened-after-restart-clears', _sessionStart]);
+
+        // The script is not running: '' must not be read as a restart.
+        _luaTickSeen = 5000;
+        armed(600000);
+        _sessionObserveLuaTick('');
+        out.push(['no-script-keeps-clock', _sessionStart !== null, _luaTickSeen]);
+
+        // The high-water mark is persisted, but not on every tick.
+        store = {}; _luaTickSeen = null; _luaTickWritten = 0;
+        _sessionObserveLuaTick('10');
+        var afterFirst = store[SESSION_TICK_KEY];
+        NOW += 1000; _sessionObserveLuaTick('20');
+        var afterSecond = store[SESSION_TICK_KEY];
+        NOW += 60000; _sessionObserveLuaTick('30');
+        out.push(['write-throttled', afterFirst, afterSecond, store[SESSION_TICK_KEY]]);
+
+        console.log(JSON.stringify(out));
+        """
+    ).replace("__FNS__", fns)
+
+    got = {r[0]: r[1:] for r in json.loads(run_node(harness))}
+    assert got["ticking-up-keeps-clock"] == [True, 150], got["ticking-up-keeps-clock"]
+    # Cleared: local start gone, storage gone, AND the Director's published
+    # anchor dropped — otherwise a follower keeps extrapolating from the old one
+    # across exactly the event that was meant to zero them both.
+    assert got["restart-clears"] == [None, None, None, 0], got["restart-clears"]
+    assert got["still-running-keeps-clock"] == [True], got["still-running-keeps-clock"]
+    assert got["reopened-after-restart-clears"] == [None], got["reopened-after-restart-clears"]
+    # '' means the script is not running. It is not evidence of a restart, and
+    # treating it as one would zero the clock every time Reaset.lua is stopped.
+    assert got["no-script-keeps-clock"] == [True, 5000], got["no-script-keeps-clock"]
+    # First write lands; the one a second later does not; the one a minute later does.
+    assert got["write-throttled"] == ["10", "10", "30"], got["write-throttled"]
+
+
+def test_an_automatic_session_reset_is_not_director_gated(script_body: str) -> None:
+    """A REAPER restart happens to every device at once.
+
+    resetSessionClock() is the LONG-PRESS, and stays Director-only because the
+    Director owns the clock. The automatic path must not borrow that gate, or
+    a Controller would keep counting from a session that ended.
+    """
+    body = strip_comments(script_body)
+    clear = strip_comments(extract_function(body, "_sessionClear"))
+    assert "REASET_MODE" not in clear, (
+        "_sessionClear() is role-gated, so an automatic reset skips every "
+        "Controller and the devices disagree about what time it is"
+    )
+    press = strip_comments(extract_function(body, "resetSessionClock"))
+    assert re.search(r"""REASET_MODE\s*!==\s*['"]director['"]\s*\)\s*return""", press), (
+        "the long-press reset lost its Director gate — a follower's would be "
+        "overwritten by the next published tick half a second later"
+    )
+    assert "_sessionClear(" in press, "the two reset paths have drifted apart"
