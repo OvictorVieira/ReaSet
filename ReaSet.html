@@ -840,9 +840,48 @@
             border-bottom-color: transparent;
         }
 
+        /* ── Hover: a wipe that DARKENS ─────────────────────────────────
+           This used to swap the row's BACKGROUND, and
+           .song-row.has-mapped-color:hover outranks .song-row.active — so
+           pointing at the row that was playing repainted its green with the
+           song's own colour, and the row you were pointing at stopped looking
+           like the row that was playing.
+           The fix is not a different tint per state. It is to darken, left to
+           right: black over whatever the row already is. Green stays green and
+           goes darker, amber stays amber and goes darker, and no state can be
+           repainted as another because nothing adds a colour of its own. */
+        .song-row::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            width: 100%;
+            background: rgba(0, 0, 0, 0.26);
+            -webkit-transform: scaleX(0);
+            transform: scaleX(0);
+            -webkit-transform-origin: left center;
+            transform-origin: left center;
+            -webkit-transition: -webkit-transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+            transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .song-row:hover::after {
+            -webkit-transform: scaleX(1);
+            transform: scaleX(1);
+        }
+
         .song-row:hover {
-            background: rgba(255, 255, 255, 0.12);
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+        }
+
+        /* A touch screen has no pointer to follow, and iOS leaves :hover stuck
+           on whatever was tapped last — a row that stays lit after you moved
+           on is worse than no hover at all. */
+        @media (hover: none) {
+            .song-row::after { display: none; }
         }
 
         /* ── Row state ──────────────────────────────────────────────────
@@ -863,7 +902,8 @@
            green for both green states, because they are the same thread —
            what is playing and what plays next — and the bar is heavier on
            the one that is actually happening. */
-        .song-row.active {
+        .song-row.active,
+        .song-row.active.has-mapped-color {
             background: rgba(30, 215, 96, 0.13);
             border-color: rgba(30, 215, 96, 0.20);
             box-shadow: none;
@@ -875,13 +915,15 @@
             filter: grayscale(1);
         }
 
-        .song-row.queued, .grid-card.queued {
+        .song-row.queued, .grid-card.queued,
+        .song-row.queued.has-mapped-color, .grid-card.queued.has-mapped-color {
             background: rgba(255, 159, 10, 0.10);
             border-color: rgba(255, 159, 10, 0.20);
             box-shadow: none;
         }
 
-        .song-row.cued {
+        .song-row.cued,
+        .song-row.cued.has-mapped-color {
             background: rgba(30, 215, 96, 0.08);
             border-color: rgba(30, 215, 96, 0.16);
             box-shadow: none;
@@ -890,7 +932,8 @@
         /* Playing wins. "What happens if I press Play" is not a question
            about the row that is already playing, and stacking the two put a
            ring around the one card that least needed one. */
-        .song-row.active.cued {
+        .song-row.active.cued,
+        .song-row.active.cued.has-mapped-color {
             background: rgba(30, 215, 96, 0.13);
             border-color: rgba(30, 215, 96, 0.20);
             box-shadow: none;
@@ -1463,8 +1506,9 @@
             border-left: none;
         }
 
-        .song-row.has-mapped-color:hover {
-            background: var(--mapped-theme-color-hover, rgba(255, 255, 255, 0.12));
+        .song-row.active .card-bg-fill,
+        .song-row.active.has-mapped-color .card-bg-fill {
+            background: rgba(30, 215, 96, 0.20);
         }
 
         .song-row.has-mapped-color .card-bg-fill {
@@ -1698,9 +1742,28 @@
             border-left: none;
         }
 
-        .section-row.has-mapped-color:hover {
-            background: var(--mapped-theme-color-hover, rgba(255, 255, 255, 0.10));
+        /* Same defect as the song row: this outranked the playing state and
+           repainted it. See the .song-row hover block for the reasoning. */
+
+        .section-row::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            width: 100%;
+            background: rgba(0, 0, 0, 0.26);
+            -webkit-transform: scaleX(0);
+            transform: scaleX(0);
+            -webkit-transform-origin: left center;
+            transform-origin: left center;
+            -webkit-transition: -webkit-transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+            transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+            pointer-events: none;
+            z-index: 0;
         }
+        .section-row:hover::after { -webkit-transform: scaleX(1); transform: scaleX(1); }
+        @media (hover: none) { .section-row::after { display: none; } }
 
         .section-row.has-mapped-color .card-bg-fill {
             background: var(--mapped-theme-color-fill, rgba(30, 215, 96, 0.30));
@@ -1896,7 +1959,8 @@
         /* This was drawn in --color-active, the STOP red, on the one card
            that is playing — the opposite of what red means everywhere else
            in this app. Same language as the list now. */
-        .grid-card.active, .grid-card.active.cued {
+        .grid-card.active, .grid-card.active.cued,
+        .grid-card.active.has-mapped-color, .grid-card.active.cued.has-mapped-color {
             background: rgba(30, 215, 96, 0.13);
             border-color: rgba(30, 215, 96, 0.20);
             box-shadow: none;
@@ -1964,9 +2028,26 @@
             border-left: none;
         }
 
-        .grid-card.has-mapped-color:hover {
-            background: var(--mapped-theme-color-hover, rgba(255, 255, 255, 0.12));
+
+        .grid-card::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            width: 100%;
+            background: rgba(0, 0, 0, 0.26);
+            -webkit-transform: scaleX(0);
+            transform: scaleX(0);
+            -webkit-transform-origin: left center;
+            transform-origin: left center;
+            -webkit-transition: -webkit-transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+            transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+            pointer-events: none;
+            z-index: 0;
         }
+        .grid-card:hover::after { -webkit-transform: scaleX(1); transform: scaleX(1); }
+        @media (hover: none) { .grid-card::after { display: none; } }
 
         .grid-card.has-mapped-color .card-bg-fill {
             background: var(--mapped-theme-color-fill, rgba(30, 215, 96, 0.30));

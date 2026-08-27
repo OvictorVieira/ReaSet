@@ -608,6 +608,17 @@ the whole panel when there is not. Measured with grid forced off: each swatch
 | **W07** | Any modal using two or three columns. | Still in columns, not stacked. | | |
 | **W08** | The whole app, generally, on that iPad. | Nothing else moved: the transport, the rows and the panels do not use grid. | | |
 
+### Hover, and what a row is
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **H01** | Point at a plain row. | It darkens, filling left to right. | | |
+| **H02** | Point at the row that is **playing**. | It stays **green** and goes darker. It used to be repainted in the song's own colour — the row under the pointer stopped looking like the row that was playing. | | |
+| **H03** | Point at a **coloured** row. | Same colour, darker. Nothing turns orange that was not orange. | | |
+| **H04** | Colour the song that is currently playing. | The row stays **green**. Playing outranks the song's colour; both are one class deep, and the colour rule only won because it sits later in the file. | | |
+| **H05** | Look at the progress bar on that row. | Green, not the song's colour. A green row with an amber bar reads as two songs at once. | | |
+| **H06** | On the phone and the iPad, tap a row and then look at it. | No stuck highlight. There is no pointer to follow, and iOS leaves `:hover` on whatever was tapped last, so the wipe is off entirely on touch. | | |
+
 ### The role modal
 
 | ID | Scenario | Expected | Result | Notes |

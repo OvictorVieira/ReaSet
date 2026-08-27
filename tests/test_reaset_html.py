@@ -3554,3 +3554,76 @@ def test_the_palettes_offer_fixed_colours_only() -> None:
         assert 'type="color"' not in block.group(1), (
             f"{container} still carries a native colour picker"
         )
+
+
+# ── Hover ───────────────────────────────────────────────────────────────────
+
+
+def test_hover_darkens_and_never_repaints() -> None:
+    """The hover used to swap the row's background colour.
+
+    `.song-row.has-mapped-color:hover` outranks `.song-row.active`, so pointing
+    at the row that was playing repainted its green with the song's own colour
+    — the row under the pointer stopped looking like the row that was playing.
+
+    A hover that DARKENS cannot do that: black over whatever the row already
+    is. Green stays green, amber stays amber, and no state can be mistaken for
+    another because nothing adds a colour of its own.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    css = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
+
+    for surface in (".song-row", ".section-row", ".grid-card"):
+        assert not re.search(
+            re.escape(surface) + r"\.has-mapped-color:hover\s*\{", css
+        ), f"{surface} repaints its background on hover again"
+
+        sweep = _css_decls(html, surface + "::after")
+        assert "rgba(0, 0, 0" in sweep, (
+            f"{surface}'s hover adds a colour instead of darkening"
+        )
+        assert "scaleX(0)" in sweep and "transform-origin: left" in sweep, (
+            f"{surface}'s hover is no longer a left-to-right wipe"
+        )
+
+
+def test_playing_beats_the_song_colour() -> None:
+    """Both are `.song-row.<one-class>` — 0,2,0 — and the colour rule sits
+    later in the file, so a song you had coloured stopped looking like the song
+    that was playing. Naming the combination settles it by intent rather than
+    by which rule happens to be further down.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    css = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
+    for state in (
+        ".song-row.active",
+        ".song-row.cued",
+        ".song-row.queued",
+        ".grid-card.active",
+    ):
+        # It has to be the rule that paints the SURFACE. Searching the whole
+        # file for the selector also matches the .card-bg-fill rule below,
+        # which is how the first version of this check passed with the
+        # background rule's selector cut back to 0,2,0.
+        found = False
+        for m in re.finditer(r"(?m)^ {8}([^{}]*?)\{([^}]*)\}", css):
+            sels, body = m.group(1), m.group(2)
+            if "background:" not in body:
+                continue
+            if any(
+                part.strip() == state + ".has-mapped-color"
+                for part in sels.split(",")
+            ):
+                found = True
+                break
+        assert found, (
+            f"{state} no longer outranks the song's own colour on the surface "
+            "itself — a coloured song stops looking like the song that is "
+            "playing"
+        )
+
+    fill = _css_decls(html, ".song-row.active.has-mapped-color .card-bg-fill")
+    assert "30, 215, 96" in fill, (
+        "the progress bar on a coloured playing row is not green — a green row "
+        "with an amber bar reads as two songs at once"
+    )
