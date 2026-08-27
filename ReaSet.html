@@ -1213,8 +1213,16 @@
 
         .ctx-color-swatch {
             width: 100%;
-            height: 30px;
-            aspect-ratio: 1;
+            /* Square by padding, not by aspect-ratio. Setting width AND height
+               makes an engine ignore aspect-ratio entirely, so these rendered
+               38x30 ovals — and aspect-ratio is iOS 15 anyway, which the iPad
+               this has to run on will never see. padding-bottom resolves
+               against the WIDTH on every engine there has ever been. */
+            height: 0;
+            /* minus the 2px border on each side: box-sizing is border-box
+               here, so a flat 100% adds the border on top and the circle comes
+               out 4px taller than it is wide. */
+            padding-bottom: calc(100% - 4px);
             border-radius: 50%;
             border: 2px solid transparent;
             cursor: pointer;
@@ -1222,12 +1230,13 @@
         }
 
         .ctx-color-swatch:hover { transform: scale(1.18); }
-        .ctx-block-scope {
-            display: flex; align-items: center; gap: 7px;
-            margin: 9px 0 2px;
-            font-size: 11.5px; color: var(--text2);
-            cursor: pointer;
-        }
+
+        /* Spacing only. This used to carry .song-ctx-toggle as well, which is
+           the 36x20 SWITCH: it sized the whole label to 36px and hid the
+           checkbox, so the text spilled out over the swatches and there was
+           nothing to see you could tap. It is an ordinary panel row now, with
+           the same switch Loop and Skip use on the right of it. */
+        .ctx-block-scope { margin-top: 10px; }
 
         .ctx-color-swatch.selected {
             border-color: #fff;
@@ -5748,7 +5757,7 @@
 
     <!-- APP CONFIRM MODAL -->
     <div class="app-modal-overlay" id="appConfirmOverlay"
-        style="z-index:9000;display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
+        style="z-index:9700;display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
         <div class="modal-preview">
             <div class="modal-title" id="appConfirmTitle"></div>
             <div class="modal-body" id="appConfirmBody"></div>
@@ -5761,12 +5770,32 @@
 
     <!-- APP ALERT MODAL -->
     <div class="app-modal-overlay" id="appAlertOverlay"
-        style="z-index:9000;display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
+        style="z-index:9700;display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
         <div class="modal-preview">
             <div class="modal-title" id="appAlertTitle">Notification</div>
             <div class="modal-body" id="appAlertBody"></div>
             <div class="modal-actions">
                 <button class="m-btn m-btn-confirm" onclick="closeAppAlert()">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- APP PROMPT MODAL -->
+    <!-- The app had a styled confirm and a styled alert but no styled ASK, so
+         every question fell back to window.prompt(): an OS dialog in a
+         different typeface, with the URL of the page above it, on a screen
+         that is meant to look like an instrument. -->
+    <div class="app-modal-overlay" id="appPromptOverlay"
+        style="z-index:9700;display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center;">
+        <div class="modal-preview">
+            <div class="modal-title" id="appPromptTitle"></div>
+            <div class="modal-body" id="appPromptBody"></div>
+            <input class="modal-input" id="appPromptInput" type="text"
+                   autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+                   onkeydown="_appPromptKey(event)">
+            <div class="modal-actions">
+                <button class="m-btn m-btn-cancel" onclick="closeAppPrompt(false)">Cancel</button>
+                <button class="m-btn m-btn-confirm" id="appPromptOk" onclick="closeAppPrompt(true)">OK</button>
             </div>
         </div>
     </div>
@@ -6363,6 +6392,22 @@
             ["DIRECTOR", "DIRECTOR", "DIRETOR"],
             ["Elapsed show time", "Tiempo transcurrido del show", "Tempo decorrido do show"],
             ["Total setlist duration", "Duración total del setlist", "Duração total do setlist"],
+            ["New setlist", "Nuevo setlist", "Novo setlist"],
+            ["Create", "Crear", "Criar"],
+            ["Name", "Nombre", "Nome"],
+            ["It starts as a copy of the list on screen.",
+             "Empieza como una copia de la lista en pantalla.",
+             "Ele começa como uma cópia da lista que está na tela."],
+            ["A setlist with that name already exists.",
+             "Ya existe un setlist con ese nombre.",
+             "Já existe um setlist com esse nome."],
+            ["Director PIN", "PIN de Director", "PIN de Diretor"],
+            ["Save", "Guardar", "Salvar"],
+            ["Unlock", "Desbloquear", "Desbloquear"],
+            ["Rename this device", "Renombrar este dispositivo", "Renomear este aparelho"],
+            ["Pull the shared setlist", "Traer el setlist compartido", "Puxar o setlist compartilhado"],
+            ["Replace", "Reemplazar", "Substituir"],
+            ["Take over", "Tomar el control", "Assumir"],
             ["EDIT", "EDITAR", "EDITAR"],
             ["DISCARD", "DESCARTAR", "DESCARTAR"],
             ["APPLY", "APLICAR", "APLICAR"],
@@ -7579,13 +7624,16 @@
             };
 
             if (manual && REASET_MODE === 'director') {
-                // window.confirm() on purpose, not showAppConfirm(): the app's
-                // own #appConfirmOverlay has no CSS rule that actually shows it
-                // on .open (verified — every OTHER app-modal-overlay id in this
-                // file has one, this one doesn't), so it would silently never
-                // appear. A destructive "overwrite your local setlist" action
-                // needs a confirmation that is guaranteed to be visible.
-                if (window.confirm(t('Replace your local setlist with the shared one? This overwrites your unsynced changes.'))) doApply();
+                // This used window.confirm() with a comment claiming
+                // #appConfirmOverlay had no rule showing it on .open, so the
+                // styled dialog would silently never appear. Measured in a
+                // browser: .app-modal-overlay.open declares display:flex
+                // !important, which beats the inline display:none, and it
+                // renders. deleteSetlist() had been relying on it all along.
+                showAppConfirm(
+                    t('Pull the shared setlist'),
+                    t('Replace your local setlist with the shared one? This overwrites your unsynced changes.'),
+                    doApply, t('Replace'), true);
             } else {
                 doApply();
             }
@@ -7694,14 +7742,17 @@
         // write is a silent no-op from a Player, this check just avoids a
         // confusing "nothing happened" for someone who taps it anyway.
         function setDirectorPin() {
-            if (REASET_MODE !== 'director') { window.alert(t('Only a Director can set the PIN.')); return; }
-            var next = window.prompt(t('New Director PIN (leave empty to remove the protection):'));
-            if (next === null) return; // cancelled
-            next = next.trim();
-            var hash = next ? _pinHash(next) : '';
-            wwr_req('SET/EXTSTATEPERSIST/ReaSet/directorPinHash/' + hash);
-            _directorPinHash = hash; // optimistic — next probe reply confirms it
-            window.alert(next ? t('Director PIN set.') : t('Director PIN removed — anyone can open as Director.'));
+            if (REASET_MODE !== 'director') { showAppAlert(t('Only a Director can set the PIN.')); return; }
+            showAppPrompt(t('Director PIN'), t('New Director PIN (leave empty to remove the protection):'), '',
+                function (raw) {
+                    var next = (raw || '').trim();
+                    var hash = next ? _pinHash(next) : '';
+                    wwr_req('SET/EXTSTATEPERSIST/ReaSet/directorPinHash/' + hash);
+                    _directorPinHash = hash; // optimistic — next probe reply confirms it
+                    showAppAlert(next ? t('Director PIN set.') : t('Director PIN removed — anyone can open as Director.'),
+                                 t('Director PIN'));
+                },
+                { password: true, okLabel: t('Save') });
         }
 
         // ── Director conflict detection (heartbeat) ──────────────────────────────
@@ -7746,14 +7797,15 @@
             return _guessDeviceLabel();
         }
         function renameDevice() {
-            var next = window.prompt(t('Name for this device (other devices see it):'), _deviceName());
-            if (next === null) return; // cancelled
-            next = next.trim();
-            try {
-                if (next) localStorage.setItem('reaset_device_name', next);
-                else localStorage.removeItem('reaset_device_name'); // back to the auto-guess
-            } catch (e) { /* private mode etc — name only applies this session */ }
-            _refreshDeviceNameBtn();
+            showAppPrompt(t('Rename this device'), t('Name for this device (other devices see it):'),
+                _deviceName(), function (raw) {
+                    var next = (raw || '').trim();
+                    try {
+                        if (next) localStorage.setItem('reaset_device_name', next);
+                        else localStorage.removeItem('reaset_device_name'); // back to the auto-guess
+                    } catch (e) { /* private mode etc — name only applies this session */ }
+                    _refreshDeviceNameBtn();
+                }, { okLabel: t('Save') });
         }
         function _refreshDeviceNameBtn() {
             var el = document.getElementById('deviceNameBtnLabel');
@@ -8337,8 +8389,11 @@
                 // gesture as colouring a song, over a different set. Sticky,
                 // because picking a colour and then reaching for a modifier is
                 // backwards: the choice of scope comes first.
-                + '<label class="song-ctx-toggle ctx-block-scope"><input type="checkbox" id="_ctx_blockscope_' + rowUid + '">'
-                + '<span>' + t('Apply to the whole block') + '</span></label>'
+                + '<div class="song-ctx-row ctx-block-scope">'
+                +   '<span class="song-ctx-label">' + t('Apply to the whole block') + '</span>'
+                +   '<label class="song-ctx-toggle"><input type="checkbox" id="_ctx_blockscope_' + rowUid + '">'
+                +   '<span class="song-ctx-track"><span class="song-ctx-thumb"></span></span></label>'
+                + '</div>'
                 + '<button class="ctx-clear-btn" onclick="_ctxClearColor(\'' + rowUid + '\')">\u2715 ' + t('Remove colour') + '</button>'
                 + '</div></div>';
 
@@ -9050,47 +9105,64 @@
         // plain reload of an already-stored Director (see the boot comment
         // further down). Recalling a stored mode grants no new privilege, so
         // it must not re-demand a PIN or re-litigate a conflict warning either.
+        // Claiming Director passes three gates in order: the PIN, the takeover
+        // warning, then the lease. They used to be a straight line of blocking
+        // dialogs; they are the same three, in the same order, written as
+        // continuations, because a styled dialog answers through a callback
+        // instead of by returning. Each gate still refuses by simply not
+        // calling the next one — which is exactly what `return` did.
         function chooseMode(mode) {
-            if (mode === 'director') {
-                if (_directorPinHash) {
-                    var entered = window.prompt(t('Enter the Director PIN:'));
-                    if (entered === null) return; // cancelled — stay on the selector
-                    if (_pinHash(entered.trim()) !== _directorPinHash) { window.alert(t('Wrong PIN.')); return; }
-                }
-                // BLOCKED BY DEFAULT, not warned about.
-                //
-                // The old flow showed this same fact as a confirm() and let the
-                // user proceed, which meant the documented invariant was really
-                // "one Director unless somebody clicks OK". Two control
-                // surfaces issuing transport at one REAPER is not a state to
-                // offer as an option in a dialog nobody reads mid-soundcheck.
-                //
-                // Takeover still exists — it has to, or a Director whose laptop
-                // died would lock everyone out — but it is a separate,
-                // deliberate second confirmation, and it revokes the old
-                // device's authority rather than running two.
-                if (_dcForeignActive()) {
-                    RSDiag.log('LEASE_BLOCKED', { incumbent: _directorHeartbeatId });
-                    if (!window.confirm('\u26A0 ' + _dcForeignLabel() + ' ' +
-                        t('is already controlling this REAPER session.') + '\n\n' +
-                        t('Only one Director is allowed at a time. Cancel to stay as Controller.') + '\n\n' +
-                        t('Take over as Director? The other device becomes read-only.'))) {
-                        return; // stay on the selector; Controller remains available
-                    }
-                }
-                // Whether this is a first claim or an explicit takeover, the
-                // lease decides. Nothing becomes Director on optimism.
-                requestDirectorLease(function (won) {
-                    if (!won) {
-                        window.alert(t('Another device claimed Director first — opening as Controller.'));
-                        _applyChosenMode('controller');
-                        return;
-                    }
-                    _applyChosenMode('director');
+            if (mode !== 'director') { _applyChosenMode(mode); return; }
+            _dcGatePin(function () {
+                _dcGateTakeover(function () {
+                    // Whether this is a first claim or an explicit takeover,
+                    // the lease decides. Nothing becomes Director on optimism.
+                    requestDirectorLease(function (won) {
+                        if (!won) {
+                            showAppAlert(t('Another device claimed Director first — opening as Controller.'),
+                                         t('Director'));
+                            _applyChosenMode('controller');
+                            return;
+                        }
+                        _applyChosenMode('director');
+                    });
                 });
-                return;
-            }
-            _applyChosenMode(mode);
+            });
+        }
+
+        function _dcGatePin(next) {
+            if (!_directorPinHash) { next(); return; }
+            showAppPrompt(t('Director PIN'), t('Enter the Director PIN:'), '', function (raw) {
+                if (_pinHash((raw || '').trim()) !== _directorPinHash) {
+                    // Stays on the selector, as before: a wrong PIN is not a
+                    // reason to drop someone into a mode they did not pick.
+                    showAppAlert(t('Wrong PIN.'), t('Director PIN'));
+                    return;
+                }
+                next();
+            }, { password: true, okLabel: t('Unlock') });
+        }
+
+        // BLOCKED BY DEFAULT, not warned about.
+        //
+        // The old flow showed this same fact as a confirm() and let the user
+        // proceed, which meant the documented invariant was really "one
+        // Director unless somebody clicks OK". Two control surfaces issuing
+        // transport at one REAPER is not a state to offer as an option in a
+        // dialog nobody reads mid-soundcheck.
+        //
+        // Takeover still exists — it has to, or a Director whose laptop died
+        // would lock everyone out — but it is a separate, deliberate second
+        // confirmation, and it revokes the old device's authority rather than
+        // running two.
+        function _dcGateTakeover(next) {
+            if (!_dcForeignActive()) { next(); return; }
+            RSDiag.log('LEASE_BLOCKED', { incumbent: _directorHeartbeatId });
+            showAppConfirm(
+                '\u26A0 ' + _dcForeignLabel() + ' ' + t('is already controlling this REAPER session.'),
+                t('Only one Director is allowed at a time. Cancel to stay as Controller.') + ' ' +
+                t('Take over as Director? The other device becomes read-only.'),
+                next, t('Take over'), true);
         }
 
         function _applyChosenMode(mode) {
@@ -13970,11 +14042,19 @@
 
         function createSetlist() {
             if (!canEditSetlist()) { RSDiag.blocked('createSetlist', 'role-cannot-edit-setlist'); return; }
-            var name = prompt(t('New setlist name:'));
-            if (name && !setlists[name]) {
+            // Title, body and placeholder all said "New setlist name" — three
+            // labels for one field. The body says the thing the dialog cannot
+            // show instead: the new set starts as a copy of what is on screen.
+            showAppPrompt(t('New setlist'), t('It starts as a copy of the list on screen.'), '', function (raw) {
+                var name = (raw || '').trim();
+                if (!name) return;
+                // Silently doing nothing on a name that is taken is the same
+                // dead end as an empty one: the dialog closes and no setlist
+                // appears, with nothing said about why.
+                if (setlists[name]) { showAppAlert(t('A setlist with that name already exists.'), t('New setlist')); return; }
                 setlists[name] = displayList.map(function (r) { return { id: r.id, chain: r.chain, skipped: r.skipped, loop: r.loop }; });
                 currentSetlistName = name; saveCurrentState(); updateSetlistDropdown(); displayList = []; initialized = false; syncRegions();
-            }
+            }, { okLabel: t('Create'), placeholder: t('Name') });
         }
         // --- 3-DOT MENU ---
         function toggleDotMenu(e) {
@@ -14014,6 +14094,47 @@
         }
         function closeAppAlert() {
             document.getElementById('appAlertOverlay').classList.remove('open');
+        }
+
+        // The styled counterpart of window.prompt(). Callback rather than a
+        // return value, which is the whole cost of the change: native prompt()
+        // BLOCKS, so every caller was written as `var x = prompt(...); if (x
+        // === null) return;` and had to be turned inside out.
+        //
+        // Cancel does not call back at all, which is what `=== null` meant.
+        var _promptCallback = null;
+        function showAppPrompt(title, body, value, onOk, opts) {
+            opts = opts || {};
+            document.getElementById('appPromptTitle').textContent = title;
+            document.getElementById('appPromptBody').textContent  = body || '';
+            var ok = document.getElementById('appPromptOk');
+            ok.textContent = opts.okLabel || 'OK';
+            var input = document.getElementById('appPromptInput');
+            // A PIN typed on a stand in front of a room should not be readable
+            // over a shoulder. window.prompt() had no way to do this.
+            input.type  = opts.password ? 'password' : 'text';
+            input.value = (value === null || value === undefined) ? '' : String(value);
+            input.placeholder = opts.placeholder || '';
+            _promptCallback = onOk;
+            document.getElementById('appPromptOverlay').classList.add('open');
+            // Deferred: the element is display:none until the class lands, and
+            // focus() on a hidden input does nothing.
+            setTimeout(function () { input.focus(); input.select(); }, 30);
+        }
+        function closeAppPrompt(run) {
+            var input = document.getElementById('appPromptInput');
+            var val = input.value;
+            document.getElementById('appPromptOverlay').classList.remove('open');
+            var cb = _promptCallback;
+            _promptCallback = null;
+            input.type = 'text';          // never leave a password field behind
+            if (run && cb) cb(val);
+        }
+        function _appPromptKey(e) {
+            // Enter and Escape are what a native prompt answered to, and the
+            // muscle memory does not know the dialog changed.
+            if (e.key === 'Enter'  || e.keyCode === 13) { e.preventDefault(); closeAppPrompt(true);  }
+            if (e.key === 'Escape' || e.keyCode === 27) { e.preventDefault(); closeAppPrompt(false); }
         }
 
         // --- SETLIST FILE I/O ---

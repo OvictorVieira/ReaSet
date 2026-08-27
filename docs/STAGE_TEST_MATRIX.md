@@ -462,6 +462,38 @@ followers see the set go back.
 | **X13** | As a **Controller**, look at the top bar. | No EDIT, no Apply, no Discard, no `⋮`. | | |
 | **X14** | On the phone and the old iPad, in edit mode. | Two round buttons, ✕ and ✓, clearly apart — not touching. They are 34px, same as every other control up there. | | |
 
+### Dialogs are the app's, not the operating system's
+
+`alert`, `confirm` and `prompt` are OS chrome: a different typeface, the page's
+URL above them, a system sheet on a phone. Every one of them is now a styled
+modal. The app already had a confirm and an alert; it had no **ask**, which is
+why every question fell through to `window.prompt()`.
+
+The three dialogs also moved above the mode selector (z-index 9600). At their
+old 9000 the PIN prompt and the takeover warning — both raised *by* that
+selector — would have opened behind it: invisible, while still holding the
+answer everything downstream waits for.
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **Q01** | Press **+** in the top bar. | An app modal, styled like the rest — never an OS box with the page URL in it. | | |
+| **Q02** | Type a name, press **Enter** (don't click Create). | It creates the setlist. Enter still submits. | | |
+| **Q03** | Open it again and press **Escape**. | It closes and nothing is created. | | |
+| **Q04** | Open it and press **Cancel**. | Same: nothing created. | | |
+| **Q05** | Create a setlist with a name that already exists. | It says so. It used to close and silently do nothing. | | |
+| **Q06** | Create one with an empty name, or only spaces. | Nothing created, no error spam. | | |
+| **Q07** | Sidebar → **Rename this device**. | Styled modal, pre-filled with the current name, text selected. | | |
+| **Q08** | Rename to empty and save. | Back to the automatic guess (e.g. "iPhone · Safari"). | | |
+| **Q09** | Sidebar → set a **Director PIN**. | Styled modal, and the field is **masked** — a PIN typed on a stand is not readable over a shoulder. | | |
+| **Q10** | With a PIN set, choose Director from the mode selector. | The PIN modal appears **on top of** the selector, not behind it. Masked. | | |
+| **Q11** | Enter the wrong PIN. | Styled "Wrong PIN.", and you stay a Controller. | | |
+| **Q12** | Cancel the PIN modal. | You stay a Controller. Nothing is claimed. | | |
+| **Q13** | With another device already Director, choose Director. | Styled takeover warning naming the other device, red **Take over** button. | | |
+| **Q14** | Cancel that warning. | You stay a Controller and **no lease is requested**. | | |
+| **Q15** | Confirm it. | You become Director and the other device goes read-only. | | |
+| **Q16** | As Director, sidebar → **Pull** the shared setlist. | Styled confirm, red **Replace**. This one used a native confirm on purpose, on the belief that the styled one could never appear — measured in a browser, it appears. | | |
+| **Q17** | On the phone, open any of these. | The app's own modal, not a system sheet sliding up from the bottom. | | |
+
 ### The role modal
 
 | ID | Scenario | Expected | Result | Notes |

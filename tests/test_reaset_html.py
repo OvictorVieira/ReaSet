@@ -3022,3 +3022,64 @@ def test_the_context_panel_width_is_one_number_not_two() -> None:
         f"CSS says {declared}px, the placement code says {placements} — the "
         "panel is positioned as a size it does not have"
     )
+
+
+# ── Native dialogs ──────────────────────────────────────────────────────────
+
+
+def test_no_native_dialog_survives_in_live_code(script_body: str) -> None:
+    """alert/confirm/prompt are the operating system's UI, not the app's.
+
+    They arrive in a different typeface, carry the page's URL above them, and
+    on a phone they are a system sheet — on a screen meant to read as an
+    instrument, in the middle of a show. The app has styled equivalents for
+    all three: showAppAlert, showAppConfirm and showAppPrompt.
+
+    Checked against the script with comments stripped, so a call inside the
+    commented-out MIDI block does not count as live — and neither does the
+    prose in a comment that mentions window.prompt() by name.
+    """
+    body = strip_comments(script_body)
+    # (?<![\w.]) keeps showAppConfirm / showAppPrompt and any obj.confirm()
+    # from matching; the point is the bare global.
+    calls = re.findall(r"(?<![\w.])(?:window\.)?(alert|confirm|prompt)\s*\(", body)
+    assert not calls, (
+        f"native {sorted(set(calls))} still reachable — use showAppAlert / "
+        "showAppConfirm / showAppPrompt"
+    )
+
+
+def test_the_app_dialogs_open_above_the_mode_selector(script_body: str) -> None:
+    """The PIN prompt and the takeover warning are raised BY the mode selector.
+
+    The selector is z-index 9600. The three app dialogs shipped at 9000, so a
+    dialog opened from it would have rendered *behind* it: invisible, while
+    still holding the answer everything downstream waits for.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    selector = re.search(r"#mode-select-overlay\s*\{[^}]*z-index:\s*(\d+)", html)
+    assert selector, "the mode selector lost its z-index"
+    floor = int(selector.group(1))
+
+    for overlay in ("appConfirmOverlay", "appAlertOverlay", "appPromptOverlay"):
+        found = re.search(
+            r'id="%s"\s*\n?\s*style="z-index:(\d+)' % overlay, html
+        )
+        assert found, f"{overlay} is gone or no longer carries a z-index"
+        assert int(found.group(1)) > floor, (
+            f"{overlay} sits at {found.group(1)}, under the mode selector's "
+            f"{floor} — it would open behind it"
+        )
+
+
+def test_the_styled_prompt_answers_to_enter_and_escape(script_body: str) -> None:
+    """Muscle memory does not know the dialog stopped being a native one."""
+    key = strip_comments(extract_function(script_body, "_appPromptKey"))
+    assert "Enter" in key and "13" in key, "Enter no longer submits"
+    assert "Escape" in key and "27" in key, "Escape no longer cancels"
+
+    close = strip_comments(extract_function(script_body, "closeAppPrompt"))
+    assert "if (run && cb)" in close, (
+        "cancel calls back anyway — native prompt() returned null, and every "
+        "caller read that as 'do nothing'"
+    )

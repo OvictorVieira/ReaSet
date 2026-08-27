@@ -2098,3 +2098,98 @@ mode, both exits exist and only while editing, a Controller is refused in JS
 rather than only in CSS, Discard restores the live list rather than the saved
 copy, a setlist switch re-snapshots, and the panel's two width constants
 agree. All eleven mutations of those were caught.
+
+## 26. The dialogs were the operating system's
+
+Reported on hitting the new-setlist box: *"acabei de ver q a janela pra criar o
+novo setlist é um alert... tudo q for alert tem q virar modal com padrão UIUX
+do app"*.
+
+Ten live `alert` / `confirm` / `prompt` calls. The app already had
+`showAppConfirm` and `showAppAlert` — what it did not have was an **ask**, so
+every question in the file fell through to `window.prompt()`. That is one
+missing dialog shape producing four OS popups.
+
+### The cost of the change is the blocking
+
+`prompt()` and `confirm()` return a value. Every caller was written as a
+straight line — `var x = prompt(...); if (x === null) return;` — and a styled
+dialog answers through a callback, so each one had to be turned inside out.
+Cancel is expressed by simply not calling back, which is what `=== null` meant.
+
+The worst of these was `chooseMode('director')`: three sequential gates — the
+PIN, the takeover warning, then the lease — as three blocking dialogs in a
+row. They are now `_dcGatePin` and `_dcGateTakeover` taking a continuation, in
+the same order, each refusing by not calling the next. The behaviour that
+matters is unchanged and was measured: a wrong PIN leaves you a Controller, a
+cancelled PIN claims nothing, a cancelled takeover **does not request the
+lease**, and a confirmed one does.
+
+### Two things found while doing it
+
+**The dialogs would have opened behind the mode selector.** `#mode-select-overlay`
+is `z-index: 9600`; the three app modals shipped at `9000`. The PIN prompt and
+the takeover warning are raised *by* that selector, so at 9000 they would have
+rendered underneath it — invisible, while still holding the answer the whole
+chain waits on. They are at 9700 now, and a test asserts they stay above the
+selector rather than asserting a magic number.
+
+**A comment asserted the styled confirm could never appear.** The sync-pull
+confirm used `window.confirm()` deliberately, explaining that
+`#appConfirmOverlay` had no CSS rule showing it on `.open` and so would
+silently never render. Measured in a browser: `.app-modal-overlay.open`
+declares `display: flex !important`, which beats the inline `display: none`,
+and the dialog renders with its OK button correctly styled. `deleteSetlist()`
+had been relying on it the whole time. The claim was false, and the comment
+now records what was measured instead.
+
+### Small things the conversion exposed
+
+- `createSetlist()` did nothing at all on a name that was already taken: the
+  dialog closed, no setlist appeared, nothing said why. It says so now.
+- The PIN field is `type="password"`. `window.prompt()` had no way to mask
+  anything, and a PIN typed on a stand is readable over a shoulder.
+- The new-setlist dialog had the same sentence as title, body and placeholder.
+  The body now says the thing the dialog cannot show: the new set starts as a
+  copy of what is on screen.
+
+### One left, and it is dead
+
+`confirm(t('Clear every MIDI mapping?'))` sits inside the commented-out MIDI
+block — Safari has no Web MIDI, so the whole module is inside `/* */`. It was
+left alone: restructuring code that cannot be executed or tested would be
+guesswork, and converting it would prove nothing. The test that forbids native
+dialogs strips comments first, so it does not count it as live and will catch
+it the moment that block is revived.
+
+### The colour palette, in the same panel
+
+Two defects, both mine, both from the colour feature:
+
+**"Apply to the whole block" was unreadable.** The label carried
+`.song-ctx-toggle`, which is the 36×20 **switch**: it sized the whole label to
+36px and set `input { display: none }`. So the text spilled out over the
+swatches above it and there was no visible checkbox at all — nothing to see
+you could tap. It is an ordinary `.song-ctx-row` now, with the same switch
+Loop and Skip use on the right of it.
+
+**The swatches were ovals.** `width: 100%; height: 30px; aspect-ratio: 1` —
+an engine ignores `aspect-ratio` when both width and height are set, so they
+rendered 38×30. And `aspect-ratio` is iOS 15, which the iPad this has to run
+on will never see. They use `height: 0; padding-bottom: calc(100% - 4px)`
+instead, which resolves against the width on every engine there has ever been;
+the 4px is the 2px border on each side, since `box-sizing` is `border-box`
+here. Measured back at 38×38.
+
+### Verification
+
+Driven in a browser with a listener on Playwright's `dialog` event, which
+fires if any native dialog reaches the page: none did, across new-setlist
+(create, duplicate, cancel), the PIN gate (wrong, cancelled, correct), and the
+takeover gate (cancelled, confirmed).
+
+Three source invariants in `tests/test_reaset_html.py`: no bare
+`alert`/`confirm`/`prompt` survives in live code (comments stripped, so the
+dead MIDI block does not count), the three overlays sit above the mode
+selector, and the styled prompt still answers to Enter and Escape and does not
+call back on cancel. All five mutations of those were caught.
