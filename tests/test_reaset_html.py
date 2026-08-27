@@ -1993,3 +1993,146 @@ def test_the_boundary_decision_has_no_side_effects(script_body: str) -> None:
             f"decision, and the seven-branch test above is now asserting against "
             f"something that also acts"
         )
+
+
+# ── The Director lease, and the false positives that took one off the air ────
+
+def test_an_incumbent_director_needs_evidence_to_be_displaced(script_body: str) -> None:
+    """Absence of evidence is not evidence of a competitor.
+
+    `_directorClaimId` is only filled by the 2s probe reply, so at the 2.6s
+    deadline it can still hold '' (no reply yet) or a STALE id from another
+    device's earlier session — ExtState survives the REAPER session, not the
+    browser's. Both used to read as "somebody else claimed it", so a working
+    Director stood down with nobody else in the room, and then stopped beating,
+    which let the next device legitimately claim the role. The story became
+    self-confirming.
+
+    A NEW claim must still fail closed. Re-verifying an incumbent must not.
+    """
+    body = strip_comments(script_body)
+    lease = strip_comments(extract_function(body, "requestDirectorLease"))
+    assert "keepUnlessDisplaced" in lease, (
+        "requestDirectorLease() no longer distinguishes a new claim from a "
+        "re-verification, so one of the two rules is wrong for its caller"
+    )
+    m = re.search(r"won\s*=\s*keepUnlessDisplaced\s*\?\s*([^:]+):\s*(.+?);", lease, re.S)
+    assert m, "the two decisions are no longer expressed as one conditional"
+    incumbent, fresh = m.group(1), m.group(2)
+    assert "_directorClaimId" not in incumbent, (
+        "an incumbent's lease still depends on the claim read-back arriving in "
+        "time — that is the false negative that took a Director off the air"
+    )
+    assert "displaced" in incumbent, "an incumbent stands down on nothing at all"
+    assert "_directorClaimId" in fresh and "displaced" in fresh, (
+        "a NEW claim no longer fails closed — that is how two devices end up "
+        "driving one REAPER"
+    )
+
+    verify = strip_comments(extract_function(body, "_dcVerifyStoredDirector"))
+    assert "keepUnlessDisplaced" in verify, (
+        "the stored-Director boot check asks for the strict new-claim rule, so "
+        "it can still stand down on a missing reply"
+    )
+
+
+def test_the_displaced_banner_does_not_invent_a_takeover(script_body: str) -> None:
+    """It said "another device is now the Director" unconditionally.
+
+    When the stand-down had nothing to do with another device, that sent people
+    looking for a phone that was not there.
+    """
+    body = strip_comments(script_body)
+    banner = strip_comments(extract_function(body, "_setDisplacedBanner"))
+    assert "_dcForeignActive()" in banner, (
+        "the displaced banner names a takeover without checking that one "
+        "happened"
+    )
+    assert "stepped down" in banner, "there is no message for the no-takeover case"
+
+
+def test_reconnect_button_reports_the_connection(script_body: str) -> None:
+    """A button that looks the same whether or not anything is wrong asks the
+    musician to remember what it is for and to guess whether now is the moment.
+
+    Connected: disabled, quiet, a status light. Lost: red, pulsing, pressable.
+    Both driven by the SAME evidence as the badge dot, so the two can never
+    disagree about whether REAPER is answering.
+    """
+    body = strip_comments(script_body)
+    fn = strip_comments(extract_function(body, "_refreshReconnectBtn"))
+    assert "is-live" in fn and "is-down" in fn, "the button no longer has two states"
+    assert "disabled" in fn, (
+        "the button stays pressable while connected — a mid-show press then "
+        "restarts polling for no reason"
+    )
+    assert "_connIsLive()" in fn or "live" in fn, "it no longer reads the connection"
+
+    badge = strip_comments(extract_function(body, "_refreshConnBadge"))
+    assert "_refreshReconnectBtn" in badge, (
+        "the button is refreshed somewhere other than beside the badge dot, so "
+        "the two can drift apart about the same fact"
+    )
+    assert "_connIsLive" in badge, "the badge and the button no longer share one test"
+
+    html = REASET_HTML.read_text(encoding="utf-8")
+    assert 'id="reconnect-btn"' in html, "the button lost the id its refresher needs"
+    # Scoped to the rule, not the file: `animation:` appears in dozens of other
+    # rules, so a file-wide search never sees this one go.
+    down = re.search(r"\.t-btn-sync\.is-down\s*\{([^}]*)\}", html)
+    assert down, ".t-btn-sync.is-down is gone — there is no disconnected state"
+    assert "animation:" in down.group(1), (
+        "the disconnected state no longer pulses. It is the only thing on that "
+        "bar that moves, and that is the whole point: a musician should not have "
+        "to remember what the button is for or guess whether now is the moment."
+    )
+    assert "background:" in down.group(1), (
+        "the disconnected state no longer changes colour either, so it reads "
+        "identically to the connected one"
+    )
+    # The pulse must be skippable, and the state still legible without it.
+    rm = re.search(r"@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{(.*?)\n        \}",
+                   html, re.S)
+    assert rm and "t-btn-sync.is-down" in rm.group(1) and "animation: none" in rm.group(1), (
+        "the pulse ignores prefers-reduced-motion — colour and icon must still "
+        "carry the state for a viewer who asked for less motion"
+    )
+
+
+def test_a_warning_banner_does_not_cover_what_it_warns_about() -> None:
+    """The banner is position:fixed directly under the top bar.
+
+    Without room made for it, it sits ON the setlist row — and that row carries
+    the ACTIVE SETLIST'S NAME, which is the one thing a musician needs while a
+    warning is telling them something changed. Reported from a real device: the
+    banner covered the row and the list looked broken.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    stack = re.search(r"#reaset-banner-stack\s*\{([^}]*)\}", html)
+    assert stack and "position: fixed" in stack.group(1), (
+        "the banner is no longer fixed — if it now sits in the flow, this test "
+        "and the offset below are both obsolete, so re-check the layout by hand"
+    )
+
+    topbar = re.search(r"\.app-topbar\s*\{([^}]*)\}", html)
+    assert topbar, ".app-topbar rule is gone"
+    assert "var(--reaset-banner-h)" in topbar.group(1), (
+        "nothing makes room for the banner after the top bar, so it covers the "
+        "setlist row again"
+    )
+
+    content_top = re.search(r"--reaset-content-top:\s*([^;]+);", html)
+    assert content_top, "--reaset-content-top is gone"
+    assert "--reaset-banner-h" in content_top.group(1), (
+        "the full-screen views start below the top bar but ABOVE the banner, so "
+        "a warning covers Live / Canvas / Lyrics content too"
+    )
+
+    scripts = inline_scripts(html)[0]
+    measure = strip_comments(extract_function(scripts, "_bannerMeasure"))
+    assert "--reaset-banner-h" in measure and "offsetHeight" in measure, (
+        "the banner height is no longer measured. It must not be assumed: the "
+        "text wraps to one or two lines depending on width and language, so a "
+        "hardcoded value is wrong on exactly the devices this matters for."
+    )

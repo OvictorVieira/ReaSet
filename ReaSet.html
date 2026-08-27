@@ -61,12 +61,13 @@
                would be wrong on exactly the devices this matters for. 0 when
                no banner is showing, which is almost always. */
             --reaset-banner-h: 0px;
-            /* Where content that is NOT inside .app-frame starts: below the
-               top bar. It does NOT add the banner height — the banner overlays
-               these views rather than displacing them, same as it does the
-               setlist. Kept as its own name because several overlays read it
-               and one place to change beats six. */
-            --reaset-content-top: var(--topbar-h);
+            /* Where content that is NOT inside .app-frame starts: below the top
+               bar AND below any warning banner. It used to exclude the banner
+               height deliberately — the banner overlaid these views — but that
+               is the same defect it had over the setlist: a warning that hides
+               what it is warning you about. Kept as its own name because
+               several overlays read it and one place to change beats six. */
+            --reaset-content-top: calc(var(--topbar-h) + var(--reaset-banner-h));
             --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
             --font-mono: 'SF Mono', 'Roboto Mono', 'Consolas', 'Courier New', monospace;
         }
@@ -334,6 +335,14 @@
 
         /* TOP TABS */
         .app-topbar {
+            /* Makes room for the warning banner instead of letting it cover the
+               row below. #reaset-banner-stack is position:fixed at
+               top:--topbar-h, so without this it sits ON the setlist row — and
+               that row is where the active setlist's NAME is, which is the one
+               thing a musician needs while a warning is telling them something
+               changed. --reaset-banner-h is 0 whenever no banner is up, which
+               is almost always, so this costs nothing the rest of the time. */
+            margin-bottom: var(--reaset-banner-h);
             background: rgba(22, 22, 22, 0.95);
             backdrop-filter: blur(32px) saturate(140%);
             -webkit-backdrop-filter: blur(32px) saturate(140%);
@@ -1862,7 +1871,38 @@
             border: 1.5px solid rgba(255, 255, 255, 0.1);
         }
 
-        .t-btn-sync .rc-ico { display: block; }
+        .t-btn-sync .rc-ico { display: none; }
+        /* Connected: a status light, not a control. Disabled on purpose — there
+           is nothing to repair, and a pressable button invites a mid-show press
+           that restarts polling for no reason. */
+        .t-btn-sync.is-live {
+            cursor: default;
+            color: var(--color-brand);
+            border-color: rgba(30, 215, 96, 0.34);
+            background: rgba(30, 215, 96, 0.09);
+            opacity: 1;
+        }
+        .t-btn-sync.is-live .rc-ok { display: block; }
+
+        /* Lost: the one thing on this bar that moves. */
+        .t-btn-sync.is-down {
+            cursor: pointer;
+            color: #fff;
+            background: var(--color-active);
+            border-color: transparent;
+            animation: reconnectPulse 1.15s ease-in-out infinite;
+        }
+        .t-btn-sync.is-down .rc-bad { display: block; }
+        .t-btn-sync.is-down:hover { background: #ff453a; }
+        @keyframes reconnectPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(252, 60, 68, 0.55); }
+            70%      { box-shadow: 0 0 0 11px rgba(252, 60, 68, 0); }
+        }
+        /* Respected here specifically: this button pulses to be noticed, and a
+           viewer who asked for less motion still has the colour and the icon. */
+        @media (prefers-reduced-motion: reduce) {
+            .t-btn-sync.is-down { animation: none; }
+        }
         .t-btn-sync:hover {
             background: rgba(255, 255, 255, 0.12);
             color: var(--text-primary);
@@ -4751,8 +4791,9 @@
                  which beside PLAY / STOP / Loop reads as "sync the setlist" —
                  the one thing it does not do. It is the recovery a musician has
                  when a venue's wifi drops mid-show, so it is named for that. -->
-            <button class="t-btn t-btn-sync" onclick="wwr_start()" aria-label="Reconnect"
-                title="Restart the connection to REAPER. Does not change the setlist."><svg class="rc-ico" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 2v6M15 2v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6 8h12v2.5a6 6 0 0 1-12 0V8Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 16.5V22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+            <button class="t-btn t-btn-sync is-live" id="reconnect-btn" disabled
+                onclick="wwr_start(); _refreshReconnectBtn();"
+                title="Connected to REAPER"><svg class="rc-ico rc-ok" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 2v6M15 2v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6 8h12v2.5a6 6 0 0 1-12 0V8Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 16.5V22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><svg class="rc-ico rc-bad" width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 2v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M15 2v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6 7.5h12v2a6 6 0 0 1-3.2 5.3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 3l18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
         </div>
     </div>
 
@@ -6306,6 +6347,12 @@
             ["AGAIN", "OTRA VEZ", "DE NOVO"],
             ["This project has no regions yet.", "Este proyecto todavía no tiene regiones.",
              "Este projeto ainda não tem regiões."],
+            ["This device stepped down as Director — tap the badge to take it back",
+             "Este dispositivo dejó de ser Director — tocá el distintivo para retomarlo",
+             "Este dispositivo deixou de ser Diretor — toque no selo para reassumir"],
+            ["No reply from REAPER — tap to reconnect",
+             "Sin respuesta de REAPER — tocá para reconectar",
+             "Sem resposta do REAPER — toque para reconectar"],
             ["Amber", "Ámbar", "Âmbar"],
             ["Teal", "Verde azulado", "Verde-azulado"]
         ];
@@ -6675,7 +6722,8 @@
 
         var BANNER_CSS = 'display:block;text-align:center;font-size:13px;color:#fff;' +
             'font-weight:600;padding:6px 10px;letter-spacing:.02em;' +
-            'box-shadow:0 2px 8px rgba(0,0,0,.35);pointer-events:none;';
+            'box-shadow:0 2px 8px rgba(0,0,0,.35);pointer-events:none;' +
+            'border-bottom:1px solid rgba(0,0,0,.35);';
 
         // Minimal "reconnecting" banner, created lazily so no HTML markup changes.
         function _setConnBanner(show) {
@@ -6890,13 +6938,43 @@
         // _lastReplyTs on every reply, and TRANSPORT polls at ~33ms, so a gap
         // of more than a second means the stream is not flowing.
         var CONN_STALE_MS = 1500;
+        function _connIsLive() {
+            return !!(_lastReplyTs && (Date.now() - _lastReplyTs) < CONN_STALE_MS);
+        }
         function _refreshConnBadge() {
+            var live = _connIsLive();
             var el = document.getElementById('mode-badge-sync');
-            if (!el) return;
-            var live = _lastReplyTs && (Date.now() - _lastReplyTs) < CONN_STALE_MS;
-            el.textContent = live ? '\u25CF' : '\u26A0';
-            el.style.color = live ? 'var(--color-brand)' : '#ff453a';
-            el.title = live ? t('Connected to REAPER') : t('No reply from REAPER');
+            if (el) {
+                el.textContent = live ? '\u25CF' : '\u26A0';
+                el.style.color = live ? 'var(--color-brand)' : '#ff453a';
+                el.title = live ? t('Connected to REAPER') : t('No reply from REAPER');
+            }
+            _refreshReconnectBtn(live);
+        }
+
+        // The RECONNECT button STATES the connection; it does not merely offer
+        // to repair it.
+        //
+        // A button that looks identical whether or not anything is wrong asks
+        // the musician to remember what it is for and to guess whether now is
+        // the moment. On a dark stage neither happens. So: while the stream is
+        // flowing it is a quiet, disabled plug — a status light, not a control —
+        // and the moment replies stop it turns red, swaps to a broken plug and
+        // pulses, which is the one thing on that bar that moves.
+        //
+        // Driven by the SAME evidence as the badge dot (_lastReplyTs), so the
+        // two can never disagree about whether REAPER is answering.
+        function _refreshReconnectBtn(live) {
+            var b = document.getElementById('reconnect-btn');
+            if (!b) return;
+            if (live === undefined) live = _connIsLive();
+            b.classList.toggle('is-live', live);
+            b.classList.toggle('is-down', !live);
+            b.disabled = live;
+            b.title = live
+                ? t('Connected to REAPER')
+                : t('No reply from REAPER — tap to reconnect');
+            b.setAttribute('aria-label', b.title);
         }
         setInterval(_refreshConnBadge, 1000);
 
@@ -7507,12 +7585,40 @@
 
         // Asks REAPER for the lease and reports back. Fails CLOSED: no
         // evidence that the claim landed means no lease.
-        function requestDirectorLease(onDecision) {
+        // opts.keepUnlessDisplaced — for a device that ALREADY holds the role.
+        //
+        // The difference matters, and getting it wrong took a working Director
+        // off the air with nobody else in the room:
+        //
+        //   A NEW claim fails CLOSED. No evidence the claim landed means no
+        //   lease, because assuming otherwise is how two devices end up driving
+        //   one REAPER.
+        //
+        //   RE-VERIFYING an incumbent must fail OPEN on the same evidence.
+        //   `_directorClaimId` is only ever filled by the 2s probe reply, so at
+        //   the 2.6s deadline it can still hold '' (no reply yet) or a STALE id
+        //   from another device's earlier session — ExtState survives the REAPER
+        //   session, not the browser's. Both read as "somebody else claimed it",
+        //   so the Director stood down alone, stopped beating, and the next
+        //   device to open then legitimately claimed the role. The story became
+        //   self-confirming, which is why it looked like a takeover.
+        //
+        // For an incumbent the ONLY thing that takes the role away is a LIVE
+        // FOREIGN HEARTBEAT — a device demonstrably beating right now, proven by
+        // _dcBeatIsProofOfLife. That is the same evidence _dcWatchConflict uses,
+        // and the only signal here that silence cannot fake.
+        function requestDirectorLease(onDecision, opts) {
             var me = _syncInstanceId();
+            var keepUnlessDisplaced = !!(opts && opts.keepUnlessDisplaced);
             _directorLease = 'pending';
-            RSDiag.log('LEASE_CLAIM', { me: me, incumbent: _directorHeartbeatId || '-' });
+            RSDiag.log('LEASE_CLAIM', { me: me, incumbent: _directorHeartbeatId || '-',
+                                        mode: keepUnlessDisplaced ? 'reverify' : 'new' });
             _dcWriteLease('SET/EXTSTATE/ReaSet/directorClaimId/' + me +
                           ';SET/EXTSTATE/ReaSet/directorClaimTs/' + Date.now(), 'director-claim');
+            // Ask for the value back immediately instead of waiting out the 2s
+            // poll. Does not change the rule above — it just makes the common
+            // case land well inside the window.
+            wwr_req(_diagProbe);
             setTimeout(function () {
                 // Re-check the heartbeat as well as the claim. Two devices
                 // claiming far enough apart that neither sees the other's claim
@@ -7521,11 +7627,15 @@
                 // heartbeat has had a full settle window to arrive by now, so
                 // looking again here closes most of that gap; the tiebreak in
                 // _dcWatchConflict closes the rest within a couple of seconds.
-                var won = (_directorClaimId === me) && !_dcForeignActive();
+                var displaced = _dcForeignActive();
+                var won = keepUnlessDisplaced ? !displaced
+                                              : ((_directorClaimId === me) && !displaced);
                 RSDiag.log(won ? 'LEASE_GRANTED' : 'LEASE_DENIED', {
                     me: me,
+                    mode: keepUnlessDisplaced ? 'reverify' : 'new',
                     claimHolder: _directorClaimId || '(no reply)',
-                    incumbent: _directorHeartbeatId || '-'
+                    incumbent: _directorHeartbeatId || '-',
+                    displaced: displaced
                 });
                 _directorLease = won ? 'held' : 'lost';
                 onDecision(won);
@@ -7593,10 +7703,12 @@
                 _dcStandDown('another-director-active-on-boot');
                 return;
             }
+            // This device is the incumbent: only a live foreign heartbeat may
+            // take the role from it. See requestDirectorLease's note.
             requestDirectorLease(function (won) {
-                if (!won) { _dcStandDown('lost-boot-claim'); return; }
+                if (!won) { _dcStandDown('displaced-on-boot'); return; }
                 applyModeUI();   // lease held → the heartbeat starts here
-            });
+            }, { keepUnlessDisplaced: true });
         }
 
         // ── Entering without being asked ───────────────────────────────────
@@ -7702,8 +7814,16 @@
                     el.style.cssText = BANNER_CSS + 'background:#7f1d1d;';
                     _bannerHost().appendChild(el);
                 }
-                el.textContent = '\u26A0 ' + _dcForeignLabel() + ' ' +
-                    t('is now the Director — this device is read-only');
+                // Only claims a takeover when there demonstrably IS one. This
+                // banner used to say "Another device is now the Director"
+                // unconditionally, so a stand-down that had nothing to do with
+                // another device sent people looking for a phone that was not
+                // there. It also used a string no longer in the table, so it
+                // rendered untranslated.
+                el.textContent = _dcForeignActive()
+                    ? ('\u26A0 ' + _dcForeignLabel() + ' ' +
+                       t('is now the Director — this device can no longer edit the setlist'))
+                    : ('\u26A0 ' + t('This device stepped down as Director — tap the badge to take it back'));
                 el.style.display = '';
             } else if (el) {
                 el.style.display = 'none';

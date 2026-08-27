@@ -259,6 +259,24 @@ The three the show depends on. Run them with audio, not just eyes on the screen.
 | **B10** | Tap a song and press Play, then immediately let the previous region's end tick arrive. | The song you started keeps playing — a stale end-of-region reply must not stop it. | | |
 | **B11** | Repeat B01–B06 with `?diag=transport` open. | Each boundary logs one `BOUNDARY` line naming the action taken. If something surprises you, that line says which of the seven branches ran. | | |
 
+### The Director lease, and the connection button
+
+**D01–D03 are the bug reported from the desktop**: it was marked Controller with
+nobody else in the room, and the banner named a takeover that never happened.
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **D01** | Desktop as Director, **no other device open at all**. Reload it several times. | Stays **DIRECTOR** every time. No banner. It must not stand down with nobody to stand down to. | | |
+| **D02** | Same, but with REAPER visibly busy (big project, heavy plugins). Reload a few more times. | Still DIRECTOR. This is where the old code failed — the claim read-back missed a 2.6s deadline and the device concluded it had lost its own claim. | | |
+| **D03** | Force the banner (open a second device and take Director from it). Read the banner text. | Names the device that actually took over. It must never say "another device" when there is none. | | |
+| **D04** | While the banner is up, look at the setlist row. | The active setlist's **name is still visible** — the banner makes room instead of covering it. | | |
+| **D05** | Same, in Live View / Canvas / Lyrics. | Content starts below the banner, not under it. | | |
+| **D06** | Banner up on a **phone**, in Portuguese and in English. | Wraps to two lines if needed and still pushes content down by its real height. | | |
+| **D07** | Normal operation, REAPER answering. | RECONNECT is **green, disabled, quiet** — a status light. Pressing it does nothing. | | |
+| **D08** | Quit REAPER, or pull the network. | Within ~2s it turns **red, swaps to a broken-plug icon, and pulses**. | | |
+| **D09** | With it red, press it. | Reconnects. Once replies flow again it goes back to green and disabled by itself. | | |
+| **D10** | Repeat D08 with the OS set to "reduce motion". | Still red, still the broken plug — just not pulsing. The state must not depend on the animation. | | |
+
 ---
 
 ## 5. Visual block scenarios

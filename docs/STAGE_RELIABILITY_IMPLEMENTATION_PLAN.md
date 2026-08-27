@@ -1555,3 +1555,118 @@ are not independent, and a test that pretends they are teaches nothing.
 **B01–B11** in `docs/STAGE_TEST_MATRIX.md`. These are about what is **audible**
 — a gapless chain sounds different from a chain with a 40ms hole in it, and no
 static test can hear that.
+
+---
+
+## 21. A Director that stood down alone
+
+Reported from the desktop: it was marked **Controller** having never stopped
+being Director, and the banner announced that another device had taken over —
+with no other device in the room.
+
+### The cause needed no second device
+
+`_directorClaimId` is only ever filled by the 2s diagnostic probe reply.
+`requestDirectorLease()` decided at **2.6s**:
+
+```js
+var won = (_directorClaimId === me) && !_dcForeignActive();
+```
+
+Two ways for a lone incumbent to fail that test:
+
+1. **The reply had not arrived yet.** `''` is not `me`, so `won` was false.
+   Likelier the busier REAPER is — which is exactly when a show is running.
+2. **A stale claim id from another device's earlier session.** These keys are
+   `SET/EXTSTATE`, which survives the REAPER session, not the browser's. A
+   phone that opened yesterday leaves its id sitting there; today the desktop
+   reads it, sees `!== me`, and concludes it lost.
+
+Then it got worse on its own. Standing down stops the heartbeat, so the next
+device to open found nobody beating and **legitimately** claimed the role.
+Now there really was a foreign Director, and the banner became true — which is
+why it looked like a takeover rather than a fault.
+
+### The rule differs by caller, and that is the fix
+
+| | Rule | Why |
+|---|---|---|
+| **New claim** (badge, auto-resolve) | fail **closed** — no evidence the claim landed means no lease | assuming otherwise is how two devices end up driving one REAPER |
+| **Re-verify an incumbent** | fail **open** — only a **live foreign heartbeat** takes the role away | absence of evidence is not evidence of a competitor |
+
+A live foreign heartbeat is the one signal here that silence cannot fake:
+`_dcBeatIsProofOfLife` requires the value to have *changed*, so a corpse in
+ExtState cannot produce it. It is also the same evidence `_dcWatchConflict`
+already uses, so the two agree by construction.
+
+The claim write is now followed by an immediate probe rather than waiting out
+the 2s poll. That does not change the rule — it just makes the common case land
+well inside the window.
+
+### The banner was lying
+
+`_setDisplacedBanner` said *"another device is now the Director"*
+**unconditionally**, so a stand-down that had nothing to do with another device
+sent people looking for a phone that was not there. It now checks
+`_dcForeignActive()` and otherwise says the device stepped down and how to take
+the role back. It was also still using a string no longer in the translation
+table, so it rendered untranslated.
+
+### The banner also covered what it was warning about
+
+`#reaset-banner-stack` is `position: fixed` at `top: --topbar-h`, so it sat
+**on the setlist row** — the row carrying the active setlist's name, which is
+the one thing a musician needs while a warning says something changed.
+
+`.app-topbar` now carries `margin-bottom: var(--reaset-banner-h)`, inserting
+exactly the measured banner height into the flex column after the top bar.
+`--reaset-content-top` gained the same term, so the full-screen views stop being
+covered too — that comment used to describe overlaying as deliberate, and it was
+the same defect seen from another angle.
+
+The height is **measured**, never assumed: the text wraps to one or two lines
+depending on width and language, so a hardcoded value is wrong on exactly the
+devices this matters for. `--reaset-banner-h` is `0px` whenever no banner is up,
+which is almost always, so this costs nothing the rest of the time.
+
+### RECONNECT now states the connection
+
+A button that looks identical whether or not anything is wrong asks the musician
+to remember what it is for and to guess whether now is the moment. On a dark
+stage neither happens.
+
+- **Connected** — green, **disabled**, quiet. A status light, not a control.
+  Disabled on purpose: there is nothing to repair, and a pressable button
+  invites a mid-show press that restarts polling for no reason.
+- **Lost** — red, broken-plug icon, pulsing. The only thing on that bar that
+  moves.
+
+Driven by the **same** `_lastReplyTs` test as the badge dot, so the two can
+never disagree about whether REAPER is answering. The pulse honours
+`prefers-reduced-motion`, and colour plus icon still carry the state without it.
+
+### Locked by tests
+
+`test_an_incumbent_director_needs_evidence_to_be_displaced`,
+`test_the_displaced_banner_does_not_invent_a_takeover`,
+`test_a_warning_banner_does_not_cover_what_it_warns_about`, and
+`test_reconnect_button_reports_the_connection`.
+
+Nine mutations run, nine caught. One initially passed and forced a scoped
+assertion: removing the pulse was invisible to a file-wide search for
+`animation:`, which appears in dozens of other rules.
+
+### A process note
+
+The first attempt at this fix **applied only half of itself** — an anchor
+mismatch aborted the script after `_dcVerifyStoredDirector` had been given a new
+option that `requestDirectorLease` did not yet accept. Half a fix is worse than
+none, and only the test suite's own failure caught it. Every edit script in this
+work asserts its match count for exactly this reason; the lesson is that a
+multi-edit script must be all-or-nothing, and this one was not.
+
+### Still requires a real-device test
+
+**D01–D10** in `docs/STAGE_TEST_MATRIX.md`. D01 and D02 are the reported bug:
+reload the desktop repeatedly, alone, with REAPER busy, and confirm it stays
+Director every time.
