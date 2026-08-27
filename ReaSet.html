@@ -935,31 +935,52 @@
             pointer-events: none;
             z-index: 0;
         }
+        /* A bracket, not a wash.
+           A tinted stretch says "this row is coloured"; a bracket says "this
+           RANGE", which is the whole point — the eye reads two facing corners
+           as a span the way it reads nothing else. The wash it replaces was
+           legible only once you already knew what it meant, and on a
+           whole-song loop it was the only marker there was. */
         .loop-mark {
             position: absolute;
-            top: 9px; bottom: 9px;
-            border: 1px solid rgba(191, 90, 242, 0.42);
-            border-radius: 5px;
-            background: rgba(191, 90, 242, 0.06);
+            top: 8px; bottom: 8px;
+            background: rgba(191, 90, 242, 0.07);
+            border-radius: 4px;
             box-sizing: border-box;
         }
-        /* A loop over the entire song has no interesting edges to mark, and
-           any border here traces the card — a second outline around a row
-           that already has one. The wash alone says it. */
-        /* A song with no sections loops as a whole, and that is the case a
-           performer most needs to see from across a stage: nothing marks a
-           start or an end, so the only signal is the row itself. At 0.05 it
-           was a rumour. */
+        .loop-mark::before,
+        .loop-mark::after {
+            content: '';
+            position: absolute;
+            top: 0; bottom: 0;
+            width: 9px;
+            border: 2px solid rgba(191, 90, 242, 0.75);
+        }
+        .loop-mark::before {
+            left: 0; border-right: none;
+            border-radius: 4px 0 0 4px;
+        }
+        .loop-mark::after {
+            right: 0; border-left: none;
+            border-radius: 0 4px 4px 0;
+        }
+        /* A whole-song loop is bracketed too — that is the case the old wash
+           served worst, because there is no start or end marker anywhere else
+           to read. Inset from the card's own edge so the two do not touch. */
         .loop-mark.is-whole {
-            border: none;
-            border-radius: 0;
-            background: rgba(191, 90, 242, 0.13);
+            left: 6px !important;
+            width: auto !important;
+            right: 6px;
         }
 
-        .song-row>*:not(.card-bg-fill):not(.loop-marks) {
+        .song-row>*:not(.card-bg-fill):not(.loop-marks),
+        .section-row>*:not(.card-bg-fill):not(.loop-marks) {
             position: relative;
             z-index: 1;
         }
+        /* A section row is shorter than a song row, so the bracket sits
+           tighter or it swallows the whole thing. */
+        .section-row .loop-mark { top: 5px; bottom: 5px; }
 
         /* Drag handle */
         .drag-handle {
@@ -10479,6 +10500,7 @@
                         slHtml += '<div class="section-row' + subClassAdds + '" id="subrow-' + _subUid(r, sub) + '"'
                             + ' onclick="' + (sub.markerType === 'stop' ? '' : 'playRegion(' + sub.start + ',\'' + sub.id + '\',\'' + _subUid(r, sub) + '\')') + '" ' + subStyleAttr + '>'
                             + '<div class="card-bg-fill" id="bg-' + _subUid(r, sub) + '"></div>'
+                            + (sub.loop ? '<div class="loop-marks"><span class="loop-mark is-whole"></span></div>' : '')
                             + subDotBtn
                             + '<span class="section-row-name">' + nameHtml + '</span>'
                             + durHtml

@@ -2690,10 +2690,14 @@ def test_a_looping_section_is_marked_where_it_happens(script_body: str) -> None:
         "a zero-or-negative-width section would still emit a bracket"
     )
 
-    whole = _css_decls(html, ".loop-mark.is-whole")
-    assert "border: none" in whole, (
-        "a whole-song loop traces the card again — that is a second outline "
-        "around a row that already has one"
+    # A bracket, not a wash: the eye reads two facing corners as a SPAN the
+    # way it reads nothing else, and a tinted stretch only says "this row is
+    # coloured" to someone who already knows what it means.
+    assert re.search(r"\.loop-mark::before[^{]*\{[^}]*border-right:\s*none", html), (
+        "the opening bracket is a closed box, not a bracket"
+    )
+    assert re.search(r"\.loop-mark::after[^{]*\{[^}]*border-left:\s*none", html), (
+        "the closing bracket is a closed box, not a bracket"
     )
 
 
@@ -2754,19 +2758,32 @@ def test_the_role_modal_uses_the_app_s_icons() -> None:
     )
 
 
-def test_a_whole_song_loop_is_visible_on_its_row() -> None:
-    """A song with no sections loops as a whole, and only the row can say so.
+def test_a_whole_song_loop_is_bracketed_like_any_other() -> None:
+    """The case with nothing else to read is the one that needs the bracket most.
 
-    Nothing marks a start or an end there, so the bracket has nothing to
-    bracket — the surface is the entire signal. At the alpha it shipped with it
-    was a rumour, on the case a performer most needs to catch from across a
-    stage.
+    A song with no sections loops as a WHOLE, and nothing marks a start or an
+    end anywhere — so this shipped as a bare tint, which is legible only to
+    someone who already knows what a purple row means. It is bracketed now,
+    end to end, and inset from the card's own edge so the two do not touch.
     """
     html = REASET_HTML.read_text(encoding="utf-8")
     whole = _css_decls(html, ".loop-mark.is-whole")
-    m = re.search(r"background:\s*rgba\([^)]*?,\s*([\d.]+)\s*\)", whole)
-    assert m, "the whole-song loop mark has no background — nothing shows it"
-    assert float(m.group(1)) >= 0.10, (
-        f"the whole-song loop wash is {m.group(1)}, which is not visible from "
-        f"stage distance on the one case that has no other marker"
+
+    assert "border: none" not in whole, (
+        "the whole-song loop dropped its bracket again — that leaves a tint as "
+        "the only marker on the one case that has no other"
+    )
+    assert "left:" in whole and "right:" in whole, (
+        "the whole-song mark no longer spans the row"
+    )
+
+    # The looping SECTION's own row is bracketed too — the song row says WHERE
+    # the loop is, the section row says THIS IS IT.
+    body = strip_comments(inline_scripts(html)[0])
+    assert "sub.loop ?" in body and "loop-mark is-whole" in body, (
+        "a looping section's own row is no longer bracketed, so expanding a "
+        "song hides the thing expanding it was meant to show"
+    )
+    assert _css_decls(html, ".section-row .loop-mark"), (
+        "the section bracket has no size of its own and will swallow the row"
     )
