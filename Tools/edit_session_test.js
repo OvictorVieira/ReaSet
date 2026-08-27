@@ -135,43 +135,89 @@ const snap = () => ({
     check('overrides come back',  discard.after.ov    === discard.before.ov);
     check('and the session is over', discard.editing === false);
 
-    // ── 3. Discard reaches into the REAPER project too ──────────────────────
-    console.log('\n3. Discard un-paints the regions');
-    const colour = await page.evaluate('(function(){' + `
+    // ── 3. Colour paints now, and reaches REAPER only on Apply ──────────
+    // The original design wrote the region the moment a swatch was tapped and
+    // cleared the local override, so the row kept its old colour until REAPER
+    // echoed the new one back on the next REGION poll. On a machine whose
+    // Reaset.lua was not restarted that echo never arrives, and picking a
+    // colour looks like it does nothing whatsoever.
+    console.log('\n3. Colour is staged, painted at once, written on Apply');
+    const staged = await page.evaluate('(function(){' + `
         enterEditMode();
         window.__sent = [];
-        _pushRegionColor(['1','2'], '#ff0000');
-        var painted = window.__sent.slice();
-        window.__sent = [];
-        discardEdits();
-        var reverted = window.__sent.filter(function (c) { return c.indexOf('regionColor') !== -1; });
-        return { painted: painted, reverted: reverted };
+        _ctxPickColor('1_1', '#ff0000', false);
+        var el = document.getElementById('row-1_1');
+        var style = el ? (el.getAttribute('style') || '') : '(no row)';
+        return {
+            painted:   style.toLowerCase().indexOf('ff0000') !== -1,
+            rowStyle:  style.slice(0, 70),
+            staged:    JSON.stringify(g_stagedColors),
+            sentSoFar: window.__sent.filter(function (c) { return c.indexOf('regionColor') !== -1; }).length
+        };
     ` + '})()');
-    const revert = (colour.reverted[0] || '');
-    check('painting reaches Reaper', /regionColor\/1:ff0000;2:ff0000/.test(colour.painted[0] || ''),
-          colour.painted[0]);
-    check('Discard pushes each region back to the colour it had',
-          /1:112233/.test(revert) && /2:x/.test(revert), revert);
-    check('a region that had no colour goes back to having none, not to black',
-          /2:x/.test(revert));
+    check('the row paints the moment the swatch is tapped',
+          staged.painted === true, staged.rowStyle);
+    check('the colour is staged, not yet in the project',
+          staged.staged.indexOf('ff0000') !== -1, staged.staged);
+    check('nothing has been written to REAPER yet',
+          staged.sentSoFar === 0, `${staged.sentSoFar} writes`);
 
-    // Two colours in one session. What Discard owes is the colour the project
-    // had on the way IN, not the one it had a moment ago — otherwise changing
-    // your mind twice leaves the second choice behind.
-    const twice = await page.evaluate('(function(){' + `
-        enterEditMode();
-        _pushRegionColor(['1'], '#ff0000');
-        // A REGION poll lands about once a second, and it is what refreshes
-        // g_regionReaperColor. Without this line the two paints are
-        // indistinguishable and the test cannot see the bug it exists for.
-        g_regionReaperColor['1'] = '#ff0000';
-        _pushRegionColor(['1'], '#00ff00');
+    const discardedColour = await page.evaluate('(function(){' + `
         window.__sent = [];
         discardEdits();
-        return window.__sent.filter(function (c) { return c.indexOf('regionColor') !== -1; })[0] || '';
+        var el = document.getElementById('row-1_1');
+        return {
+            staged: JSON.stringify(g_stagedColors),
+            sent:   window.__sent.filter(function (c) { return c.indexOf('regionColor') !== -1; }).length,
+            style:  el ? (el.getAttribute('style') || '') : ''
+        };
     ` + '})()');
-    check('two changes in one session still undo to the colour it started with',
-          /1:112233/.test(twice), twice);
+    check('Discard drops the staged colour', discardedColour.staged === '{}', discardedColour.staged);
+    check('and writes nothing to REAPER, because nothing was ever written',
+          discardedColour.sent === 0, `${discardedColour.sent} writes`);
+    check('the row stops showing it',
+          discardedColour.style.toLowerCase().indexOf('ff0000') === -1,
+          discardedColour.style.slice(0, 70));
+
+    const appliedColour = await page.evaluate('(function(){' + `
+        enterEditMode();
+        _ctxPickColor('1_1', '#00ff00', false);
+        _ctxPickColor('2_2', '#0000ff', false);
+        window.__sent = [];
+        applyEdits();
+        var wrote = window.__sent.filter(function (c) { return c.indexOf('regionColor') !== -1; });
+        var stillStaged = JSON.stringify(g_stagedColors);
+        // REAPER answers: the next REGION poll reports the new colours.
+        g_regionReaperColor['1'] = '#00ff00';
+        g_regionReaperColor['2'] = '#0000ff';
+        _confirmStagedColors();
+        return { wrote: wrote, stillStaged: stillStaged, afterConfirm: JSON.stringify(g_stagedColors) };
+    ` + '})()');
+    check('Apply writes every staged colour in ONE request',
+          appliedColour.wrote.length === 1, appliedColour.wrote[0] || '(nothing)');
+    check('each region gets its own colour',
+          /1:00ff00/.test(appliedColour.wrote[0] || '') && /2:0000ff/.test(appliedColour.wrote[0] || ''),
+          appliedColour.wrote[0]);
+    check('the colour stays on screen while REAPER catches up',
+          appliedColour.stillStaged.indexOf('00ff00') !== -1, appliedColour.stillStaged);
+    check('and the staging clears once the project agrees',
+          appliedColour.afterConfirm === '{}', appliedColour.afterConfirm);
+
+    const blockColour = await page.evaluate('(function(){' + `
+        enterEditMode();
+        displayList[0].chain = true;          // row 1 continues into row 2
+        _ctxPickColor('2_2', '#abcdef', true);   // opened from the SECOND row of the block
+        var st = JSON.stringify(g_stagedColors);
+        window.__sent = [];
+        applyEdits();
+        return { staged: st,
+                 wrote: window.__sent.filter(function (c) { return c.indexOf('regionColor') !== -1; })[0] || '' };
+    ` + '})()');
+    check('colouring a block stages every song in it, including the one above',
+          /"1":"#abcdef"/.test(blockColour.staged) && /"2":"#abcdef"/.test(blockColour.staged),
+          blockColour.staged);
+    check('and the block is still one write',
+          /1:abcdef;2:abcdef/.test(blockColour.wrote), blockColour.wrote);
 
     // ── 4. The revert has to reach the other devices ────────────────────
     // The Director's own screen going back is half the job. saveCurrentState()
@@ -180,6 +226,7 @@ const snap = () => ({
     // while the Director looks at the original — the worst of both.
     console.log('\n4. The revert is published, not just repainted');
     const published = await page.evaluate('(function(){' + `
+        saveCurrentState();          // baseline: the signature must describe the state we are actually in
         enterEditMode();
         var sigBefore = _lastSavedSig;
         displayList[0].loop = true;

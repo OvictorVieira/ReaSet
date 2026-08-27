@@ -417,8 +417,11 @@ all, check that before anything else.
 
 | ID | Scenario | Expected | Result | Notes |
 |---|---|---|---|---|
-| **Z01** | As Director, press **EDIT**, open a song's `⋮` menu, turn colour on, pick a swatch. | The row takes the colour **and so does the region in REAPER's timeline**. | | |
-| **Z02** | Look at a phone that is watching the same setlist. | Within about a second, the same colour. Nobody had to import anything. | | |
+| **Z01** | As Director, press **EDIT**, open a song's `⋮` menu, turn colour on, pick a swatch. | The row takes the colour **immediately**. REAPER's timeline does **not** change yet — colour is staged like every other edit in this panel. | | |
+| **Z02** | Now press **APPLY**, watching REAPER. | *Now* the region takes the colour. | | |
+| **Z03** | Look at a phone that is watching the same setlist. | Within about a second, the same colour. Nobody had to import anything. | | |
+| **Z2b** | Pick a colour and press **DISCARD** instead. | The row goes back, and REAPER was never touched. | | |
+| **Z2c** | Pick a colour, press APPLY, and wait about six seconds without REAPER's script running. | It tells you REAPER did not confirm, and names the likely cause. Silence was the old failure: the write is swallowed with no error. | | |
 | **Z03** | Save the REAPER project, close it, reopen. | The colour is still there. It belongs to the project now, not to a browser. | | |
 | **Z04** | Tick **Apply to the whole block**, then pick a colour. | Every song in that block takes it — including the ones above the one you opened. | | |
 | **Z05** | Do Z04 from the **middle** of a block. | Still the whole block, not just the tail. | | |
@@ -493,6 +496,29 @@ answer everything downstream waits for.
 | **Q15** | Confirm it. | You become Director and the other device goes read-only. | | |
 | **Q16** | As Director, sidebar → **Pull** the shared setlist. | Styled confirm, red **Replace**. This one used a native confirm on purpose, on the belief that the styled one could never appear — measured in a browser, it appears. | | |
 | **Q17** | On the phone, open any of these. | The app's own modal, not a system sheet sliding up from the bottom. | | |
+
+### The row panel on a phone
+
+Measured before the change: the `⋮` panel is 288×567, which does not fit a
+320×568 screen nor any phone held sideways, and it did not scroll — **Remove
+colour was unreachable**. 27 of its controls were under the 44px a thumb needs.
+
+On a phone it is a **sheet** now: full width, off the bottom edge, scrolling
+inside itself. On any touch device — the iPad included, which no width test
+calls a phone — the controls are sized for a finger.
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **M01** | On the phone, open a song's `⋮`. | It comes up from the bottom, full width — not a small popup pinned near the row. | | |
+| **M02** | Turn **Color** on inside it. | The palette appears and the sheet grows *upwards*; nothing falls off the bottom. | | |
+| **M03** | Scroll inside the sheet. | It scrolls, and **Remove colour** at the very bottom is reachable. | | |
+| **M04** | Hold the phone **sideways** and do M01–M03. | Same. This is the case that was cut off. | | |
+| **M05** | Tap the switches and the four end-state buttons with a thumb, not a fingernail. | Each one hits. | | |
+| **M06** | Tap a colour swatch. | Five per row on a phone, not six — they are big enough to hit first time. | | |
+| **M07** | Tap the note field. | The page does **not** zoom in. (16px text is what stops iOS doing that.) | | |
+| **M08** | On the **iPad**, open the same panel. | Still a popup — there is room — but with the same finger-sized controls as the phone. | | |
+| **M09** | On the iPad **sideways**, open it and turn colour on. | It repositions rather than running off the bottom. | | |
+| **M10** | On a desktop, open it. | Unchanged: a popup near the row, mouse-sized. | | |
 
 ### The role modal
 

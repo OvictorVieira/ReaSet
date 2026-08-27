@@ -2867,17 +2867,35 @@ def test_region_colour_is_written_to_reaper_not_to_this_browser(script_body: str
         "project once per song on its defer thread"
     )
 
-    # The by-song entry point must go THROUGH the gated writer.
-    by_song = strip_comments(extract_function(body, "_pushRegionColor"))
-    assert "_pushRegionColorPairs(" in by_song, (
-        "_pushRegionColor stopped delegating, so it is a second wire path"
+    # Only Apply reaches the wire. Picking a swatch stages the colour so the
+    # row paints at once; the project is written when the session is kept.
+    # Write-through was the original design and it made picking a colour look
+    # like it did nothing at all: the screen showed the old colour until REAPER
+    # echoed the new one back, and with Reaset.lua not running that echo never
+    # came.
+    flush = strip_comments(extract_function(body, "_flushStagedColors"))
+    assert "_pushRegionColorPairs(" in flush, "Apply no longer writes the project"
+
+    apply_fn = strip_comments(extract_function(body, "applyEdits"))
+    assert "_flushStagedColors()" in apply_fn, (
+        "Apply keeps the colour on this screen only — the room never gets it"
     )
 
     pick = strip_comments(extract_function(body, "_ctxPickColor"))
-    assert "_pushRegionColor" in pick, "picking a colour no longer writes the region"
-    assert re.search(r"setSongOverride\([^)]*'colorHex',\s*null\)", pick), (
-        "picking a colour still sets a LOCAL override as well — the Director's "
-        "screen would then disagree with every other one in the room"
+    assert "_stageColor(" in pick, "picking a colour no longer stages anything"
+    assert "_pushRegionColor" not in pick, (
+        "picking a swatch writes straight to REAPER again, so the row shows "
+        "nothing until the project echoes back"
+    )
+
+    # The renderer has to read the staged value FIRST, or staging is invisible.
+    render = strip_comments(extract_function(body, "_songColor"))
+    assert "g_stagedColors" in render, (
+        "_songColor ignores staged colours, so nothing paints until Apply"
+    )
+    assert body.count("_songColor(") >= 3, (
+        "a colour render path bypasses _songColor — song rows and section "
+        "rows both have to read the staged value"
     )
 
 
@@ -2984,9 +3002,9 @@ def test_discard_restores_the_list_itself_not_the_saved_copy(
         "end-states, notes and colours are per-song overrides, and Discard "
         "leaves them edited"
     )
-    assert "_pushRegionColorPairs(" in discard, (
-        "region colours live in the REAPER project: no amount of restoring "
-        "local state reaches them, so Discard has to push them back"
+    assert "g_stagedColors = {}" in discard, (
+        "staged colours survive Discard, so a colour you threw away still "
+        "paints the row"
     )
     assert "s.setlistName === currentSetlistName" in discard, (
         "a snapshot taken against another setlist can be poured into the one "
@@ -3082,4 +3100,106 @@ def test_the_styled_prompt_answers_to_enter_and_escape(script_body: str) -> None
     assert "if (run && cb)" in close, (
         "cancel calls back anyway — native prompt() returned null, and every "
         "caller read that as 'do nothing'"
+    )
+
+
+# ── The row panel on a phone ────────────────────────────────────────────────
+
+
+def test_the_row_panel_becomes_a_sheet_on_a_phone(script_body: str) -> None:
+    """Measured at 288x567: it does not fit a 320x568 screen, nor any phone
+    held sideways, and it did not scroll — "Remove colour" was unreachable.
+
+    The two thresholds live twice, in the media query and in _ctxIsSheet(), and
+    if they disagree the JS pins an inline top the stylesheet cannot override
+    without !important — a panel anchored in two places at once.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    fn = strip_comments(extract_function(script_body, "_ctxIsSheet"))
+    js_w = re.search(r"innerWidth\s*<=\s*(\d+)", fn)
+    js_h = re.search(r"innerHeight\s*<=\s*(\d+)", fn)
+    assert js_w and js_h, "_ctxIsSheet stopped testing both dimensions"
+
+    query = re.search(
+        r"@media\s*\(max-width:\s*(\d+)px\),\s*\(max-height:\s*(\d+)px\)\s*\{"
+        r"(?:(?!@media).)*?\.song-ctx-panel\.is-sheet",
+        html,
+        re.S,
+    )
+    assert query, "the sheet has no media query of its own any more"
+    assert (js_w.group(1), js_h.group(1)) == (query.group(1), query.group(2)), (
+        f"JS says {js_w.group(1)}/{js_h.group(1)}, CSS says "
+        f"{query.group(1)}/{query.group(2)} — between those two numbers the "
+        "panel is positioned as a popup and styled as a sheet"
+    )
+
+    assert "is-sheet" in script_body, "nothing ever applies the sheet class"
+    for name in ("openSongMenu", "openSubMenu"):
+        body = strip_comments(extract_function(script_body, name))
+        assert "_ctxIsSheet()" in body, (
+            f"{name} positions the panel without asking whether it is a sheet"
+        )
+
+
+def test_the_panel_is_placed_against_its_real_height(script_body: str) -> None:
+    """`ph` was a hard-coded guess (420 / 300) at how tall the panel would be.
+
+    It grew when the touch sizing landed, and the guess put the bottom of it
+    past the bottom of the screen — measured cut off on an iPad held sideways.
+    """
+    for name in ("openSongMenu", "openSubMenu"):
+        body = strip_comments(extract_function(script_body, name))
+        assert "panel.offsetHeight" in body, (
+            f"{name} places the panel against a constant again"
+        )
+
+
+def test_the_panel_repositions_when_it_grows(script_body: str) -> None:
+    """It is placed once, with the palette closed, and then the palette opens.
+
+    Turning colour on adds three rows of swatches and a button. Nothing moved
+    the panel, so on a short window the controls it just revealed were off the
+    bottom of the screen.
+    """
+    for name in ("_ctxToggleColor", "_subCtxToggleColor"):
+        body = strip_comments(extract_function(script_body, name))
+        assert "_ctxReflow()" in body, (
+            f"{name} opens the palette without repositioning the panel"
+        )
+
+    reflow = strip_comments(extract_function(script_body, "_ctxReflow"))
+    assert "_ctxIsSheet()" in reflow, (
+        "the reflow pins an inline top on the sheet, which is anchored to the "
+        "bottom by CSS"
+    )
+
+
+def test_every_control_in_the_row_panel_is_sized_for_a_finger(script_body: str) -> None:
+    """The iPad is 768px wide, so no width test calls it a phone — and it was
+    still being handed 32px buttons and 20px switches. The same finger.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    touch = re.search(r"@media\s*\(hover:\s*none\)\s*\{(.*?)\n        \}", html, re.S)
+    assert touch, "the touch sizing block is gone"
+    block = touch.group(1)
+
+    # Substrings are too loose here: deleting the rule that SIZES the switch
+    # leaves ".song-ctx-toggle" behind in the :checked rule right under it, and
+    # a containment check sails past the deletion it exists to catch.
+    def sized(selector: str, prop: str) -> bool:
+        rule = re.search(
+            r"\.song-ctx-panel %s\s*\{([^}]*)\}" % re.escape(selector), block
+        )
+        return bool(rule and prop in rule.group(1))
+
+    assert sized(".song-ctx-toggle", "height"), (
+        "the switch is not given a touch height — it stays at 20px, which is "
+        "under half a fingertip"
+    )
+    assert sized(".ap-seg > button", "padding"), (
+        "the four end-state buttons keep their 32px desktop height"
+    )
+    assert sized(".song-ctx-row", "min-height"), (
+        "the panel rows are no longer given a minimum height"
     )

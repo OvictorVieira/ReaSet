@@ -2193,3 +2193,104 @@ Three source invariants in `tests/test_reaset_html.py`: no bare
 dead MIDI block does not count), the three overlays sit above the mode
 selector, and the styled prompt still answers to Enter and Escape and does not
 call back on cancel. All five mutations of those were caught.
+
+## 27. Colour is staged, and the panel is usable with a thumb
+
+Two reports, one panel.
+
+### "Apliquei cor, nada mudou"
+
+Colour was the one edit in the file that was **write-through**: picking a
+swatch wrote the region and *cleared* the local override, on the reasoning
+that a local copy would let the Director's screen disagree with the room.
+
+That reasoning is sound about where the colour should finally live. It was
+wrong about when. The row showed nothing until REAPER echoed the new colour
+back on the next REGION poll — and on a machine whose `Reaset.lua` has not
+been restarted, that echo never comes. Picking a colour looked like it did
+nothing at all, which is exactly what was reported.
+
+Every other edit in that panel — loop, skip, end-state, note, order — shows the
+instant you make it, survives Apply and vanishes on Discard. Colour behaves the
+same way now:
+
+- **Picking** stages into `g_stagedColors` (regionId → hex, or `null` for a
+  staged removal) and repaints at once. `_songColor()` is the one place that
+  decides what a row is painted: staged first, then a local override, then what
+  REAPER reports. Both the song rows and the section rows read it, so neither
+  can drift.
+- **Apply** flushes every staged colour to the project in a single write.
+- **Discard** drops the staging. There is nothing in REAPER to undo, because
+  nothing was ever written — which deleted the whole "push each region back to
+  its previous colour" path that Discard needed while colour wrote through.
+- The staged value **stays on screen until REAPER agrees with it**, so Apply
+  never blinks. `_confirmStagedColors()` drops each one as the REGION poll
+  confirms it.
+
+**Silence was the failure mode**, so it is no longer silent. If nothing is
+listening for the ExtState key — the script not running, or the file replaced
+without restarting it — the write is swallowed with no error at all, and the
+screen would go on showing a colour the project never took. Six seconds after
+Apply, anything still unconfirmed says so and names the likely cause.
+
+One line was removed for being unproven: `g_stagedColors` had been added to the
+render checksum, and mutating it away changed nothing. `_stageColor()` repaints
+directly, and after a confirmation the region's own colour has changed, which
+the checksum already covers.
+
+### "Tem q ter responsividade e usabilidade de celular"
+
+Measured, before touching anything: the panel is **288×567**. It does not fit a
+320×568 iPhone SE, nor any phone held sideways, and it did not scroll — the
+Remove colour button at the bottom was simply unreachable. **27** of its
+controls were under 44px.
+
+On a phone it stops being a popup and becomes a **sheet**: full width, anchored
+to the bottom edge, scrolling inside itself, with `env(safe-area-inset-bottom)`
+under it and `-webkit-overflow-scrolling: touch` so it has momentum on the old
+iPad. The JS stops positioning it there — an inline `top` is a style the media
+query cannot beat without `!important`, and a panel anchored in two places at
+once is worse than either.
+
+The control sizing is a **separate** question from the sheet, and getting that
+wrong is what the first attempt did. The iPad is 768px wide, so no width test
+calls it a phone — and it kept 32px buttons and 20px switches, for the same
+finger. Sizing now hangs off `@media (hover: none)`: any touch device, sheet or
+popup. Switches go to 51×31, which is the size iOS ships its own at; the
+palette drops to five across, because at 320px six swatches come out 42px.
+
+Two placement bugs surfaced once the panel grew:
+
+- **`ph` was a guess.** The popup was positioned against a hard-coded 420 (or
+  300 for sections) while the real panel is now much taller. It is measured
+  from `panel.offsetHeight` now, with a final clamp for when the panel is
+  taller than the space above the button as well as below it, and a
+  `max-height: calc(100vh - 16px)` on the panel itself so no geometry can
+  produce an unreachable control.
+- **Nothing repositioned it when it grew.** The panel is placed once, on open,
+  with the palette closed. Turning colour on adds three rows of swatches and a
+  button — and on a short window the controls it had just revealed were off the
+  bottom of the screen. `_ctxReflow()` runs on both colour toggles and on the
+  end-state change that shows the wait row.
+
+### Verification
+
+Seven geometries measured in a browser — iPhone SE, iPhone 13, Pro Max, iPad
+mini, phone sideways, iPad sideways, desktop — asserting the panel is not cut
+off on any edge and counting controls under 44px. Before: cut off on the SE and
+on any phone held sideways, 27 small targets. After: nothing cut off anywhere,
+and the only controls under 44px are the four switches at 31px, which is the
+size iOS uses.
+
+`Tools/edit_session_test.js` is 33 checks now, with a colour section that
+proves the row paints on the tap, that nothing reaches REAPER before Apply,
+that Discard writes nothing because nothing was written, that Apply is one
+request carrying a colour per region, and that a block still stages every song
+in it including the one above the row you opened.
+
+Eleven new source invariants, mutation-checked. Two of those mutations exposed
+weak tests: a substring check for `.song-ctx-toggle` in the touch block
+survived deleting the rule that sizes the switch, because the `:checked` rule
+underneath still contained the string — it asserts the declaration now. And the
+harness's own block-colour case had the wrong premise about which row carries
+`chain`, which the run reported honestly as a different block.

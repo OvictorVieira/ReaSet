@@ -1092,8 +1092,68 @@
             border: 1px solid rgba(255, 255, 255, 0.14);
             border-radius: 16px;
             box-shadow: 0 12px 48px rgba(0, 0, 0, 0.85), 0 2px 8px rgba(0,0,0,0.5);
-            overflow: hidden;
+            /* The popup grew when the touch sizing landed, and a panel taller
+               than the screen has no way to reach its last control. Capping it
+               here covers every geometry — iPad held sideways, a short desktop
+               window — rather than one more breakpoint per shape. */
+            max-height: calc(100vh - 16px);
+            overflow-y: auto;
+            overflow-x: hidden;
+            -webkit-overflow-scrolling: touch;
             animation: ctxFadeIn 0.15s ease;
+        }
+
+        /* On a phone the popup was measured cut off at the bottom: 288x567
+           anchored near a row does not fit a 320x568 screen, nor any phone
+           held sideways, and it does not scroll — "Remove colour" was simply
+           unreachable. And 27 of its controls were under the 44px a thumb
+           needs.
+
+           So on a phone it stops being a popup and becomes a sheet: full
+           width, off the bottom edge, scrolling inside itself, with the
+           controls sized for a thumb. The JS stops positioning it (see
+           _ctxIsSheet) — !important here would fight inline styles it should
+           not have to. */
+        @media (max-width: 600px), (max-height: 560px) {
+            .song-ctx-panel.is-sheet {
+                left: 0; right: 0; bottom: 0; top: auto;
+                width: auto;
+                max-height: 82vh;
+                overflow-y: auto;
+                -webkit-overflow-scrolling: touch;   /* momentum on iOS 12 and older */
+                border-radius: 18px 18px 0 0;
+                padding-bottom: 8px;
+                padding-bottom: calc(8px + env(safe-area-inset-bottom));
+                animation: ctxSheetIn 0.18s ease;
+            }
+            /* Long panel, small screen: the note field is the one thing that
+               can grow, and on a sheet it should not push the palette off. */
+            .song-ctx-panel.is-sheet textarea.song-ctx-input { font-size: 16px; }
+        }
+
+        /* Any touch device, sheet or popup. The iPad is 768px wide so it is
+           not a phone by any width test, and it was still being handed 32px
+           buttons and 20px switches — the same finger either way. */
+        @media (hover: none) {
+            .song-ctx-panel .ap-seg > button  { padding: 15px 4px; font-size: 12px; }
+            .song-ctx-panel .song-ctx-row     { min-height: 44px; }
+            .song-ctx-panel .song-ctx-section { padding: 12px 16px; }
+            /* 51x31 is the size iOS ships its own switch at. */
+            .song-ctx-panel .song-ctx-toggle  { width: 51px; height: 31px; }
+            .song-ctx-panel .song-ctx-track   { border-radius: 16px; }
+            .song-ctx-panel .song-ctx-thumb   { width: 25px; height: 25px; }
+            .song-ctx-panel .song-ctx-toggle input:checked + .song-ctx-track .song-ctx-thumb {
+                transform: translateX(20px);
+            }
+            .song-ctx-panel .ctx-clear-btn    { padding: 14px; font-size: 13px; }
+            .song-ctx-panel .song-ctx-input   { padding: 12px; font-size: 14px; }
+            /* Five across, not six: at 320px six swatches come out 42px. */
+            .song-ctx-panel .song-ctx-palette { grid-template-columns: repeat(5, 1fr); }
+        }
+
+        @keyframes ctxSheetIn {
+            from { opacity: 0; transform: translateY(14px); }
+            to   { opacity: 1; transform: translateY(0); }
         }
 
         @keyframes ctxFadeIn {
@@ -8303,6 +8363,27 @@
         var _ctxPanel = null;
         var _ctxBtnRef = null;
 
+        // Must match the media query that styles the sheet — the same two
+        // thresholds live in both places, which is why a test asserts they
+        // agree rather than trusting them to.
+        // The panel is placed once, on open, with the colour palette closed —
+        // and then the palette opens and it grows by a third of its height,
+        // straight off the bottom of the screen. Nothing repositioned it,
+        // which is why "turn colour on, then reach for Remove colour" had
+        // nothing to reach on a short window.
+        function _ctxReflow() {
+            if (!_ctxPanel || _ctxIsSheet()) return;   // the sheet is bottom-anchored already
+            var h = _ctxPanel.offsetHeight;
+            var top = parseFloat(_ctxPanel.style.top) || 0;
+            if (top + h > window.innerHeight - 8) top = window.innerHeight - h - 8;
+            if (top < 4) top = 4;
+            _ctxPanel.style.top = top + 'px';
+        }
+
+        function _ctxIsSheet() {
+            return window.innerWidth <= 600 || window.innerHeight <= 560;
+        }
+
         function closeOpenCtxPanel() {
             if (_ctxPanel && _ctxPanel.parentNode) _ctxPanel.parentNode.removeChild(_ctxPanel);
             if (_ctxBtnRef) _ctxBtnRef.classList.remove('active');
@@ -8401,14 +8482,25 @@
             _ctxPanel = panel;
 
             var br = btn.getBoundingClientRect();
-            var pw = 288, ph = 420;
-            var left = br.left;
-            var top  = br.bottom + 6;
-            if (left + pw > window.innerWidth  - 8) left = window.innerWidth  - pw - 8;
-            if (top  + ph > window.innerHeight - 8) top  = br.top - ph - 6;
-            if (top < 4) top = 4;
-            panel.style.left = left + 'px';
-            panel.style.top  = top  + 'px';
+            // On a phone the panel is a sheet off the bottom edge, and the
+            // stylesheet owns where it goes. Setting left/top here would be an
+            // inline style the media query cannot beat without !important.
+            if (_ctxIsSheet()) {
+                panel.classList.add('is-sheet');
+            } else {
+                // Measured, not assumed. ph was a hard-coded guess at the panel's
+                // height; it grew when the touch sizing landed, and the guess put
+                // the bottom of the panel past the bottom of the screen.
+                var pw = 288, ph = panel.offsetHeight || 420;
+                var left = br.left;
+                var top  = br.bottom + 6;
+                if (left + pw > window.innerWidth  - 8) left = window.innerWidth  - pw - 8;
+                if (top  + ph > window.innerHeight - 8) top  = br.top - ph - 6;
+                if (top  + ph > window.innerHeight - 8) top  = window.innerHeight - ph - 8;
+                if (top < 4) top = 4;
+                panel.style.left = left + 'px';
+                panel.style.top  = top  + 'px';
+            }
 
             setTimeout(function() {
                 document.addEventListener('click', function _outside(e) {
@@ -8423,6 +8515,7 @@
         // These take the ROW's uid (see openSongMenu) and resolve the song
         // from it, because what they write is keyed on the region.
         function _ctxSetEnd(uid, state, seconds) {
+            setTimeout(_ctxReflow, 0);   // the wait row appears and disappears too
             var id = _uidToRegionId(uid); if (id === null) return;
             setSongEnd(id, state, seconds);
             // Repaint in place so the segment highlight and the seconds row
@@ -8441,8 +8534,9 @@
             var id = _uidToRegionId(uid); if (id === null) return;
             var pal = document.getElementById('_ctx_palette_' + uid);
             if (pal) pal.style.display = on ? '' : 'none';
+            _ctxReflow();
             if (!on) {
-                setSongOverride(id, 'colorHex', null);
+                _stageColor([id], null);
                 if (_ctxPanel) {
                     var sw = _ctxPanel.querySelectorAll('.ctx-color-swatch');
                     for (var i = 0; i < sw.length; i++) sw[i].classList.remove('selected');
@@ -8467,13 +8561,12 @@
         // The id is REAPER's own markrgnindexnumber — the third field of the
         // REGION reply this file already parses, and exactly what
         // SetProjectMarker3 takes on the other side. Nothing has to be mapped.
-        // Takes [regionId, hex-or-null] pairs. Split out from
-        // _pushRegionColor because Discard has to send a DIFFERENT colour per
-        // region — whatever each one had before — and the wire format already
-        // carried a colour per id.
+        // Takes [regionId, hex-or-null] pairs — one colour per region,
+        // because Apply flushes a whole session's worth of choices in a single
+        // write and they are rarely the same colour.
         function _pushRegionColorPairs(pairs) {
             if (!canEditSetlist()) {
-                RSDiag.blocked('_pushRegionColor', 'role-cannot-edit-setlist');
+                RSDiag.blocked('_pushRegionColorPairs', 'role-cannot-edit-setlist');
                 return;
             }
             var parts = [];
@@ -8490,23 +8583,6 @@
             RSDiag.log('REGION_COLOR', { n: parts.length });
         }
 
-        function _pushRegionColor(regionIds, hex) {
-            var pairs = [];
-            for (var i = 0; i < regionIds.length; i++) {
-                var rid = regionIds[i];
-                if (rid === null || rid === undefined) continue;
-                // Remember what the PROJECT had, once per region per edit
-                // session, so Discard can put it back. First write wins: two
-                // colour changes to one region during one session still undo
-                // to the colour it had on the way in, not to the intermediate.
-                if (_editSnapshot && !_editSnapshot.regionColors.hasOwnProperty(rid)) {
-                    _editSnapshot.regionColors[rid] =
-                        g_regionReaperColor.hasOwnProperty(rid) ? g_regionReaperColor[rid] : null;
-                }
-                pairs.push([rid, hex]);
-            }
-            _pushRegionColorPairs(pairs);
-        }
 
         // Every row of the playback block `uid` belongs to. "Colour this song"
         // and "colour this block" are the same operation over a different set,
@@ -8528,6 +8604,69 @@
             return ids;
         }
 
+        // Stage a colour for one or more regions and repaint at once. `hex`
+        // null means "remove the colour"; REAPER's own default, not black.
+        function _stageColor(regionIds, hex) {
+            if (!canEditSetlist()) { RSDiag.blocked('_stageColor', 'role-cannot-edit-setlist'); return; }
+            for (var i = 0; i < regionIds.length; i++) {
+                var rid = regionIds[i];
+                if (rid === null || rid === undefined) continue;
+                g_stagedColors[rid] = hex || null;
+                // A stale local override would win over the project colour
+                // after this is applied and the staged entry is dropped.
+                if (getOverride(rid).colorHex) setSongOverride(rid, 'colorHex', null);
+            }
+            RSDiag.log('COLOR_STAGED', { n: regionIds.length, hex: hex || 'clear' });
+            lastRenderChecksum = '';
+            renderSetlist();
+        }
+
+        // Everything staged goes to REAPER in one write on Apply.
+        function _flushStagedColors() {
+            var pairs = [];
+            for (var rid in g_stagedColors) {
+                if (g_stagedColors.hasOwnProperty(rid)) pairs.push([rid, g_stagedColors[rid]]);
+            }
+            if (!pairs.length) return;
+            _pushRegionColorPairs(pairs);
+            // The staged values stay on screen until REGION reports the same
+            // colours back, so Apply never blinks. _confirmStagedColors()
+            // clears them as the confirmations arrive.
+            _watchStagedColors();
+        }
+
+        // Silence is the failure mode here: if Reaset.lua is not running on the
+        // REAPER machine, or was replaced without restarting the script,
+        // nothing is listening for the key and the write is swallowed without
+        // an error. The screen would keep showing the staged colour and look
+        // like it worked.
+        var _colorApplyWatch = null;
+        function _watchStagedColors() {
+            if (_colorApplyWatch) clearTimeout(_colorApplyWatch);
+            _colorApplyWatch = setTimeout(function () {
+                _colorApplyWatch = null;
+                var left = 0;
+                for (var k in g_stagedColors) { if (g_stagedColors.hasOwnProperty(k)) left++; }
+                if (!left) return;
+                RSDiag.log('COLOR_NOT_CONFIRMED', { n: left });
+                showAppAlert(t('REAPER did not confirm the colour. Check that Reaset.lua is running on the REAPER machine, and that the script was restarted after the file was replaced.'),
+                             t('Colour'));
+            }, 6000);
+        }
+
+        // Called from syncRegions once g_regionReaperColor is fresh. A staged
+        // colour the project now agrees with has served its purpose.
+        function _confirmStagedColors() {
+            var changed = false;
+            for (var rid in g_stagedColors) {
+                if (!g_stagedColors.hasOwnProperty(rid)) continue;
+                var want = g_stagedColors[rid];
+                var have = g_regionReaperColor.hasOwnProperty(rid) ? g_regionReaperColor[rid] : null;
+                if ((want || null) === (have || null)) { delete g_stagedColors[rid]; changed = true; }
+            }
+            return changed;
+        }
+
         function _ctxBlockScope(uid) {
             var cb = document.getElementById('_ctx_blockscope_' + uid);
             return !!(cb && cb.checked);
@@ -8535,12 +8674,7 @@
 
         function _ctxPickColor(uid, hex, whole) {
             var id = _uidToRegionId(uid); if (id === null) return;
-            // The local override is CLEARED, not set. Keeping both would let
-            // the Director's screen disagree with every other one in the room
-            // about the same song — the override wins locally and nobody else
-            // has it.
-            setSongOverride(id, 'colorHex', null);
-            _pushRegionColor(whole ? _blockRegionIdsFor(uid) : [id], hex);
+            _stageColor(whole ? _blockRegionIdsFor(uid) : [id], hex);
             if (_ctxPanel) {
                 var sw = _ctxPanel.querySelectorAll('.ctx-color-swatch');
                 for (var i = 0; i < sw.length; i++)
@@ -8550,9 +8684,7 @@
 
         function _ctxClearColor(uid) {
             var id = _uidToRegionId(uid); if (id === null) return;
-            setSongOverride(id, 'colorHex', null);
-            // 'x' on the wire: REAPER's own default, not black.
-            _pushRegionColor([id], null);
+            _stageColor([id], null);
             var cb = document.getElementById('_ctx_coloron_' + uid);
             if (cb) { cb.checked = false; _ctxToggleColor(id, false); }
             else closeOpenCtxPanel();
@@ -8610,15 +8742,26 @@
             _ctxPanel = panel;
 
             var br = btn.getBoundingClientRect();
-            var pw = 288, ph = 300;
-            var left = br.right - pw;
-            var top  = br.bottom + 6;
-            if (left < 8) left = 8;
-            if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
-            if (top + ph > window.innerHeight - 8) top = br.top - ph - 6;
-            if (top < 4) top = 4;
-            panel.style.left = left + 'px';
-            panel.style.top  = top  + 'px';
+            // On a phone the panel is a sheet off the bottom edge, and the
+            // stylesheet owns where it goes. Setting left/top here would be an
+            // inline style the media query cannot beat without !important.
+            if (_ctxIsSheet()) {
+                panel.classList.add('is-sheet');
+            } else {
+                // Measured, not assumed. ph was a hard-coded guess at the panel's
+                // height; it grew when the touch sizing landed, and the guess put
+                // the bottom of the panel past the bottom of the screen.
+                var pw = 288, ph = panel.offsetHeight || 300;
+                var left = br.right - pw;
+                var top  = br.bottom + 6;
+                if (left < 8) left = 8;
+                if (left + pw > window.innerWidth - 8) left = window.innerWidth - pw - 8;
+                if (top + ph > window.innerHeight - 8) top = br.top - ph - 6;
+                if (top + ph > window.innerHeight - 8) top = window.innerHeight - ph - 8;
+                if (top < 4) top = 4;
+                panel.style.left = left + 'px';
+                panel.style.top  = top  + 'px';
+            }
 
             setTimeout(function() {
                 document.addEventListener('click', function _outside(e) {
@@ -8631,7 +8774,7 @@
         }
 
         function _subCtxPickColor(id, hex) {
-            setSongOverride(id, 'colorHex', hex);
+            _stageColor([id], hex);
             if (_ctxPanel) {
                 var sw = _ctxPanel.querySelectorAll('.ctx-color-swatch');
                 for (var i = 0; i < sw.length; i++)
@@ -8642,8 +8785,9 @@
         function _subCtxToggleColor(id, on) {
             var pal = document.getElementById('_ctx_subpalette_' + id);
             if (pal) pal.style.display = on ? '' : 'none';
+            _ctxReflow();
             if (!on) {
-                setSongOverride(id, 'colorHex', null);
+                _stageColor([id], null);
                 if (_ctxPanel) {
                     var sw = _ctxPanel.querySelectorAll('.ctx-color-swatch');
                     for (var i = 0; i < sw.length; i++) sw[i].classList.remove('selected');
@@ -8652,7 +8796,7 @@
         }
 
         function _subCtxClearColor(id) {
-            setSongOverride(id, 'colorHex', null);
+            _stageColor([id], null);
             var cb = document.getElementById('_ctx_subcoloron_' + id);
             if (cb) { cb.checked = false; _subCtxToggleColor(id, false); }
             else closeOpenCtxPanel();
@@ -9748,6 +9892,34 @@
         // value is safe to restore.
         var g_regionReaperColor = {};
 
+        // Colours chosen in this edit session and NOT yet written to REAPER.
+        // regionId -> '#rrggbb', or null meaning "staged removal". An absent
+        // key means nothing is staged for that region.
+        //
+        // Colour used to be write-through: picking a swatch pushed the region
+        // and cleared the local override, so the screen showed nothing until
+        // REAPER echoed the colour back on the next REGION poll. With the Lua
+        // script not reloaded on the REAPER machine that echo never comes, and
+        // picking a colour looked like it did nothing at all.
+        //
+        // Every other edit in this panel shows the instant you make it and
+        // survives Apply / vanishes on Discard. Colour behaves the same way
+        // now: staged locally so it paints immediately, written to the project
+        // on Apply, dropped on Discard.
+        //
+        // Memory only, deliberately: a reload ends the edit session, and a
+        // staged colour is a pending decision, not a stored one.
+        var g_stagedColors = {};
+
+        // What a row should be painted, in priority order: what you just
+        // picked, then a local override, then the colour REAPER reports.
+        function _songColor(id, reapColor) {
+            if (g_stagedColors.hasOwnProperty(id)) return g_stagedColors[id];
+            var ov = getOverride(id).colorHex;
+            if (ov) return ov;
+            return reapColor || null;
+        }
+
         function syncRegions() {
             if (isDragging) return;
             var mainMap = {};
@@ -10208,6 +10380,9 @@
                 g_offSetlist = newItems2;
             }
             saveCurrentState();
+            // REAPER has spoken: anything staged that it now agrees with is
+            // confirmed, and the staging can go.
+            _confirmStagedColors();
             var cs = JSON.stringify(displayList.map(function (r) { return { id: r.id, uid: r.uid, chain: r.chain, skipped: r.skipped, loop: r.loop, name: r.name, color: r.color }; })) + (_hideSkippedEffective() ? 1 : 0) + JSON.stringify(g_subRegionMap) + JSON.stringify(g_songOverrides);
             if (cs !== lastRenderChecksum) { lastRenderChecksum = cs; renderSetlist(); updatePlaybackUI(); }
         }
@@ -10622,7 +10797,7 @@
                     rowDiv.className = "song-row" + (r.skipped ? " skipped" : "") + (isExp ? " expanded" : "") + classAdds + extraClass;
                     rowDiv.id = "row-" + r.uid;
                     // Apply color: manual override > REAPER region color (both use exact hex)
-                    var ovColor = getOverride(r.id).colorHex;
+                    var ovColor = _songColor(r.id, null);
                     if (ovColor) {
                         rowDiv.setAttribute("style", buildColorVarsFromHex(ovColor));
                         rowDiv.classList.add('has-mapped-color');
@@ -10709,8 +10884,7 @@
                         var scloop = sub.loop ? "sa-btn loop-on" : "sa-btn";
                         var scskip = sub.skipped ? "sa-btn skip-on" : "sa-btn";
                         // Feature 9: named color on section; user override takes priority
-                        var subOv = getOverride(sub.id);
-                        var mappedSubColor = getClosestPaletteColor(subOv.colorHex || sub.color || r.color);
+                        var mappedSubColor = getClosestPaletteColor(_songColor(sub.id, null) || sub.color || r.color);
                         var subStyleAttr = "";
                         var subClassAdds = "";
                         if (mappedSubColor) {
@@ -10981,11 +11155,7 @@
             _editSnapshot = {
                 setlistName: currentSetlistName,
                 rows:        JSON.parse(JSON.stringify(displayList)),
-                overrides:   JSON.parse(JSON.stringify(g_songOverrides)),
-                // regionId -> colour REAPER had before this session touched it.
-                // Filled in by _pushRegionColor as colours are picked: only the
-                // pushes that actually happened need undoing.
-                regionColors: {}
+                overrides:   JSON.parse(JSON.stringify(g_songOverrides))
             };
         }
 
@@ -11010,6 +11180,10 @@
 
         function applyEdits() {
             if (!REASET_EDITING) return;
+            // The only edit that is staged rather than written through.
+            // Everything else already reached REAPER and the other devices as
+            // it was made; colour waits for this.
+            _flushStagedColors();
             RSDiag.log('EDIT_APPLY', {});
             _exitEditMode();
         }
@@ -11019,14 +11193,15 @@
             var s = _editSnapshot;
             if (!s) { _exitEditMode(); return; }
 
-            // Region colours live in the REAPER project, not in this browser,
-            // so no amount of restoring local state reaches them. They have to
-            // be pushed back, each to its own previous colour.
-            var pairs = [];
-            for (var rid in s.regionColors) {
-                if (s.regionColors.hasOwnProperty(rid)) pairs.push([rid, s.regionColors[rid]]);
-            }
-            if (pairs.length) _pushRegionColorPairs(pairs);
+            // Colours are staged, never written until Apply, so there is
+            // nothing in the REAPER project to undo — dropping the staging is
+            // the whole revert. This used to push each region back to its
+            // previous colour, which was the correct answer while picking a
+            // swatch wrote through immediately.
+            var _staged = 0;
+            for (var rid in g_stagedColors) { if (g_stagedColors.hasOwnProperty(rid)) _staged++; }
+            g_stagedColors = {};
+            if (_colorApplyWatch) { clearTimeout(_colorApplyWatch); _colorApplyWatch = null; }
 
             // Restoring the ORDER means restoring displayList, not
             // setlists[name]: saveCurrentState() writes the named setlist FROM
@@ -11050,7 +11225,7 @@
             // nothing, because there was nothing to swallow.)
             lastRenderChecksum = '';
             saveCurrentState();
-            RSDiag.log('EDIT_DISCARD', { rows: s.rows.length, colours: pairs.length });
+            RSDiag.log('EDIT_DISCARD', { rows: s.rows.length, colours: _staged });
             _exitEditMode();
             syncRegions();
         }
