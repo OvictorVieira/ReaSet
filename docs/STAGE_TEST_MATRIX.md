@@ -382,6 +382,32 @@ and the fill growing across it is the marker.
 | **R08** | Same, but a song with **the whole song** looping. | A purple wash across the row, **no bracket**. A border there just traces the card. | | |
 | **R09** | Play into a looping section and watch. | The fill passes through the bracket. The bracket does not move. | | |
 
+### The loop button, and who may press it
+
+Loop is an **edit** — it changes what REAPER plays and it is published — so
+`toggleCurrentLoop()` has always refused on a Controller. The button did not
+know that: it lit from the *Director's* song, did nothing when tapped, and
+could never be turned off. From a phone that is indistinguishable from "the
+loop button is stuck on".
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **Y01** | On the **Director**, play a song and press LOOP. | It lights. The row shows the loop. Press again: it goes out. | | |
+| **Y02** | On a **Controller**, look at LOOP while the Director has loop on. | Lit — the state is worth knowing everywhere — but visibly **not pressable**: no hover, no press, dimmed. | | |
+| **Y03** | On a Controller, press LOOP. | Nothing happens, and nothing pretends to. It must not look stuck. | | |
+| **Y04** | On a Controller, hover or long-press LOOP. | "Only the Director can change the loop". | | |
+| **Y05** | Director turns loop off; watch the Controller. | Its LOOP goes out within a poll. | | |
+| **Y06** | A song with **no sections**, loop on. Look at its row. | The whole row carries the loop wash — visible from a couple of metres. There is no bracket, because there is nothing to bracket. | | |
+| **Y07** | A song **with** a looping section, loop on for the song too. | Both: the wash across the row and the bracket at the section. | | |
+| **Y08** | Set the language to Português and repeat Y04. | "Só o Diretor pode mudar o loop". | | |
+
+### The role modal
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **Y09** | Open the mode selector (tap the badge). | Two drawn icons, not emoji: a setlist-with-pen in green for Director, a play-in-a-frame in grey for Controller. | | |
+| **Y10** | Read the Controller's description. | It lists play, pause, previous, next, cue and queue. **No Stop** — that button is gone. | | |
+
 ### Grid view
 
 It showed a number, a name and a duration — so the one thing a setlist is read
