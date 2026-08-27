@@ -100,6 +100,14 @@ still a ruined show.
 | **T20** | Tap the song that is currently playing. | Documented behaviour, applied consistently — no surprise restart. | 5 | | |
 | **T21** | Stop with the cursor in a **gap** between regions. Play. | Follows the documented cursor rule. Does **not** jump to song 1. | 5 | | |
 | **T22** | Stop. Refresh ReaSet. Press Play without selecting anything. | No unsafe arbitrary fallback. | 3 | | |
+| **T23** | Slide-to-Stop ON (default). Tap STOP once, quickly. | **Nothing happens.** This is the point of the control. | | |
+| **T24** | Drag the STOP thumb all the way across and release. | Playback stops. Label reads SLIDE TO STOP, then RELEASE TO STOP once armed. | | |
+| **T25** | Drag past the arm point, then drag **back** and release. | Playback does **not** stop — a slide is abandoned by changing your mind. | | |
+| **T26** | On a phone, drag STOP with a slightly diagonal finger movement. | The thumb follows the finger; the page does not scroll and the gesture is not lost. | | |
+| **T27** | Repeat T23–T25 in Live View and in Canvas. | Identical behaviour in all three. The three copies drifted apart once before. | | |
+| **T28** | Turn Slide to Stop OFF in the sidebar. | STOP becomes a plain button acting on one press, everywhere, immediately. | | |
+| **T29** | Device that stored the retired hold mode (`localStorage.reaset_stop_mode='hold'`, reload). | Comes back in slide mode — never a Stop button that responds to nothing. | | |
+| **T30** | Look at RECONNECT next to Loop on the transport bar. | Two clearly different icons. RECONNECT is a plug; only Loop is ↻. | | |
 
 ### Transport regression checklist
 
@@ -182,6 +190,11 @@ network path and a localStorage origin, and will pass tests that a phone fails.
 | **C15** | Set a Director PIN, then open a fresh device with no Director running. | Stays Controller. It must NOT auto-claim past the PIN. Choosing Director from the badge prompts for it. | | |
 | **C16** | Device that stored the retired `'player'` mode (set `localStorage.reaset_mode='player'`, reload). | Opens as Controller: transport works, setlist is read-only, badge reads CONTROLLER. | | |
 | **C17** | Director device: pull its Wi-Fi so another device takes over, then restore. | Displaced device drops to Controller — transport still works, editing does not. Banner says it can no longer edit. | | |
+| **C18** | Controller, phone. Look at the setlist row. | A read-only banner with the active set's name — no dropdown, no chevron. Dot pulses while REAPER plays. | | |
+| **C19** | Controller: tap the setlist banner. | Nothing happens, and it never looked pressable. | | |
+| **C20** | Director marks two songs as skipped, then look at the Controller. | The skipped songs are **absent** from the Controller's list, not greyed out. The Director still sees them. | | |
+| **C21** | Switch a device from Controller to Director via the badge (and back). | The list repaints immediately — skipped songs appear/disappear on the spot, not on the next unrelated poll. | | |
+| **C22** | Unplug REAPER's project (or stop `Reaset.lua`) while a Controller is open. | The banner turns amber and says the project is unreachable. | | |
 
 ---
 

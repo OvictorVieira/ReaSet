@@ -525,39 +525,84 @@ def test_view_tabs_have_one_owner(script_body: str) -> None:
 
 
 @requires_node
-def test_every_stop_button_says_whether_it_needs_a_hold() -> None:
-    """A Stop button that needs a three-second hold must say so.
+def test_every_stop_button_says_what_it_wants() -> None:
+    """A Stop button that will not respond to a tap must say so.
 
-    Hold is the default and the right default — a stray tap must not stop a
-    show. But the label was a literal "STOP" in the main transport's markup and
-    in Live View's, and nothing ever updated either: the button said STOP,
-    wanted three seconds, and did nothing at all for a tap. Silently. That is
-    the worst failure a transport control can have, and it cost a real testing
-    session.
+    The label was a literal "STOP" in the main transport's markup and in Live
+    View's, and nothing ever updated either: the button said STOP, wanted a
+    three-second hold, and did nothing at all for a tap. Silently. That is the
+    worst failure a transport control can have, and it cost a real testing
+    session. Hold is gone, but the property that broke is the same one — three
+    copies of a control, one function that must reach all of them.
 
-    Asserts every Stop button carries a label element, and that the one
-    function that writes them covers all of them at once.
+    Asserts every Stop control shares the class the handlers and the styles are
+    written against, carries a label element and a thumb, and that one function
+    writes all of them at once.
     """
     html = REASET_HTML.read_text(encoding="utf-8")
 
-    # Each handler is a Stop control; each must have a label to update.
-    stop_buttons = re.findall(r"<button[^>]*(?:handleMainStopPress|handleStopPress)[^>]*>(.*?)</button>",
-                              html, re.S)
-    assert len(stop_buttons) >= 3, f"expected the three Stop buttons, found {len(stop_buttons)}"
+    stop_buttons = re.findall(r"<button[^>]*\bstop-ctl\b[^>]*>(.*?)</button>", html, re.S)
+    assert len(stop_buttons) == 3, (
+        f"expected the three Stop controls to carry .stop-ctl, found {len(stop_buttons)} — "
+        f"a copy that misses the class gets neither the gesture nor the label"
+    )
     for markup in stop_buttons:
         assert 'class="stop-label"' in markup, (
-            "a Stop button has no .stop-label, so its text can never be kept in "
-            f"step with the hold mode: {markup.strip()[:80]}"
+            "a Stop control has no .stop-label, so its text can never be kept in "
+            f"step with the mode: {markup.strip()[:80]}"
         )
+        assert 'class="ss-thumb"' in markup, (
+            "a Stop control has no .ss-thumb, so in slide mode it renders as a "
+            f"track with nothing to drag: {markup.strip()[:80]}"
+        )
+
+    # The retired gesture must not linger in markup or styles.
+    assert "stop-holding" not in html and "handleMainStopPress" not in html, (
+        "the three-second hold is still wired up somewhere"
+    )
 
     scripts = inline_scripts(html)[0]
     body = extract_function(scripts, "_refreshStopLabels")
-    assert "querySelectorAll('.stop-label')" in body, (
-        "_refreshStopLabels no longer writes every label at once — one button "
+    assert "querySelectorAll('.stop-ctl')" in body, (
+        "_refreshStopLabels no longer writes every control at once — one button "
         "will drift out of step with the others"
     )
-    assert "STOP (Hold)" in body and "_stopMode" in body, (
-        "the label no longer reflects _stopMode"
+    assert "is-slide" in body and "_stopMode" in body, (
+        "the label and the slide class no longer follow _stopMode"
+    )
+
+
+def test_stop_slide_fires_on_release_not_on_threshold(script_body: str) -> None:
+    """A slide taken to the end and then back is a change of mind.
+
+    Firing the moment the thumb crosses the commit threshold would make the
+    gesture uninterruptible — which removes the one property that makes it
+    safer than a tap. Stop must happen on release, and only if still armed.
+    """
+    body = strip_comments(script_body)
+    up = strip_comments(extract_function(body, "_stopCtlUp"))
+    assert "smartStop()" in up, "_stopCtlUp() no longer stops on release"
+    move = strip_comments(extract_function(body, "_stopCtlMove"))
+    assert "smartStop" not in move, (
+        "_stopCtlMove() stops as soon as the threshold is crossed — the slide "
+        "can no longer be abandoned, which is the whole point of it"
+    )
+    down = strip_comments(extract_function(body, "_stopCtlDown"))
+    assert re.search(r"""_stopMode\s*!==\s*['"]slide['"]\s*\)\s*\{\s*smartStop\(\)""", down), (
+        "tap mode no longer acts on press"
+    )
+
+
+def test_stop_mode_migrates_the_retired_hold(script_body: str) -> None:
+    """A device that stored 'hold' must not come back with a gesture nothing
+    implements — that is a Stop button that does nothing at all, again."""
+    body = strip_comments(script_body)
+    decl = body[body.index("var _stopMode ="):body.index("function toggleStopMode")]
+    assert re.search(r"""v\s*===\s*['"]hold['"]""", decl), (
+        "the stored 'hold' mode is no longer migrated"
+    )
+    assert re.search(r"""return\s+['"]slide['"]""", decl), (
+        "'hold' does not migrate to 'slide'"
     )
 
 
@@ -926,3 +971,105 @@ def test_session_clock_behaviour(script_body: str) -> None:
         "handover-keeps-older-session": 7200,
     }
     assert got == expected, f"\ngot      {got}\nexpected {expected}"
+
+
+# ── What a Controller sees ───────────────────────────────────────────────────
+
+def test_controller_gets_a_banner_not_a_dead_dropdown() -> None:
+    """A dropdown that cannot drop down is a broken control, not a read-only one.
+
+    The picker was left in place for a Controller with `pointer-events: none`,
+    so the chevron still promised a choice and the tap did nothing. On a phone
+    that reads as an app that has hung, not as a permission boundary.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    assert re.search(r'body\.reaset-controller\s+\.setlist-picker\s*\{[^}]*display:\s*none', html), (
+        "the picker is still rendered for a Controller"
+    )
+    assert re.search(r'body\.reaset-controller\s+\.setlist-banner\s*\{[^}]*display:\s*flex', html), (
+        "no banner replaces it"
+    )
+    assert 'id="setlistBannerName"' in html, "the banner has nowhere to put the set's name"
+
+    scripts = inline_scripts(html)[0]
+    picker = strip_comments(extract_function(scripts, "renderSetlistPicker"))
+    assert "_refreshSetlistBanner()" in picker, (
+        "the banner is not refreshed from renderSetlistPicker(), so the two "
+        "surfaces can show different setlists — which is the bug the picker "
+        "already had once"
+    )
+    banner = strip_comments(extract_function(scripts, "_refreshSetlistBanner"))
+    assert "currentSetlistName" in banner, "the banner does not read the active set"
+    assert "is-offline" in banner and "_libConnected" in banner, (
+        "the banner no longer flags an unreachable project. A Controller has no "
+        "picker to open, so this is the only place it could ever find out that "
+        "the setlist it is reading is not the live one"
+    )
+    assert "is-live" in banner and "isPlaying" in banner, (
+        "the banner's dot no longer follows playback"
+    )
+
+
+def test_controller_list_excludes_songs_outside_the_set(script_body: str) -> None:
+    """Skipped songs are not in tonight's set, and a Controller cannot un-skip
+    one — so a greyed-out row is one more thing to misread on a dark stage.
+
+    The forcing must be DERIVED, never written into hideSkippedMode: that value
+    is persisted, so forcing it would silently rewrite the Director's own view
+    preference on any device that had ever been a Controller.
+    """
+    body = strip_comments(script_body)
+    gate = strip_comments(extract_function(body, "_hideSkippedEffective"))
+    assert "canEditSetlist()" in gate, (
+        "_hideSkippedEffective() no longer forces the filter for a role that "
+        "cannot edit the set"
+    )
+    assert "hideSkippedMode" in gate and "=" not in gate.split("return")[1], (
+        "the effective value is being assigned somewhere instead of derived"
+    )
+
+    # Every render site must ask the function, not the raw preference.
+    assert "hideSkippedMode && r.skipped" not in body, (
+        "a render loop still reads the raw preference, so a Controller sees "
+        "songs that are not in the set"
+    )
+    # Counting call sites would be satisfied by the declaration itself, so the
+    # raw preference is banned from the render path outright instead.
+    assert "(hideSkippedMode ? 1 : 0)" not in body, (
+        "a render CHECKSUM still hashes the raw preference. The list then keeps "
+        "its old contents across a role change until something unrelated "
+        "happens to move the checksum — which is worse than not filtering at "
+        "all, because it is intermittent"
+    )
+    for site in ("_hideSkippedEffective() && r.skipped",
+                 "(_hideSkippedEffective() ? 1 : 0)"):
+        assert body.count(site) == 2, (
+            f"expected both {site!r} sites (list view and grid view), found "
+            f"{body.count(site)}"
+        )
+
+
+def test_reconnect_does_not_share_the_loop_glyph() -> None:
+    """Two controls, one symbol, one transport bar.
+
+    RECONNECT used the ↻ (&#8635;) codepoint — the same one .t-btn-loop draws,
+    two buttons away on the same bar. Mid-show that is a coin flip between
+    "repeat this song" and "restart the network connection", and those are not
+    neighbouring mistakes.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    sync = re.search(r'<button[^>]*\bt-btn-sync\b[^>]*>(.*?)</button>', html, re.S)
+    assert sync, "the reconnect button is gone"
+    for glyph in ("&#8635;", "\u21bb", "&#8634;", "\u21ba"):
+        assert glyph not in sync.group(1), (
+            f"the reconnect button is drawing {glyph!r} again — that is the loop icon"
+        )
+    assert "<svg" in sync.group(1), (
+        "the reconnect button has no icon at all"
+    )
+    loop = re.search(r'<button[^>]*\bt-btn-loop\b[^>]*>(.*?)</button>', html, re.S)
+    assert loop, "the loop button is gone"
+    assert "&#8635;" in loop.group(1) or "\u21bb" in loop.group(1), (
+        "the loop button no longer uses ↻ — if it moved to something else, "
+        "check this test still compares the two controls that sit side by side"
+    )

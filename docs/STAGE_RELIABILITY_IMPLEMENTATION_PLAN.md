@@ -885,3 +885,127 @@ older session, and one that does its arithmetic against the foreign clock.
 
 The skew case is the one that separates this implementation from the naive one,
 and it cannot be run here. See `docs/STAGE_TEST_MATRIX.md` §S.
+
+---
+
+## 15. Controller surfaces, Slide to Stop, and the two-icons-one-symbol bug
+
+Four fixes from the owner's second pass on real hardware.
+
+### A Controller gets a banner, not a dead dropdown
+
+The setlist picker was left in place for a Controller with `pointer-events: none`
+and `opacity: 0.85`. That is a *disabled control*, and a disabled dropdown still
+promises a choice: the chevron is drawn, the tap does nothing, and on a phone
+that reads as an app that has hung — not as a permission boundary.
+
+It is now replaced outright. `body.reaset-controller` hides `.setlist-picker`
+and shows `.setlist-banner`, which states the same two facts the picker carried
+and offers nothing: the active set's name, and — since a Controller has no
+picker to open — whether the project is reachable at all, which would otherwise
+be unlearnable on that device.
+
+Same visual family as `.n-select-btn`: same height, radius, type and inset,
+minus the border, hover, chevron and pointer. The dot pulses only while REAPER
+is playing, borrowing the Director badge's living-dot language so one glance
+says both "this is the set" and "the show is running".
+
+Both surfaces are filled from `renderSetlistPicker()`, so they cannot show
+different setlists — a bug the picker already had once against the hidden
+`<select>` it shadows.
+
+`_refreshSetlistBanner()` is called from `updatePlaybackUI()`, which runs at
+**transport poll rate**. The `title` write is therefore guarded on change:
+`classList.toggle` is a no-op when the state already matches, an attribute
+assignment thirty times a second is not, and that is the exact shape of the two
+performance faults already fixed on this branch.
+
+### A Controller sees only the songs that will play
+
+Hide Skips is a *view preference* for the Director, who needs to see the songs it
+dropped in order to put them back. For a Controller it is not a preference at
+all: a skipped song is not in tonight's set, the Controller cannot un-skip it,
+and a greyed-out row it must learn to ignore is one more thing to misread on a
+dark stage between songs.
+
+`_hideSkippedEffective()` returns `hideSkippedMode || !canEditSetlist()`.
+Deliberately **derived, never assigned** into `hideSkippedMode` — that value is
+persisted, so forcing it would silently rewrite the Director's own preference on
+any device that had ever been a Controller.
+
+Both render loops and, critically, **both render checksums** use it. A checksum
+left on the raw preference is worse than no filter at all, because the list then
+keeps its old contents across a role change until something unrelated happens to
+move the checksum — a bug that only appears sometimes. `applyModeUI()` clears
+`lastRenderChecksum` and repaints, so the change lands on the role switch rather
+than on the next poll. The sidebar toggle is `authoring-only`, since where it is
+forced it could only ever be a switch that does nothing.
+
+### Slide to Stop
+
+Stop is the one transport control whose mistake is unrecoverable in front of an
+audience, and on a phone it sits between PLAY and Loop where a thumb reaching for
+either can land on it.
+
+The old guard was a three-second **hold**, and holding is the wrong gesture for
+it: it is invisible until it completes, indistinguishable from a tap that did not
+register, and a musician who presses and lets go has no way to tell whether the
+app is broken or whether they simply did not press long enough. *That is exactly
+the "I pressed Stop and it did not stop" report this replaces* — the label bug
+fixed in `8990f6f` was the same failure seen from the other side.
+
+A slide cannot be performed by accident, shows its own progress, and is abandoned
+by doing nothing. Same reasoning macOS uses for slide-to-power-off.
+
+- Commit threshold is **82%** of travel, and the stop fires on **release**, not
+  on crossing it. A finger that reaches the end and slides back has changed its
+  mind, and being abandonable is the whole point.
+- The label follows the state: `SLIDE TO STOP` → `RELEASE TO STOP` when armed.
+- **Pointer events**, not the inline `onmousedown`/`ontouchstart` pairs the markup
+  carried: those fire twice on a touchscreen that also reports mouse events, and
+  the drag has to survive the finger leaving the button — which is the *normal*
+  way this gesture ends, since the thumb is at the far edge by then. Pointer
+  capture keeps the stream coming.
+- `touch-action: none` in slide mode only. Without it the first vertical wobble
+  hands the gesture to Safari's scroller and the thumb stops following.
+- Tap mode is unchanged and still available from the sidebar.
+- Stored `'hold'` **migrates to `'slide'`** — a device that came back wanting a
+  gesture nothing implements is a Stop button that does nothing at all, again.
+
+Every rule is written against a shared `.stop-ctl` class rather than the three
+buttons' own classes, because the last time each carried its own markup, two of
+the three never updated their label. The retired `stop-holding` machinery and its
+`@keyframes stop-fill` are deleted rather than left inert.
+
+Keyboard Enter still stops immediately, deliberately: the risk this guards
+against is a fat finger on a phone, and pressing Enter is not one.
+
+### RECONNECT no longer wears the loop icon
+
+The reconnect button drew `&#8635;` — the identical codepoint `.t-btn-loop` draws,
+two buttons away on the same transport bar. Mid-show that is a coin flip between
+"repeat this song" and "restart the network connection", and those are not
+neighbouring mistakes. It is now an inline plug SVG, which says *connection* and
+cannot be read as *repeat*. The sidebar's copy of the action uses the same icon.
+
+### Locked by tests
+
+`test_every_stop_button_says_what_it_wants`,
+`test_stop_slide_fires_on_release_not_on_threshold`,
+`test_stop_mode_migrates_the_retired_hold`,
+`test_controller_gets_a_banner_not_a_dead_dropdown`,
+`test_controller_list_excludes_songs_outside_the_set`, and
+`test_reconnect_does_not_share_the_loop_glyph`.
+
+Twelve mutations were run against these. **Three of them initially passed** and
+the tests were tightened until they failed: counting `_hideSkippedEffective()`
+call sites was satisfied by the function's own declaration, so the raw preference
+is now banned from the render path outright; nothing asserted the reconnect glyph
+at all; and asserting `_libConnected` merely *appeared* in the banner function was
+satisfied by the `title` line surviving after the offline class was removed.
+
+### Still requires a real-device test
+
+**T23–T30** and **C18–C22** in `docs/STAGE_TEST_MATRIX.md`. T25 (slide back and
+release must NOT stop) and T26 (diagonal drag on a phone must not be stolen by
+the scroller) are the two that cannot be reasoned about from here.
