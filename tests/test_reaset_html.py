@@ -2844,17 +2844,33 @@ def test_region_colour_is_written_to_reaper_not_to_this_browser(script_body: str
     """
     body = strip_comments(script_body)
 
-    push = strip_comments(extract_function(body, "_pushRegionColor"))
+    # There must be exactly ONE place that writes the key. Asserting the role
+    # gate on a function by name proves nothing if a second, ungated path can
+    # reach the wire — and Discard needed a per-region variant, which is
+    # exactly the moment such a path gets added.
+    wire = "SET/EXTSTATE/ReaSet/regionColor/"
+    assert body.count(wire) == 1, (
+        f"{body.count(wire)} places write the colour key — a role gate on one "
+        "of them is decoration"
+    )
+    assert wire in strip_comments(extract_function(body, "_pushRegionColorPairs")), (
+        "the one write site is no longer the gated one"
+    )
+
+    push = strip_comments(extract_function(body, "_pushRegionColorPairs"))
     assert "canEditSetlist()" in push, (
         "anyone can recolour the project — this is an edit, and edits are the "
         "Director's"
     )
-    assert "SET/EXTSTATE/ReaSet/regionColor/" in push, (
-        "the colour no longer reaches Reaset.lua"
-    )
     assert "join(';')" in push, (
         "a whole block is no longer one write, so Reaset.lua re-enumerates the "
         "project once per song on its defer thread"
+    )
+
+    # The by-song entry point must go THROUGH the gated writer.
+    by_song = strip_comments(extract_function(body, "_pushRegionColor"))
+    assert "_pushRegionColorPairs(" in by_song, (
+        "_pushRegionColor stopped delegating, so it is a second wire path"
     )
 
     pick = strip_comments(extract_function(body, "_ctxPickColor"))
@@ -2884,3 +2900,125 @@ def test_a_block_colours_as_one_unit(script_body: str) -> None:
     # A repeated song is two rows and one region; colouring it twice is a
     # wasted write, not a bug, but the dedupe is cheap and states the intent.
     assert "seen" in fn, "a song that repeats inside a block is written twice"
+
+
+# ── The edit session ────────────────────────────────────────────────────────
+
+
+def test_the_edit_button_names_the_action_not_the_mode(script_body: str) -> None:
+    """"SHOW" on the way in is a caption, and nobody read it as a door.
+
+    The control that enters edit mode used to display the mode it was leaving,
+    so a Director looking for a way to edit the set saw a button that appeared
+    to announce they could not. It has to say what tapping it DOES.
+    """
+    refresh = strip_comments(extract_function(script_body, "_refreshEditModeBtn"))
+    assert "t('EDIT')" in refresh, "the label stopped being the action"
+    assert "t('SHOW')" not in refresh, (
+        "the label reports the current mode again — that is the bug that made "
+        "editing unfindable"
+    )
+    assert "REASET_EDITING ?" not in refresh, (
+        "the label branches on the mode, so it is describing state rather than "
+        "offering an action"
+    )
+
+
+def test_edit_mode_has_two_ways_out() -> None:
+    html = REASET_HTML.read_text(encoding="utf-8")
+    """Entering has to offer both Apply and Discard, and only while editing."""
+    assert 'id="editActions"' in html, "the Apply/Discard pair is gone"
+    assert 'onclick="discardEdits()"' in html, "no way to throw the edits away"
+    assert 'onclick="applyEdits()"' in html, "no way to keep them deliberately"
+    assert 'onclick="enterEditMode()"' in html, (
+        "the button no longer enters edit mode"
+    )
+
+    assert "none" in _css_decls(html, ".edit-actions"), (
+        "Apply/Discard are on screen when there is nothing to apply or discard"
+    )
+    assert "flex" in _css_decls(html, "body.reaset-editing .edit-actions"), (
+        "the two buttons never appear"
+    )
+    assert "none" in _css_decls(html, "body.reaset-editing #editModeBtn"), (
+        "EDIT stays on screen next to Apply/Discard, offering a third answer "
+        "to a question with two"
+    )
+
+    # Spacing: WebKit before 14.1 drops flex gap, and the target device is an
+    # iPad that stopped updating. Two buttons flush against each other are one
+    # mis-tap between discarding a set and keeping it.
+    assert "margin-left" in _css_decls(html, ".edit-actions > .ea-btn + .ea-btn"), (
+        "the pair spaces with gap alone, so on the old iPad they touch"
+    )
+
+
+def test_a_controller_is_not_offered_the_edit_session(script_body: str) -> None:
+    """Editing is the Director's, at both layers — not CSS alone."""
+    html = REASET_HTML.read_text(encoding="utf-8")
+    enter = strip_comments(extract_function(script_body, "enterEditMode"))
+    assert "canEditSetlist()" in enter, (
+        "a Controller can enter edit mode, and the CSS hiding the controls is "
+        "the only thing stopping them"
+    )
+    controller_hides = re.search(
+        r"body\.reaset-controller[^{]*\.edit-actions", html
+    )
+    assert controller_hides, "a Controller is shown Apply/Discard"
+
+
+def test_discard_restores_the_list_itself_not_the_saved_copy(
+    script_body: str,
+) -> None:
+    """setlists[name] is written FROM displayList, so restoring it is a no-op.
+
+    saveCurrentState() serialises displayList into the named setlist. Putting
+    the old array back into setlists[name] would be overwritten by the very
+    next save — the screen would keep the edits while the code looked correct.
+    """
+    discard = strip_comments(extract_function(script_body, "discardEdits"))
+    assert "displayList" in discard and "s.rows" in discard, (
+        "Discard no longer restores displayList, which is the live list"
+    )
+    assert "g_songOverrides" in discard, (
+        "end-states, notes and colours are per-song overrides, and Discard "
+        "leaves them edited"
+    )
+    assert "_pushRegionColorPairs(" in discard, (
+        "region colours live in the REAPER project: no amount of restoring "
+        "local state reaches them, so Discard has to push them back"
+    )
+    assert "s.setlistName === currentSetlistName" in discard, (
+        "a snapshot taken against another setlist can be poured into the one "
+        "now open"
+    )
+
+
+def test_changing_the_setlist_ends_the_edit_session(script_body: str) -> None:
+    """A different set is a different context; the old snapshot is a hazard."""
+    change = strip_comments(extract_function(script_body, "changeSetlist"))
+    assert "_editTakeSnapshot()" in change, (
+        "switching setlists keeps a snapshot describing rows that are no "
+        "longer on screen"
+    )
+
+
+def test_the_context_panel_width_is_one_number_not_two() -> None:
+    """The panel is positioned in JS against a width declared in CSS.
+
+    They are the same measurement written twice, so they drift silently: the
+    panel renders one width and is placed as though it were another, which
+    reads as a popup that hangs off the screen edge only near the edge.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    css_width = _css_decls(html, ".song-ctx-panel")
+    match = re.search(r"width:\s*(\d+)px", css_width)
+    assert match, "the panel lost its width"
+    declared = int(match.group(1))
+
+    placements = [int(w) for w in re.findall(r"var pw = (\d+),", html)]
+    assert placements, "no panel placement constant found"
+    assert all(p == declared for p in placements), (
+        f"CSS says {declared}px, the placement code says {placements} — the "
+        "panel is positioned as a size it does not have"
+    )

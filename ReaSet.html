@@ -1081,7 +1081,13 @@
         .song-ctx-panel {
             position: fixed;
             z-index: 4000;
-            width: 256px;
+            /* 256px could not hold the four end-state labels: "Continue" had
+               2px of air either side, and Portuguese "Continuar" overflowed
+               its box outright. Widened to the point where the longest
+               translated label fits with room, and still 16px clear of a
+               320px phone. Change this and `pw` in openSongMenu() /
+               openSubMenu() together — they are the same number twice. */
+            width: 288px;
             background: #1c1c1e;
             border: 1px solid rgba(255, 255, 255, 0.14);
             border-radius: 16px;
@@ -2322,6 +2328,9 @@
 
         /* Segmented control — equal-width cells instead of pills that wrap. */
         .ap-seg { display: flex; gap: 4px; }
+        /* WebKit before 14.1 drops flex gap, which would butt the four
+           end-state buttons together into one bar. */
+        html.no-flexgap .ap-seg > * + * { margin-left: 4px; }
         .ap-seg > button, .ap-seg > span {
             flex: 1 1 0;
             min-width: 0;
@@ -2651,6 +2660,41 @@
             font-family: var(--font-ui);
         }
         #editModeBtn .emb-icon { display: none; font-size: 15px; }
+
+        /* The button names the ACTION. It used to show the current mode
+           ("SHOW"), which reads as a caption rather than a verb — the way into
+           editing was a button that appeared to say you were not in it, and it
+           was not findable. While editing it steps aside for the two controls
+           that END the session, so the bar always answers "what happens if I
+           tap this" instead of "where am I". */
+        .edit-actions { display: none; align-items: center; }
+        body.reaset-editing .edit-actions { display: flex; }
+        body.reaset-editing #editModeBtn { display: none; }
+        /* margin, not gap: WebKit drops flex gap before 14.1 and the two
+           buttons would touch. */
+        .edit-actions > .ea-btn + .ea-btn { margin-left: 6px; }
+        .ea-btn {
+            height: 34px;
+            min-width: 78px;
+            padding: 0 12px;
+            border-radius: var(--radius-pill);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--font-ui);
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            border: 1px solid transparent;
+            cursor: pointer;
+            transition: all 0.18s;
+            flex-shrink: 0;
+        }
+        .ea-btn .ea-icon { display: none; font-size: 15px; }
+        .ea-discard { background: rgba(252, 60, 68, 0.14); border-color: rgba(252, 60, 68, 0.42); color: #FF6B72; }
+        .ea-discard:hover { background: rgba(252, 60, 68, 0.24); }
+        .ea-apply { background: rgba(30, 215, 96, 0.16); border-color: rgba(30, 215, 96, 0.5); color: var(--color-brand); }
+        .ea-apply:hover { background: rgba(30, 215, 96, 0.26); }
         #editModeBtn.active {
             background: rgba(255, 159, 10, 0.16);
             border-color: rgba(255, 159, 10, 0.5);
@@ -2662,6 +2706,9 @@
             #editModeBtn { width: 34px; min-width: 0; padding: 0; font-size: 18px; }
             #editModeBtn .emb-icon { display: inline; }
             #editModeBtn .emb-label { display: none; }
+            .ea-btn { width: 34px; min-width: 0; padding: 0; font-size: 18px; }
+            .ea-btn .ea-icon { display: inline; }
+            .ea-btn .ea-label { display: none; }
         }
 
         .sidebar-action-btn {
@@ -4397,6 +4444,7 @@
         /* Structural editing: dead at any width, so hidden rather than dimmed
            and still eating a phone row. Same reasoning as Player mode. */
         body.reaset-controller .drag-handle,
+        body.reaset-controller .edit-actions,
         body.reaset-controller .song-dotmenu-btn,
         body.reaset-controller .sub-dotmenu-btn,
         body.reaset-controller #editModeBtn,
@@ -4974,7 +5022,11 @@
                 <span class="slb-name" id="setlistBannerName">Default</span>
             </div>
             <button class="n-btn-new authoring-only" onclick="createSetlist()" title="New">+</button>
-            <button class="n-btn-new" id="editModeBtn" onclick="toggleEditMode()" title="Edit mode"><span class="emb-icon">&#9998;</span><span class="emb-label" id="editModeLabel">SHOW</span></button>
+            <button class="n-btn-new" id="editModeBtn" onclick="enterEditMode()" title="Edit setlist"><span class="emb-icon">&#9998;</span><span class="emb-label" id="editModeLabel">EDIT</span></button>
+            <div class="edit-actions" id="editActions">
+                <button class="ea-btn ea-discard" onclick="discardEdits()" title="Discard changes"><span class="ea-icon">&#10005;</span><span class="ea-label">DISCARD</span></button>
+                <button class="ea-btn ea-apply" onclick="applyEdits()" title="Apply changes"><span class="ea-icon">&#10003;</span><span class="ea-label">APPLY</span></button>
+            </div>
             <div class="dotmenu-wrap authoring-only" id="dotMenuWrap" style="position:relative">
                 <button class="n-dotmenu-btn" onclick="toggleDotMenu(event)" title="Options">···</button>
                 <div class="dotmenu-dropdown" id="dotMenuDropdown">
@@ -6311,7 +6363,12 @@
             ["DIRECTOR", "DIRECTOR", "DIRETOR"],
             ["Elapsed show time", "Tiempo transcurrido del show", "Tempo decorrido do show"],
             ["Total setlist duration", "Duración total del setlist", "Duração total do setlist"],
-            ["EDIT", "EDICIÓN", "EDIÇÃO"],
+            ["EDIT", "EDITAR", "EDITAR"],
+            ["DISCARD", "DESCARTAR", "DESCARTAR"],
+            ["APPLY", "APLICAR", "APLICAR"],
+            ["Discard changes", "Descartar cambios", "Descartar alterações"],
+            ["Apply changes", "Aplicar cambios", "Aplicar alterações"],
+            ["Edit setlist", "Editar setlist", "Editar setlist"],
             ["When this song ends", "Al terminar esta canción", "Ao terminar esta música"],
             ["Auto", "Auto", "Auto"],
             ["Continue", "Continuar", "Continuar"],
@@ -8289,7 +8346,7 @@
             _ctxPanel = panel;
 
             var br = btn.getBoundingClientRect();
-            var pw = 258, ph = 420;
+            var pw = 288, ph = 420;
             var left = br.left;
             var top  = br.bottom + 6;
             if (left + pw > window.innerWidth  - 8) left = window.innerWidth  - pw - 8;
@@ -8355,22 +8412,45 @@
         // The id is REAPER's own markrgnindexnumber — the third field of the
         // REGION reply this file already parses, and exactly what
         // SetProjectMarker3 takes on the other side. Nothing has to be mapped.
-        function _pushRegionColor(regionIds, hex) {
+        // Takes [regionId, hex-or-null] pairs. Split out from
+        // _pushRegionColor because Discard has to send a DIFFERENT colour per
+        // region — whatever each one had before — and the wire format already
+        // carried a colour per id.
+        function _pushRegionColorPairs(pairs) {
             if (!canEditSetlist()) {
                 RSDiag.blocked('_pushRegionColor', 'role-cannot-edit-setlist');
                 return;
             }
             var parts = [];
-            for (var i = 0; i < regionIds.length; i++) {
-                if (regionIds[i] === null || regionIds[i] === undefined) continue;
-                parts.push(regionIds[i] + ':' + (hex ? String(hex).replace('#', '') : 'x'));
+            for (var i = 0; i < pairs.length; i++) {
+                var rid = pairs[i][0], hx = pairs[i][1];
+                if (rid === null || rid === undefined) continue;
+                parts.push(rid + ':' + (hx ? String(hx).replace('#', '') : 'x'));
             }
             if (!parts.length) return;
             // One write for a whole block: Reaset.lua splits on ';' and indexes
             // the regions once, rather than re-enumerating per song on the
             // defer thread of a machine that is also playing audio.
             wwr_req('SET/EXTSTATE/ReaSet/regionColor/' + parts.join(';'), 'region-color');
-            RSDiag.log('REGION_COLOR', { n: parts.length, hex: hex || 'clear' });
+            RSDiag.log('REGION_COLOR', { n: parts.length });
+        }
+
+        function _pushRegionColor(regionIds, hex) {
+            var pairs = [];
+            for (var i = 0; i < regionIds.length; i++) {
+                var rid = regionIds[i];
+                if (rid === null || rid === undefined) continue;
+                // Remember what the PROJECT had, once per region per edit
+                // session, so Discard can put it back. First write wins: two
+                // colour changes to one region during one session still undo
+                // to the colour it had on the way in, not to the intermediate.
+                if (_editSnapshot && !_editSnapshot.regionColors.hasOwnProperty(rid)) {
+                    _editSnapshot.regionColors[rid] =
+                        g_regionReaperColor.hasOwnProperty(rid) ? g_regionReaperColor[rid] : null;
+                }
+                pairs.push([rid, hex]);
+            }
+            _pushRegionColorPairs(pairs);
         }
 
         // Every row of the playback block `uid` belongs to. "Colour this song"
@@ -8475,7 +8555,7 @@
             _ctxPanel = panel;
 
             var br = btn.getBoundingClientRect();
-            var pw = 256, ph = 300;
+            var pw = 288, ph = 300;
             var left = br.right - pw;
             var top  = br.bottom + 6;
             if (left < 8) left = 8;
@@ -9589,6 +9669,13 @@
         }
 
         // --- 4. SYNC ---
+        // The colour REAPER itself has for a region, keyed by markrgnindexnumber.
+        // Deliberately NOT the merged colour the rows render: a [red] flag in a
+        // region NAME also produces a colour, and pushing that back into the
+        // project on Discard would change a colour we never set. Only the raw
+        // value is safe to restore.
+        var g_regionReaperColor = {};
+
         function syncRegions() {
             if (isDragging) return;
             var mainMap = {};
@@ -9621,6 +9708,8 @@
                 // Parse flags from the region name so display is clean for ALL regions
                 // (top-level songs AND sub-regions). Features 3, 9, 11, 12, etc.
                 var prFlags = parseRegionFlags(r[1]);
+
+                g_regionReaperColor[r[2]] = cssColor;
 
                 allEntries.push({
                     name:        r[1],                          // raw name — kept for lookups
@@ -10796,14 +10885,110 @@
             // FLIPS the class instead, which lit the chip on a fresh load.
             if (b) b.classList.toggle('active', !!REASET_EDITING);
             var l = document.getElementById('editModeLabel');
-            if (l) l.textContent = REASET_EDITING ? t('EDIT') : t('SHOW');
+            // The ACTION, always. The label used to alternate EDIT/SHOW to
+            // report the current mode, so the way IN read as "SHOW" — a word
+            // that describes where you are, on a control whose job is to say
+            // where tapping takes you.
+            if (l) l.textContent = t('EDIT');
         }
-        function toggleEditMode() {
-            if (!canEditSetlist()) { RSDiag.blocked('toggleEditMode', 'role-cannot-edit-setlist'); return; }
-            REASET_EDITING = !REASET_EDITING;
-            document.body.classList.toggle('reaset-editing', REASET_EDITING);
+        // Editing is a SESSION with two ways out, not a flag you leave lying
+        // on. Every mutator still writes through immediately — the followers
+        // see edits as they are made, which is the behaviour that already
+        // existed and the reason a Director can fix the set mid-show — so
+        // Discard is a RESTORE, not an un-buffer. That is the honest trade:
+        // buffering every edit until Apply would touch every mutator in the
+        // file, and would make the Director's own screen lie about what the
+        // room is following.
+        //
+        // Not persisted, deliberately: a reload ends the session and keeps
+        // what was done. There is nowhere safe to keep a pending undo across a
+        // browser that may not come back before the next song.
+        var _editSnapshot = null;
+
+        function _editTakeSnapshot() {
+            _editSnapshot = {
+                setlistName: currentSetlistName,
+                rows:        JSON.parse(JSON.stringify(displayList)),
+                overrides:   JSON.parse(JSON.stringify(g_songOverrides)),
+                // regionId -> colour REAPER had before this session touched it.
+                // Filled in by _pushRegionColor as colours are picked: only the
+                // pushes that actually happened need undoing.
+                regionColors: {}
+            };
+        }
+
+        function enterEditMode() {
+            if (!canEditSetlist()) { RSDiag.blocked('enterEditMode', 'role-cannot-edit-setlist'); return; }
+            if (REASET_EDITING) return;
+            REASET_EDITING = true;
+            document.body.classList.add('reaset-editing');
+            _editTakeSnapshot();
             _refreshEditModeBtn();
             closeOpenCtxPanel();
+            RSDiag.log('EDIT_ENTER', { rows: _editSnapshot.rows.length });
+        }
+
+        function _exitEditMode() {
+            REASET_EDITING = false;
+            document.body.classList.remove('reaset-editing');
+            _editSnapshot = null;
+            _refreshEditModeBtn();
+            closeOpenCtxPanel();
+        }
+
+        function applyEdits() {
+            if (!REASET_EDITING) return;
+            RSDiag.log('EDIT_APPLY', {});
+            _exitEditMode();
+        }
+
+        function discardEdits() {
+            if (!REASET_EDITING) return;
+            var s = _editSnapshot;
+            if (!s) { _exitEditMode(); return; }
+
+            // Region colours live in the REAPER project, not in this browser,
+            // so no amount of restoring local state reaches them. They have to
+            // be pushed back, each to its own previous colour.
+            var pairs = [];
+            for (var rid in s.regionColors) {
+                if (s.regionColors.hasOwnProperty(rid)) pairs.push([rid, s.regionColors[rid]]);
+            }
+            if (pairs.length) _pushRegionColorPairs(pairs);
+
+            // Restoring the ORDER means restoring displayList, not
+            // setlists[name]: saveCurrentState() writes the named setlist FROM
+            // displayList, so putting the old array back there would be
+            // overwritten by the very next save.
+            //
+            // Guarded on the setlist name because changing the active setlist
+            // ENDS a session (changeSetlist re-snapshots). Without the guard a
+            // stale snapshot would be poured into whichever set is open now.
+            if (s.setlistName === currentSetlistName) {
+                displayList      = JSON.parse(JSON.stringify(s.rows));
+                g_songOverrides  = JSON.parse(JSON.stringify(s.overrides));
+                saveSongOverrides();
+            }
+            // saveCurrentState() persists the restored order and schedules the
+            // push that tells the other devices to go back. Its
+            // skip-if-unchanged signature needs no help here: the reverted
+            // state differs from the edited one it last saw, which is the
+            // whole point. (An earlier version cleared the signature "so the
+            // revert is not swallowed" — mutating that line away changed
+            // nothing, because there was nothing to swallow.)
+            lastRenderChecksum = '';
+            saveCurrentState();
+            RSDiag.log('EDIT_DISCARD', { rows: s.rows.length, colours: pairs.length });
+            _exitEditMode();
+            syncRegions();
+        }
+
+        // Kept for the callers that just want to flip — the keyboard path and
+        // anything that predates the two buttons. Leaving by this door keeps
+        // the edits, same as Apply.
+        function toggleEditMode() {
+            if (REASET_EDITING) { applyEdits(); return; }
+            enterEditMode();
         }
 
         // chain / loop / skip are PER-ROW, not per-song: "play this one twice,
@@ -13889,6 +14074,12 @@
             // is the difference between the band seeing the right list and the
             // wrong one. _syncPushNow() cancels the pending timer itself.
             _syncPushNow();
+            // A different set is a different context: the snapshot taken on
+            // the way into edit mode describes rows that are no longer on
+            // screen, and Discard must never pour it into the set now open.
+            // So changing the set COMMITS what came before and starts a
+            // fresh session against the new list.
+            if (REASET_EDITING) _editTakeSnapshot();
         }
         function exportSetlists() {
             if (!canEditSetlist()) { RSDiag.blocked('exportSetlists', 'role-cannot-edit-setlist'); return; }

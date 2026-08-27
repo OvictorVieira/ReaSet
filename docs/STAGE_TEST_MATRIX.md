@@ -417,7 +417,7 @@ all, check that before anything else.
 
 | ID | Scenario | Expected | Result | Notes |
 |---|---|---|---|---|
-| **Z01** | As Director, open a song's menu, turn colour on, pick a swatch. | The row takes the colour **and so does the region in REAPER's timeline**. | | |
+| **Z01** | As Director, press **EDIT**, open a song's `⋮` menu, turn colour on, pick a swatch. | The row takes the colour **and so does the region in REAPER's timeline**. | | |
 | **Z02** | Look at a phone that is watching the same setlist. | Within about a second, the same colour. Nobody had to import anything. | | |
 | **Z03** | Save the REAPER project, close it, reopen. | The colour is still there. It belongs to the project now, not to a browser. | | |
 | **Z04** | Tick **Apply to the whole block**, then pick a colour. | Every song in that block takes it — including the ones above the one you opened. | | |
@@ -427,6 +427,40 @@ all, check that before anything else.
 | **Z08** | Colour a song, then watch REAPER for a minute without touching anything. | The project does **not** keep marking itself dirty. The instruction is consumed once. | | |
 | **Z09** | A song that appears **twice** in the set, inside one block. Colour the block. | It is written once, and both rows show it. | | |
 | **Z10** | Colour a song, then change the region's colour in REAPER itself. | ReaSet follows REAPER. REAPER is the source. | | |
+
+### Editing is a session, with two ways out
+
+`EDIT` names the action. It used to display the mode you were in — "SHOW" —
+which reads as a caption rather than a door, and the owner could not find the
+way into editing at all. The `⋮` menu that holds loop, skip, end-state, note
+and colour lives behind that button, so an unfindable button made all of it
+unfindable.
+
+Entering takes a snapshot. **Apply** keeps the work; **Discard** puts
+everything back — including the region colours, which live in the REAPER
+project and cannot be restored by putting local state back.
+
+Edits still reach the other devices **as they are made**, not on Apply. That
+is deliberate and unchanged: buffering them would make the Director's screen
+disagree with what the room is following. So Discard is a restore, and the
+followers see the set go back.
+
+| ID | Scenario | Expected | Result | Notes |
+|---|---|---|---|---|
+| **X01** | Look at the top bar as Director, not editing. | One button, reading **EDIT**. No Apply, no Discard. | | |
+| **X02** | Press it. | EDIT disappears; **DISCARD** and **APPLY** take its place. The `⋮` handles appear on the rows. | | |
+| **X03** | Reorder two songs, then press **APPLY**. | The new order stays. The buttons go away and EDIT comes back. | | |
+| **X04** | Reorder two songs, then press **DISCARD**. | The old order comes back. | | |
+| **X05** | Turn a loop on, mark a song skipped, write a note — then **DISCARD**. | All three go back. They are stored three different ways, so this is three tests in one. | | |
+| **X06** | Colour a song, then **DISCARD**, watching REAPER's timeline. | The region goes back to the colour it had. Not black, not the new colour. | | |
+| **X07** | Colour a song **twice** (two different swatches), then **DISCARD**. | It returns to the colour it had before you started — not to the first of the two. | | |
+| **X08** | Colour a song that had **no** colour in REAPER, then **DISCARD**. | It goes back to having none, rather than to black. | | |
+| **X09** | With a phone watching: edit as Director, and watch the phone. | The phone follows the edits **as you make them** — it does not wait for Apply. | | |
+| **X10** | Then press **DISCARD** and watch the phone again. | The phone goes back too. A revert that only the Director sees is the worst case. | | |
+| **X11** | Enter EDIT, change something, then switch to a different named setlist. | The change is kept. Discard from here reverts only what you do **after** the switch — it must never pour the old set into this one. | | |
+| **X12** | Enter EDIT, change something, then **reload the page**. | The change is kept, and you are out of edit mode. There is no pending undo across a reload, on purpose. | | |
+| **X13** | As a **Controller**, look at the top bar. | No EDIT, no Apply, no Discard, no `⋮`. | | |
+| **X14** | On the phone and the old iPad, in edit mode. | Two round buttons, ✕ and ✓, clearly apart — not touching. They are 34px, same as every other control up there. | | |
 
 ### The role modal
 
@@ -478,6 +512,12 @@ for, where the show pauses, was spelled out in the list and invisible here.
 - [ ] Active / selected / queued highlights unaffected
 - [ ] Progress fills unaffected
 - [ ] Expanded sections unaffected
+- [ ] The song `⋮` panel's four end-state buttons (Auto / Continue / Stop /
+      Wait) each hold their label with air around it — in **Portuguese and
+      Spanish too**, where "Continuar" is the longest. At the old 256px panel
+      width that label overflowed its box, and English "Continue" filled its
+      box edge to edge.
+- [ ] In edit mode the two round ✕ / ✓ buttons are clearly apart, not touching
 
 ---
 

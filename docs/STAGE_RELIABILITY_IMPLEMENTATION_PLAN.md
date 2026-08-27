@@ -1978,3 +1978,123 @@ proprietary gesture events — reproduce on that iPad and nowhere else.
 `V02` in the matrix (drag the Stop thumb on the tablet) is worth more than
 every other case in its section combined: if the gesture is inert there, the
 device cannot go on stage, and nothing else in the section matters.
+
+## 25. Editing is a session, and the way in has to look like a door
+
+Reported, in the owner's words, on finding the colour picker: *"porra eu vi q o
+edit ta atras do show... horrivel essa UI/UX, eu NUNCA iria imaginar q tava ali
+o botão de editar"*.
+
+### The button was answering the wrong question
+
+`#editModeBtn` displayed the **current mode**: "SHOW" when you were not
+editing, "EDIT" when you were. That is a status readout wearing the shape of a
+button. A Director looking for a way to edit the set saw a control that
+appeared to announce they were in show mode, and read it — correctly, for a
+label — as a statement rather than an offer.
+
+Everything structural lives behind it. The `⋮` row menu is `display: none`
+outside `body.reaset-editing`, and that menu is where loop, skip, end-state,
+the note and the new colour picker all live. So one badly named button made
+five features unfindable, and the colour picker shipped the week before was
+never seen at all.
+
+The fix is that a control names its **action**. The button reads EDIT, always,
+because that is what tapping it does.
+
+### Two ways out, because leaving needs to mean something
+
+A mode you can only leave by pressing the same button again has one exit and
+no way to say "undo all that". Entering now takes a snapshot; leaving is
+either **Apply** (keep) or **Discard** (put it back). While editing, EDIT
+steps aside so the bar never offers three answers to a two-answer question.
+
+### What Discard actually has to undo, and what it deliberately does not
+
+**Discard is a restore, not an un-buffer.** Every mutator still writes through
+immediately, so the other devices see edits as they are made. That was the
+existing behaviour and it is kept on purpose: buffering every edit until Apply
+would touch every mutator in the file, and — worse — would make the Director's
+screen disagree with what the room is actually following. A Director fixing
+the set between songs needs the phones to be right, not eventually right.
+
+The snapshot has to cover three stores that are genuinely different:
+
+1. **`displayList`** — the order and the per-row `chain` / `skipped` / `loop`
+   flags. Restoring `setlists[name]` instead would be a no-op that looks
+   correct: `saveCurrentState()` serialises the named setlist **from**
+   `displayList`, so the old array would be overwritten by the next save.
+2. **`g_songOverrides`** — end-state, delay, note and the local colour, keyed
+   by region id rather than by row.
+3. **The REAPER project itself.** Region colours are not in this browser. No
+   amount of restoring local state reaches them, so Discard pushes each
+   touched region back to the colour it had, one pair per region over the
+   wire format the block-colour write already used.
+
+For (3) the remembered value is the **raw** colour REAPER reported, not the
+colour the row renders. A `[red]` flag in a region *name* also produces a
+colour; pushing that back into the project would change a colour ReaSet never
+set. And it is remembered **once per region per session** — first write wins —
+so changing your mind twice still undoes to what you walked in with. That
+guard is load-bearing precisely because a REGION poll lands about once a
+second and refreshes the raw value in between two picks.
+
+### One thing removed for being untrue
+
+An earlier draft cleared `_lastSavedSig` before the restoring save, with a
+comment explaining that the skip-if-unchanged signature would otherwise
+"swallow the publish that tells the other devices to go back". Mutating that
+line away changed nothing, in the harness or in reason: the reverted state
+differs from the edited one the signature last saw, which is the entire point
+of the signature. The line was deleted rather than kept as harmless defence,
+because a comment asserting a danger that does not exist is worse than no
+comment.
+
+### Changing the setlist ends the session
+
+The snapshot describes rows in one named set. Switching sets while editing
+would leave Discard holding a list that belongs somewhere else, so
+`changeSetlist()` re-snapshots: the switch commits what came before and starts
+a fresh session. `discardEdits()` also guards on the name, so even a stale
+snapshot cannot be poured into the wrong set.
+
+### Not persisted
+
+A reload ends the session and keeps the work. There is nowhere safe to hold a
+pending undo across a browser that may not come back before the next song.
+
+### The other half of the same report
+
+The `⋮` panel it leads to was itself broken. Its four end-state buttons —
+Auto / Continue / Stop / Wait — were laid out in a 256px popup, which leaves
+each button 48px of usable width. Measured in the real page: English
+"Continue" needs exactly 48px, so it filled its box edge to edge; Portuguese
+and Spanish "Continuar" needs 52px and **overflowed**. The panel is now 288px,
+where the longest translated label has room, and it is still 16px clear of a
+320px phone. The CSS width and the `pw` placement constant in JS are the same
+measurement written twice, so a test now asserts they agree — a drift there
+renders the panel one size and positions it as another, which only shows up
+near a screen edge.
+
+`.ap-seg` also spaced its buttons with flex `gap` and had no legacy fallback,
+so on the iPad that stopped updating the four would have sat flush against
+each other. It has a `margin-left` fallback now, like every other gap in the
+file.
+
+### Verification
+
+`Tools/edit_session_test.js` drives the real page in a real browser: seed
+three REGION rows in the shape REAPER sends, let the page bootstrap its own
+setlist from them, then enter, mutate, and read the state back. 25 checks.
+Every one was verified to fail on the regression it exists for — which caught
+two of them being vacuous. The two-paint colour case could not see its bug
+until the harness modelled the REGION poll that lands between the picks, and
+the "revert is published" check passed with `saveCurrentState()` deleted,
+because `syncRegions()` at the end of Discard also saves.
+
+Source-level invariants that CI can run without a browser are in
+`tests/test_reaset_html.py`: the label is the action and never branches on the
+mode, both exits exist and only while editing, a Controller is refused in JS
+rather than only in CSS, Discard restores the live list rather than the saved
+copy, a setlist switch re-snapshots, and the panel's two width constants
+agree. All eleven mutations of those were caught.
