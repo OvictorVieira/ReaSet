@@ -1076,6 +1076,59 @@ def test_i18n_table_is_complete_and_unambiguous() -> None:
 
 
 @requires_node
+def test_live_config_panel_speaks_the_chosen_language() -> None:
+    """The Live view's "Visible elements" panel was written in Spanish.
+
+    Not translated INTO Spanish — its labels were Spanish string literals in
+    LIVE_CFG_DEFS with no rows in the table at all, so an English or Brazilian
+    user opening the one panel that decides what the stage screen shows got
+    "Nombre de canción" and "Barras de progreso".
+
+    A label has to be the ENGLISH cell of a row: that is what both readers key
+    on. A label that is any other cell — or no cell — cannot be translated.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    start = html.index("var LIVE_CFG_DEFS = [")
+    end = html.index("\n        ];", start) + len("\n        ];")
+    defs = json.loads(
+        run_node(html[start:end] + "\nconsole.log(JSON.stringify(LIVE_CFG_DEFS));")
+    )
+
+    rows = _i18n_rows()
+    english = {row[0]: row for row in rows}
+
+    labels = [d["label"] for d in defs if d]
+    assert len(labels) >= 9, f"the panel lost rows: only {labels}"
+
+    for label in labels:
+        row = english.get(label)
+        assert row, (
+            f"{label!r} is a Live-view label with no row in the table, so it "
+            f"renders in whatever language it happens to be written in"
+        )
+        assert row[1] != label or row[2] != label, (
+            f"{label!r} has a row but no actual translation in it"
+        )
+
+    # And the render has to go through t(). A label with a row still shows in
+    # English if it is written into the panel verbatim.
+    render = strip_comments(extract_function(html, "renderLiveConfigItems"))
+    assert "t(def.label)" in render, (
+        "renderLiveConfigItems writes the raw label, so the rows added for it "
+        "are never read"
+    )
+    assert "t('Replaces the progress bars')" in strip_comments(
+        extract_function(html, "renderLiveConfigItems")
+    ), "the region-map note is still a hardcoded string"
+
+    # The panel title lives in markup, and the DOM walk keys on English too.
+    assert '<div class="lcp-title">Visible elements</div>' in html, (
+        "the panel title is not the English source string, so the walk that "
+        "translates it cannot find it"
+    )
+
+
+@requires_node
 def test_every_language_is_reachable(script_body: str) -> None:
     """The readers must index by language, not by a boolean.
 

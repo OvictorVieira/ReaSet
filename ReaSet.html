@@ -5918,7 +5918,7 @@
         </div>
         <!-- Live View config panel -->
         <div id="live-config-panel">
-            <div class="lcp-title">Elementos visibles</div>
+            <div class="lcp-title">Visible elements</div>
             <div id="live-config-items"><!-- populated by JS --></div>
         </div>
         <!-- Live View config button -->
@@ -6793,6 +6793,21 @@
             ["Close", "Cerrar", "Fechar"],
             ["MIDI access denied: ", "Acceso MIDI denegado: ", "Acesso MIDI negado: "],
             ["Visible elements", "Elementos visibles", "Elementos visíveis"],
+            // Live view → Visible elements. These were written straight into
+            // LIVE_CFG_DEFS in Spanish and had no rows at all, so the panel
+            // stayed Spanish whatever the language was set to.
+            ["LIVE header + clock", "Cabecera LIVE + reloj", "Cabeçalho AO VIVO + relógio"],
+            ["Setlist name", "Nombre del setlist", "Nome do setlist"],
+            ["Song name", "Nombre de canción", "Nome da música"],
+            ["Active section", "Sección activa", "Seção ativa"],
+            ["Progress bars", "Barras de progreso", "Barras de progresso"],
+            ["Region map", "Mapa de regiones", "Mapa de regiões"],
+            ["Time remaining", "Tiempo restante", "Tempo restante"],
+            ["Up next", "Siguiente canción", "Próxima música"],
+            ["Transport controls", "Controles de transporte", "Controles de transporte"],
+            ["Replaces the progress bars",
+             "Reemplaza las barras de progreso",
+             "Substitui as barras de progresso"],
             ["View", "Vista", "Tela"],
             ["SIZE", "TAMAÑO", "TAMANHO"],
             ["Song", "Canción", "Música"],
@@ -15274,18 +15289,27 @@
         };
 
         // ── Config panel definitions ───────────────────────────────
+        // The labels are the ENGLISH source strings, which is what t() and the
+        // DOM walk both key on. They used to be written in Spanish and nowhere
+        // near the translation table, so this panel stayed Spanish on an
+        // English or Portuguese device — the one panel in the app that never
+        // followed the language switch.
+        //
+        // The ✦ that marks the new item is appended at render, outside the
+        // translated string: a marker glyph inside the key would need its own
+        // row in every language to say the same nothing.
         var LIVE_CFG_DEFS = [
-            { key: 'showHeader',       label: 'Cabecera LIVE + reloj' },
-            { key: 'showSetlistName',  label: 'Nombre del setlist' },
-            { key: 'showSongName',     label: 'Nombre de canción' },
-            { key: 'showSubRegion',    label: 'Sección activa' },
+            { key: 'showHeader',       label: 'LIVE header + clock' },
+            { key: 'showSetlistName',  label: 'Setlist name' },
+            { key: 'showSongName',     label: 'Song name' },
+            { key: 'showSubRegion',    label: 'Active section' },
             null,
-            { key: 'showProgressBars', label: 'Barras de progreso' },
-            { key: 'showRegionMap',    label: 'Mapa de Regiones ✦', isNew: true },
+            { key: 'showProgressBars', label: 'Progress bars' },
+            { key: 'showRegionMap',    label: 'Region map', isNew: true },
             null,
-            { key: 'showTimeRem',      label: 'Tiempo restante' },
-            { key: 'showUpNext',       label: 'Siguiente canción' },
-            { key: 'showTransport',    label: 'Controles de transporte' },
+            { key: 'showTimeRem',      label: 'Time remaining' },
+            { key: 'showUpNext',       label: 'Up next' },
+            { key: 'showTransport',    label: 'Transport controls' },
         ];
 
         // ── Persistence ────────────────────────────────────────────
@@ -15346,11 +15370,12 @@
                 var labelClass = def.isNew ? ' class="lcp-label new-item"' : ' class="lcp-label"';
                 var note = '';
                 if (def.key === 'showRegionMap' && g_liveSettings.showRegionMap) {
-                    note = '<div class="lcp-note">Reemplaza barras de progreso</div>';
+                    note = '<div class="lcp-note">' + t('Replaces the progress bars') + '</div>';
                 }
                 html += '<div class="lcp-row">'
                       + '<div>'
-                      + '<span' + labelClass + '>' + def.label + '</span>'
+                      + '<span' + labelClass + '>' + t(def.label)
+                      + (def.isNew ? ' \u2726' : '') + '</span>'
                       + note
                       + '</div>'
                       + '<label class="lcp-toggle">'
