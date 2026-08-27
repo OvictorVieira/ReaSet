@@ -2695,3 +2695,78 @@ def test_a_looping_section_is_marked_where_it_happens(script_body: str) -> None:
         "a whole-song loop traces the card again — that is a second outline "
         "around a row that already has one"
     )
+
+
+def test_loop_cannot_look_pressable_to_a_role_that_cannot_press_it(script_body: str) -> None:
+    """A control that lights itself and then refuses is worse than a missing one.
+
+    Loop is an EDIT — it changes what REAPER plays, and it is published — so
+    toggleCurrentLoop() refuses on a Controller. The footer button did not know
+    that: it lit from the Director's song, did nothing when tapped, and could
+    never be turned off. From a phone that is indistinguishable from "the loop
+    button is stuck on", which is exactly how it was reported.
+
+    Same rule the RECONNECT button had to learn. `disabled` stops the click;
+    only CSS stops it LOOKING pressable, and the two have to agree.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    body = strip_comments(script_body)
+
+    toggle = strip_comments(extract_function(body, "toggleCurrentLoop"))
+    assert "canEditSetlist()" in toggle, (
+        "toggleCurrentLoop no longer refuses on a Controller — if that is "
+        "deliberate, this whole test is the wrong shape"
+    )
+
+    ui = strip_comments(extract_function(body, "updatePlaybackUI"))
+    assert re.search(r"loopBtn\.disabled\s*=\s*!", ui), (
+        "the LOOP button is offered to a role that cannot use it: it lights "
+        "from the Director's song and then refuses every press"
+    )
+    assert "canEditSetlist()" in ui, "the button's enabled state is not the role's"
+
+    # Disabled must also LOOK it, and .active must still read through — "does
+    # this song loop" is worth knowing on every device in the room.
+    off = _css_decls(html, ".t-btn-loop:disabled")
+    assert "cursor: default" in off, "the disabled LOOP still shows a pointer"
+    hover = _css_decls(html, ".t-btn-loop:not(:disabled):hover")
+    assert hover, "the hover rule is no longer guarded, so a dead button repaints"
+
+
+def test_the_role_modal_uses_the_app_s_icons() -> None:
+    """Emoji were the last clip art in a file that draws everything else.
+
+    They render differently on every OS, cannot take the theme's colour, and
+    beside the plug, the repeat mark and the skip arrows they read as pasted in.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    card = re.search(r'<div class="mode-select-card">(.*?)\n    </div>', html, re.S)
+    assert card, "the role modal is gone"
+    icons = re.findall(r'<span class="mode-opt-icon[^"]*">(.*?)</span>', card.group(1), re.S)
+    assert len(icons) == 2, f"expected two role icons, found {len(icons)}"
+    for ic in icons:
+        assert "<svg" in ic, f"a role icon is not an svg: {ic.strip()[:40]!r}"
+        assert "&#1" not in ic, f"a role icon is still an emoji codepoint: {ic.strip()[:40]!r}"
+
+    # The Controller's description outlived the Stop button once already.
+    assert "stop" not in card.group(1).lower() or "stopped" in card.group(1).lower(), (
+        "the Controller still advertises a Stop button that no longer exists"
+    )
+
+
+def test_a_whole_song_loop_is_visible_on_its_row() -> None:
+    """A song with no sections loops as a whole, and only the row can say so.
+
+    Nothing marks a start or an end there, so the bracket has nothing to
+    bracket — the surface is the entire signal. At the alpha it shipped with it
+    was a rumour, on the case a performer most needs to catch from across a
+    stage.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    whole = _css_decls(html, ".loop-mark.is-whole")
+    m = re.search(r"background:\s*rgba\([^)]*?,\s*([\d.]+)\s*\)", whole)
+    assert m, "the whole-song loop mark has no background — nothing shows it"
+    assert float(m.group(1)) >= 0.10, (
+        f"the whole-song loop wash is {m.group(1)}, which is not visible from "
+        f"stage distance on the one case that has no other marker"
+    )

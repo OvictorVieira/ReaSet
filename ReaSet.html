@@ -946,10 +946,14 @@
         /* A loop over the entire song has no interesting edges to mark, and
            any border here traces the card — a second outline around a row
            that already has one. The wash alone says it. */
+        /* A song with no sections loops as a whole, and that is the case a
+           performer most needs to see from across a stage: nothing marks a
+           start or an end, so the only signal is the row itself. At 0.05 it
+           was a rumour. */
         .loop-mark.is-whole {
             border: none;
             border-radius: 0;
-            background: rgba(191, 90, 242, 0.05);
+            background: rgba(191, 90, 242, 0.13);
         }
 
         .song-row>*:not(.card-bg-fill):not(.loop-marks) {
@@ -1954,7 +1958,26 @@
             border: 1.5px solid rgba(255, 255, 255, 0.18);
         }
 
-        .t-btn-loop:hover {
+        /* A Controller's LOOP reports; it does not offer. No hover, no press,
+           and dimmed enough to read as a state rather than a target — while
+           .active still shows through, because "does this song loop" is worth
+           knowing on every device in the room. */
+        .t-btn-loop:disabled {
+            cursor: default;
+            opacity: 0.75;
+        }
+        .t-btn-loop:disabled:hover {
+            background: transparent;
+            border-color: rgba(255, 255, 255, 0.18);
+            color: rgba(255, 255, 255, 0.45);
+        }
+        .t-btn-loop.active:disabled:hover {
+            background: rgba(191, 90, 242, 0.18);
+            border-color: rgba(191, 90, 242, 0.4);
+            color: var(--color-loop);
+        }
+
+        .t-btn-loop:not(:disabled):hover {
             border-color: rgba(255, 255, 255, 0.4);
             color: rgba(255, 255, 255, 0.8);
         }
@@ -4281,7 +4304,23 @@
         }
         .mode-opt-btn:hover { background: rgba(255,255,255,0.09); }
         .mode-opt-btn.mode-director:hover { border-color: var(--color-brand); }
-        .mode-opt-icon { font-size: 24px; flex: 0 0 auto; line-height: 1.3; }
+        .mode-opt-icon {
+            flex: 0 0 auto;
+            display: flex; align-items: center; justify-content: center;
+            width: 42px; height: 42px;
+            border-radius: 12px;
+        }
+        /* Green is the Director's colour everywhere else in this app — the
+           badge, the cued row, PLAY. The Controller is deliberately neutral:
+           there is one of the first and any number of the second. */
+        .mode-opt-icon.is-director {
+            color: var(--color-brand);
+            background: rgba(30, 215, 96, 0.12);
+        }
+        .mode-opt-icon.is-controller {
+            color: rgba(255, 255, 255, 0.7);
+            background: rgba(255, 255, 255, 0.07);
+        }
         .mode-opt-label { font-size: 14.5px; font-weight: 700; color: var(--text-primary); margin-bottom: 3px; }
         .mode-opt-desc  { font-size: 11.5px; color: var(--text2); line-height: 1.45; }
 
@@ -5397,7 +5436,7 @@
                 to own the setlist tonight.</div>
             <div class="mode-select-options">
                 <div class="mode-opt-btn mode-director" onclick="chooseMode('director')">
-                    <span class="mode-opt-icon">&#127916;</span>
+                    <span class="mode-opt-icon is-director"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6.5h10M4 12h6.5M4 17.5h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M20.1 8.4 13.6 15l-3.1.8.8-3.1 6.5-6.5a1.55 1.55 0 0 1 2.3 2.2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></span>
                     <span>
                         <div class="mode-opt-label">Director</div>
                         <div class="mode-opt-desc">Owns the show: edits the setlist, its order, chains,
@@ -5405,10 +5444,10 @@
                     </span>
                 </div>
                 <div class="mode-opt-btn mode-controller" onclick="chooseMode('controller')">
-                    <span class="mode-opt-icon">&#129345;</span>
+                    <span class="mode-opt-icon is-controller"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="3.5" stroke="currentColor" stroke-width="2"/><path d="M10.2 9.1v5.8l4.8-2.9-4.8-2.9Z" fill="currentColor"/></svg></span>
                     <span>
                         <div class="mode-opt-label">Controller</div>
-                        <div class="mode-opt-desc">Drives the show: play, pause, stop, cue and queue.
+                        <div class="mode-opt-desc">Drives the show: play, pause, previous, next, cue and queue.
                             Follows the Director's setlist and cannot edit it. Any number of devices.</div>
                     </span>
                 </div>
@@ -6372,9 +6411,15 @@
             ["Owns the show: edits the setlist, its order, chains, loops and skips, and publishes them to every other device. One per session.",
              "Dueño del show: edita el setlist, su orden, encadenados, loops y omitidas, y los publica a todos los demás dispositivos. Uno por sesión.",
              "Dono do show: edita o setlist, a ordem, emendas, loops e puladas, e publica tudo para os outros dispositivos. Um por sessão."],
-            ["Drives the show: play, pause, stop, cue and queue. Follows the Director's setlist and cannot edit it. Any number of devices.",
-             "Maneja el show: play, pausa, stop, cue y cola. Sigue el setlist del Director y no puede editarlo. Cualquier cantidad de dispositivos.",
-             "Conduz o show: play, pause, stop, cue e fila. Segue o setlist do Diretor e não pode editá-lo. Qualquer quantidade de dispositivos."],
+            ["Drives the show: play, pause, previous, next, cue and queue. Follows the Director's setlist and cannot edit it. Any number of devices.",
+             "Maneja el show: play, pausa, anterior, siguiente, cue y cola. Sigue el setlist del Director y no puede editarlo. Cualquier cantidad de dispositivos.",
+             "Conduz o show: play, pause, anterior, próxima, cue e fila. Segue o setlist do Diretor e não pode editá-lo. Qualquer quantidade de dispositivos."],
+            ["Loop this song or section",
+             "Loopear esta canción o sección",
+             "Loopar esta música ou seção"],
+            ["Only the Director can change the loop",
+             "Solo el Director puede cambiar el loop",
+             "Só o Diretor pode mudar o loop"],
             ["Cancel", "Cancelar", "Cancelar"],
             ["Initializing…", "Inicializando…", "Inicializando…"],
             ["Action to assign", "Acción a asignar", "Ação a atribuir"],
@@ -10913,6 +10958,21 @@
             var loopBtn = document.getElementById("footer-loop-btn");
             if (isLooping) loopBtn.classList.add("active");
             else loopBtn.classList.remove("active");
+            // Loop is an EDIT — it changes what REAPER plays, and it is
+            // published — so toggleCurrentLoop() refuses on a Controller. The
+            // button did not know that. It lit itself from the Director's song,
+            // did nothing when pressed, and could never be turned off: the
+            // exact "it is stuck on" this looked like from a phone.
+            //
+            // Same rule the RECONNECT button had to learn: `disabled` stops the
+            // click, only CSS stops it LOOKING pressable, and the two have to
+            // agree. Lit still means "this song loops" — it is a readout here,
+            // not a control.
+            var _canLoop = canEditSetlist();
+            loopBtn.disabled = !_canLoop;
+            loopBtn.title = _canLoop
+                ? t('Loop this song or section')
+                : t('Only the Director can change the loop');
 
             // Play button text
             var playBtn = document.getElementById("main-play-btn");
