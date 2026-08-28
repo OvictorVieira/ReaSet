@@ -535,6 +535,36 @@ def test_lyrics_polling_is_cancellable(script_body: str) -> None:
         )
 
 
+def test_a_two_word_tab_label_stays_on_one_line() -> None:
+    """A topbar tab label must never wrap, and the tab must not be squeezed.
+
+    Every English label is one word, so nothing wrapped until pt-BR named the
+    LIVE tab "AO VIVO". On iOS Safari the space broke it across two lines: that
+    tab alone grew taller than the four beside it and its icon lifted out of the
+    row, which is what the row is for. A label that cannot wrap has to be a
+    label the flex row cannot shrink below its text, or the fix trades a wrap
+    for an overlap.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+    match = re.search(r"\n        \.vtab \{(.*?)\n        \}", html, re.S)
+    assert match, ".vtab rule not found"
+    rule = match.group(1)
+
+    assert re.search(r"white-space:\s*nowrap", rule), (
+        "the tab label can wrap again — a two-word translation breaks the row"
+    )
+    assert re.search(r"flex-shrink:\s*0", rule), (
+        "the tab can be shrunk below its label, which is what caused the wrap"
+    )
+
+    # The defect only exists because a label is translated into two words.
+    # Pin the translation that exposed it, so dropping it does not silently
+    # retire the rule above.
+    assert re.search(r'\["LIVE",\s*"LIVE",\s*"AO VIVO"\]', html), (
+        "the pt-BR LIVE label changed; re-check whether the tab rule still fits"
+    )
+
+
 VIEW_TABS = ["show", "lyrics", "chords", "live", "canvas"]
 
 

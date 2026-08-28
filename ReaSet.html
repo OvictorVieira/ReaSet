@@ -440,6 +440,14 @@
             border-bottom: 2px solid transparent;
             min-width: 52px;
             position: relative;
+            /* A tab label is one line. Every English label is one word, so this
+               never mattered until pt-BR named the LIVE tab "AO VIVO": the space
+               wrapped it, that tab alone grew a third line, and its icon lifted
+               out of the row the other four sit on. The tabs are already hidden
+               below 600px (see the phone media query), so the wider label only
+               has to fit the tablet widths that still show them. */
+            white-space: nowrap;
+            flex-shrink: 0;
         }
 
         .vtab .vtab-icon {
