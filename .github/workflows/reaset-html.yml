@@ -15,6 +15,7 @@ on:
       - ReaSet.html
       - Reaset.lua
       - Tools/stage_race_test.js
+      - Tools/sync_handoff_test.js
       - tests/test_reaset_html.py
       - tests/test_reaset_lua.py
       - .github/workflows/reaset-html.yml
@@ -23,6 +24,7 @@ on:
       - ReaSet.html
       - Reaset.lua
       - Tools/stage_race_test.js
+      - Tools/sync_handoff_test.js
       - tests/test_reaset_html.py
       - tests/test_reaset_lua.py
       - .github/workflows/reaset-html.yml

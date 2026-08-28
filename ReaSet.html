@@ -7250,6 +7250,10 @@
         // Regions in the REAPER project that tonight's set does not contain.
         // Read only by the add-song picker: nothing about playback may walk it.
         var g_offSetlist = [];
+        // The project's top-level regions by id, as last parsed by
+        // syncRegions(). Read by the sync apply path, which has to resolve a
+        // song the CURRENT set does not contain.
+        var g_mainRegions = {};
 
         var lastActiveID = null;
         var lastRenderChecksum = "";
@@ -8000,9 +8004,37 @@
                 // of the Director's. getSongEnd() reads syncedEnd only where
                 // this device does not author, so a Director's own overrides
                 // are never shadowed by something it received.
+                // THE WHOLE PROJECT, not the set that happens to be open.
+                //
+                // This was built from displayList alone, and displayList is
+                // the CURRENT setlist — so a follower could only adopt songs
+                // it already had. The Director selecting a different set
+                // published the right payload, the follower took the new NAME
+                // from it, and then dropped every song the old set did not
+                // already contain. With the leftover pass below re-appending
+                // everything unadopted, the follower ended up with exactly the
+                // list it started with under the new set's name: the setlist
+                // change never arrived, and a reload put it straight back on
+                // the local default.
+                //
+                // syncRegions() keeps displayList and g_offSetlist as a
+                // partition of every top-level region in the project, so their
+                // union is the pool a payload may name.
+                // displayList first, so a row already in the set keeps its own
+                // object; then the picker's regions; then the parsed project
+                // map, which is the one source that cannot be stale.
                 var byRegion = {};
-                for (var bk = 0; bk < displayList.length; bk++) {
-                    if (!byRegion.hasOwnProperty(displayList[bk].id)) byRegion[displayList[bk].id] = displayList[bk];
+                var _addPool = function (arr) {
+                    for (var pi = 0; pi < arr.length; pi++) {
+                        if (arr[pi] && !byRegion.hasOwnProperty(arr[pi].id)) byRegion[arr[pi].id] = arr[pi];
+                    }
+                };
+                _addPool(displayList);
+                _addPool(g_offSetlist || []);
+                for (var mk in g_mainRegions) {
+                    if (g_mainRegions.hasOwnProperty(mk) && !byRegion.hasOwnProperty(mk)) {
+                        byRegion[mk] = g_mainRegions[mk];
+                    }
                 }
                 var reordered = [], adopted = {};
                 for (var j = 0; j < payload.setlist.length; j++) {
@@ -8017,12 +8049,18 @@
                     adopted[ent.id] = true;
                     reordered.push(built);
                 }
-                // Anything local the shared payload doesn't mention (e.g. a
-                // region that only exists on THIS device's view) is kept,
-                // appended at the end, instead of silently vanishing.
-                for (var m = 0; m < displayList.length; m++) {
-                    if (!adopted[displayList[m].id]) reordered.push(displayList[m]);
-                }
+                // The payload IS the set. Rows it does not name are not in
+                // the show, so they are not in the list.
+                //
+                // They used to be appended at the end "instead of silently
+                // vanishing", which sounds protective and is not: it made it
+                // impossible for a follower to ever LOSE a song. Removing one
+                // on the Director left it on every other device, and a set
+                // switch left the whole previous set stacked underneath the
+                // new one. The fingerprint check above already guarantees both
+                // devices are on the same REAPER project, so a payload entry
+                // this device cannot resolve is a region genuinely missing
+                // here — which is the case the `continue` above covers.
                 displayList = reordered;
 
                 var prevName = currentSetlistName;
@@ -10930,6 +10968,13 @@
             }
 
             g_subRegionMap = subMap;
+            // Every top-level region in the project, by id, refreshed on every
+            // REGION reply. displayList and g_offSetlist are both DERIVED from
+            // this and are only a correct partition of it between ticks — an
+            // incoming payload that lands in the gap would fail to resolve a
+            // song and drop it from the follower's set for good. Resolving
+            // against the parse itself has no such window.
+            g_mainRegions = mainMap;
             // Rebuilt from scratch on every pass, like displayList: a region
             // that left the project must not linger in the picker.
             if (displayList.length === 0 && !initialized) g_offSetlist = [];

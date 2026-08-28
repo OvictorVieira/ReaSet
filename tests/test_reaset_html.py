@@ -1490,11 +1490,33 @@ def test_off_setlist_songs_never_reach_playback(script_body: str) -> None:
     # renderAddSongList is the picker's list builder, split out of
     # openAddSongPicker so the search field can re-list without reopening the
     # overlay. Still the picker; still nothing that plays anything.
+    #
+    # _syncApplyPayload reads it too, and for the same reason addSongToSetlist
+    # does: the Director's payload NAMED a song, and a song the follower's
+    # current set does not contain is by definition off-setlist there. A region
+    # crosses into displayList because the Director put it in the show — the
+    # one transition this rule has always allowed. What it must not do is
+    # append off-setlist rows on its own, so that is checked below rather than
+    # waved through.
     allowed = {"syncRegions", "openAddSongPicker", "renderAddSongList",
-               "addSongToSetlist", "removeFromSetlist"}
+               "addSongToSetlist", "removeFromSetlist", "_syncApplyPayload"}
     assert set(readers) <= allowed, (
         f"g_offSetlist is read outside the picker and its two actions: "
         f"{sorted(set(readers) - allowed)}"
+    )
+
+    # In the sync path it may only ever be a LOOKUP POOL: read while the
+    # payload's region map is built, and nowhere else in the function.
+    apply_fn = strip_comments(extract_function(body, "_syncApplyPayload"))
+    pool = re.search(r"var byRegion = \{\};(.*?)var reordered", apply_fn, re.S)
+    assert pool and "g_offSetlist" in pool.group(1), (
+        "_syncApplyPayload reads g_offSetlist somewhere other than the region "
+        "lookup it builds for the payload"
+    )
+    assert apply_fn.count("g_offSetlist") == pool.group(1).count("g_offSetlist"), (
+        "_syncApplyPayload touches g_offSetlist outside the lookup pool — an "
+        "off-setlist region must only enter displayList because the payload "
+        "named it"
     )
 
 
@@ -3917,6 +3939,73 @@ def test_removing_a_colour_removes_it_over_the_scope_that_is_set(script_body: st
     assert re.search(r'hex\s*==\s*"x"', lua) and re.search(r'col\s*=\s*0', lua), (
         "Reaset.lua no longer maps the clear sentinel to REAPER's default "
         "colour, so 'remove' would write a colour instead of removing one"
+    )
+
+
+# ── Director → Controller handoff ───────────────────────────────────────────
+
+
+def test_a_follower_resolves_a_payload_against_the_whole_project(script_body: str) -> None:
+    """The app's whole reason to exist: the Director owns the setlist and every
+    other device follows it.
+
+    `_syncApplyPayload` resolved each entry against `displayList` — the
+    follower's CURRENT setlist — so it could only ever adopt songs it already
+    had. Selecting a different set on the Director published a correct payload;
+    the follower took the new NAME from it, dropped every song the old set did
+    not contain, and a leftover pass re-appended the old rows underneath. It
+    ended up with exactly the list it started with, under the new name, and a
+    reload put it back on the local default.
+
+    displayList and g_offSetlist are DERIVED from the project parse and are
+    only a correct partition of it between REGION ticks, so the parse itself
+    has to be reachable: a payload landing in that gap must not silently lose a
+    song. Tools/sync_handoff_test.js drives the whole seam with two real pages.
+    """
+    body = strip_comments(script_body)
+    apply_fn = strip_comments(extract_function(body, "_syncApplyPayload"))
+
+    pool = re.search(r"var byRegion = \{\};(.*?)var reordered", apply_fn, re.S)
+    assert pool, "the payload's region lookup is no longer built where it was"
+    pool_src = pool.group(1)
+    assert "g_mainRegions" in pool_src, (
+        "a follower resolves the payload only against lists derived from the "
+        "project parse, so a song the current set does not contain cannot be "
+        "found and the setlist change never arrives"
+    )
+    assert "g_offSetlist" in pool_src and "displayList" in pool_src, (
+        "the lookup narrowed again — it has to cover the whole project"
+    )
+
+    # The parse has to be KEPT, or there is nothing to resolve against.
+    sync = strip_comments(extract_function(body, "syncRegions"))
+    assert re.search(r"g_mainRegions\s*=\s*mainMap", sync), (
+        "syncRegions no longer keeps the parsed project regions, so the sync "
+        "apply path has only its own stale derivatives to look in"
+    )
+    assert re.search(r"var\s+g_mainRegions\s*=", body), "g_mainRegions is not declared"
+
+    # And the payload is the set. Re-appending what it does not name is what
+    # made it impossible for a follower to ever LOSE a song — removing one on
+    # the Director left it on every other device, and a set switch stacked the
+    # whole previous set underneath the new one.
+    assert not re.search(
+        r"for \([^)]*m = 0; m < displayList\.length[^)]*\)\s*\{\s*"
+        r"if \(!adopted\[displayList\[m\]\.id\]\) reordered\.push",
+        apply_fn,
+    ), (
+        "rows the payload does not name are appended back, so a follower can "
+        "never lose a song and a set switch stacks the old set underneath"
+    )
+    assert re.search(r"displayList\s*=\s*reordered\s*;", apply_fn), (
+        "the follower no longer takes the payload's list as its own"
+    )
+
+    # Choosing a set is the one edit that must not wait out the debounce.
+    change = strip_comments(extract_function(body, "changeSetlist"))
+    assert "_syncPushNow()" in change, (
+        "selecting a setlist no longer publishes immediately, so the band sees "
+        "the old list for as long as the debounce lasts"
     )
 
 
