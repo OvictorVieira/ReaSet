@@ -81,11 +81,29 @@ const SEED = `
             // REAPER's ExtState, shared between the two pages. Splitting on ';'
             // is what REAPER's web interface itself does with a compound
             // request, so a value must never contain one.
-            window.wwr_req = function (cmd) {
+            var absorb = function (cmd) {
                 String(cmd).split(';').forEach(function (one) {
                     var m = one.match(/^SET\/EXTSTATE\/ReaSet\/([^/]+)\/([\s\S]*)$/);
                     if (m) window.__extSet(m[1], m[2]);
                 });
+            };
+            window.wwr_req = absorb;
+            // A bulk push does NOT go through wwr_req any more: it bypasses the
+            // stock lib's batching queue and sends one command per request,
+            // because REAPER's web server drops a URL that long. Stubbing only
+            // wwr_req therefore stopped seeing the setlist entirely — which is
+            // the harness lying about the transport, so it intercepts the real
+            // one too. Everything that is not a command (the shared file the
+            // follower fetches) passes straight through.
+            var realFetch = window.fetch.bind(window);
+            window.fetch = function (input, init) {
+                var url = typeof input === 'string' ? input : (input && input.url) || '';
+                var at = url.indexOf('/_/');
+                if (at !== -1) {
+                    absorb(decodeURIComponent(url.slice(at + 3)));
+                    return Promise.resolve(new Response('', { status: 200 }));
+                }
+                return realFetch(input, init);
             };
             REASET_MODE = role; applyModeUI();
             // The fingerprint gate in _syncApplyPayload: nothing applies until

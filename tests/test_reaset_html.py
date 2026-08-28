@@ -4188,6 +4188,58 @@ def test_director_boot_publishes_after_both_async_prerequisites(script_body: str
 
 
 @requires_node
+def test_one_command_stays_under_the_url_the_server_accepts(script_body: str) -> None:
+    """One command per request only helps while that ONE command still fits.
+
+    REAPER's web server drops a URL past roughly 8KB with no HTTP status at
+    all — the request simply vanishes. Measured on the reported install: a real
+    138-song setlist is 19K of base64, which the stock lib batched into a
+    single ~20KB URL and lost in one closed socket. A small setlist synced, a
+    real one never did, and nothing anywhere reported a failure.
+
+    Splitting the push per command fixed that, but the fix is only as good as
+    SYNC_CHUNK_LEN: raising it re-creates the same silent death one command at
+    a time. This pins the budget rather than the symptom.
+    """
+    body = strip_comments(script_body)
+
+    m = re.search(r"var\s+SYNC_CHUNK_LEN\s*=\s*(\d+)", body)
+    assert m, "SYNC_CHUNK_LEN is gone"
+    chunk = int(m.group(1))
+
+    # The longest command a chunk can produce, URL and all.
+    prefix = len("/_/SET/EXTSTATE/ReaSet/setlistChunk999/")
+    worst = prefix + chunk
+
+    # 2KB: the smallest limit any HTTP stack in the path is likely to impose,
+    # and a quarter of where REAPER was measured to fail. The point is headroom,
+    # not sailing close to the observed cliff.
+    assert worst <= 2048, (
+        f"one chunk command reaches {worst} bytes of URL. REAPER drops a "
+        f"request past ~8KB silently — no status, no error, the push simply "
+        f"disappears. Lower SYNC_CHUNK_LEN (currently {chunk})."
+    )
+
+    # And the library push, which carries the same shape.
+    lib = re.search(r"var\s+LIB_CHUNK_LEN\s*=\s*(\d+)", body)
+    if lib:
+        lib_worst = len("/_/SET/EXTSTATE/ReaSet/libChunk999/") + int(lib.group(1))
+        assert lib_worst <= 2048, (
+            f"one library chunk command reaches {lib_worst} bytes of URL"
+        )
+
+    # The reason the sequential sender exists at all: a real setlist is many
+    # chunks, so batching them into one URL was never going to fit. If this
+    # ever came down to one or two chunks the batching path would look fine
+    # again and the next big setlist would break it.
+    b64_for_138_songs = 19227   # measured from the reported install's own file
+    chunks = -(-b64_for_138_songs // chunk)
+    assert chunks >= 8, (
+        f"a real setlist is only {chunks} chunks at SYNC_CHUNK_LEN={chunk}; "
+        "the batched path would appear to work and fail on a longer show"
+    )
+
+
 def test_a_big_push_travels_one_command_per_request(script_body: str) -> None:
     """A bulk publish must never ride the batched wwr_req queue.
 
