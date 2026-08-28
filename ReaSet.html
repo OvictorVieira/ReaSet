@@ -3697,12 +3697,22 @@
         }
 
         #sidebar {
+            /* PINNED, not sized in viewport units — the same reason .app-frame
+               is (see its note). `height: 100vh` on a phone resolves to the
+               LARGE viewport, the one with the browser's bottom toolbar hidden,
+               so the drawer was taller than the screen and its last ~90px lived
+               under Chrome's toolbar. Scrolling did not reach them either: the
+               scroll ends when the content meets the element's bottom edge, and
+               that edge was itself off-screen. The bottom of this drawer is
+               where the sync/device section is, so the settings that say what
+               this device is were the ones that could not be reached.
+               `bottom: 0` asks for no number at all. */
             position: fixed;
             top: 0;
+            bottom: 0;
             left: -320px;
             width: 320px;
             max-width: 80vw;
-            height: 100vh;
             background: #111111;
             -webkit-backdrop-filter: blur(32px) saturate(180%);
             backdrop-filter: blur(32px) saturate(180%);
@@ -3710,7 +3720,9 @@
             z-index: 2000;
             transition: left 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
             overflow-y: auto;
-            padding-bottom: 40px;
+            /* Clears the home indicator on a notched phone, and keeps the 40px
+               of breathing room the last section always had everywhere else. */
+            padding-bottom: calc(40px + env(safe-area-inset-bottom));
         }
 
         #sidebar.open {
@@ -3718,11 +3730,14 @@
         }
 
         .sidebar-overlay {
+            /* Pinned for the same reason as the drawer it dims: sized in
+               viewport units it ended above the browser's bottom toolbar, and
+               the strip of app below it stayed bright and tappable. */
             position: fixed;
             top: 0;
+            right: 0;
+            bottom: 0;
             left: 0;
-            width: 100vw;
-            height: 100vh;
             background: rgba(0, 0, 0, 0.6);
             -webkit-backdrop-filter: blur(4px);
             backdrop-filter: blur(4px);

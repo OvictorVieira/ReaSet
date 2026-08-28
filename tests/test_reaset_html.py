@@ -535,6 +535,43 @@ def test_lyrics_polling_is_cancellable(script_body: str) -> None:
         )
 
 
+def test_the_drawer_is_pinned_to_the_viewport_not_measured_in_vh() -> None:
+    """The sidebar's last section has to be reachable on a phone.
+
+    `height: 100vh` resolves to the LARGE viewport — the one with the mobile
+    browser's bottom toolbar hidden — so the drawer was taller than the screen
+    and its final ~90px sat behind Chrome's toolbar on iOS. Scrolling did not
+    recover them: a scroll ends when the content meets the element's bottom
+    edge, and that edge was itself off-screen. What lives down there is the
+    setlist-sync section, so the device could not be told what it is.
+
+    `.app-frame` already solved this by pinning to `inset` instead of asking
+    for a number (see its comment); the drawer and its overlay must not drift
+    back to viewport units.
+    """
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    for selector in ("#sidebar", ".sidebar-overlay"):
+        match = re.search(
+            r"\n        " + re.escape(selector) + r" \{(.*?)\n        \}", html, re.S
+        )
+        assert match, f"{selector} rule not found"
+        # The comments explaining the fix quote the property they replaced.
+        rule = re.sub(r"/\*.*?\*/", "", match.group(1), flags=re.S)
+        assert not re.search(r"height:\s*100vh", rule), (
+            f"{selector} is sized in vh again — its bottom lands under the "
+            "mobile browser's toolbar"
+        )
+        assert re.search(r"bottom:\s*0", rule), (
+            f"{selector} is no longer pinned to the bottom of the viewport"
+        )
+
+    sidebar = re.search(r"\n        #sidebar \{(.*?)\n        \}", html, re.S).group(1)
+    assert "env(safe-area-inset-bottom)" in sidebar, (
+        "the drawer's last row no longer clears the home indicator"
+    )
+
+
 def test_a_two_word_tab_label_stays_on_one_line() -> None:
     """A topbar tab label must never wrap, and the tab must not be squeezed.
 
