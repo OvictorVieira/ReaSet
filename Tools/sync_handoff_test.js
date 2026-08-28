@@ -307,6 +307,52 @@ const SEED = `
         check('and the HTTP status', /404/.test(diag.body));
         check('and how many reads were attempted', /7/.test(diag.body));
 
+        // ── 8. An empty ExtState reply is not a published revision ──────
+        //
+        // REAPER answers a GET for a key that has never existed with an EMPTY
+        // VALUE, not with silence. _syncFileRevSeen was set by the arrival of
+        // the reply rather than by its content, so it went true on the first
+        // probe of every install — including one where Reaset.lua has never
+        // run and the key has never existed. That permanently disabled the
+        // setlistRev fallback, _syncRemoteRev stayed 0 forever, and the 750ms
+        // path could never fire: the follower fell back to the slow poll while
+        // its own diagnosis reported "revision seen: —" and the Director was
+        // publishing revisions the whole time.
+        console.log('\n8. Reaset.lua silent, Director publishing');
+        const rev = await controller.evaluate('(function(){' + `
+            _syncFileRevSeen = false; _syncRemoteRev = 0;
+            // Reaset.lua is not running -> setlistFileRev empty.
+            // The Director is pushing   -> setlistRev is 7.
+            var probe = function () {
+                wwr_onreply('EXTSTATE\\tReaSet\\tsetlistFileRev\\t\\n' +
+                            'EXTSTATE\\tReaSet\\tsetlistRev\\t7\\n');
+            };
+            probe(); probe();
+            return { remoteRev: _syncRemoteRev, fileRevSeen: _syncFileRevSeen };
+        ` + '})()');
+        check('an empty setlistFileRev is not taken as proof of Reaset.lua',
+              rev.fileRevSeen === false, JSON.stringify(rev));
+        check("so the Director's own revision is still observed",
+              rev.remoteRev === 7, `remoteRev=${rev.remoteRev}`);
+
+        const said = await controller.evaluate('(function(){' + `
+            _syncEverApplied = false; _syncLastOkTs = 0; _syncFailReason = 'nofile';
+            _syncDiag = { url: 'http://x/reaset_setlist_sync.json', status: 404,
+                          err: 'HTTP 404', tries: 4, lastTry: Date.now() };
+            _syncRemoteRev = 7;
+            showSyncDiagnosis();
+            var withRev = document.getElementById('appAlertBody').innerText;
+            closeAppAlert();
+            _syncRemoteRev = 0;
+            showSyncDiagnosis();
+            return { withRev: withRev, without: document.getElementById('appAlertBody').innerText };
+        ` + '})()');
+        check('with a revision, the diagnosis blames Reaset.lua',
+              /Reaset\.lua is the missing half|Reaset\.lua/.test(said.withRev) &&
+              /IS publishing|ESTÁ publicando|SÍ está publicando/.test(said.withRev));
+        check('with none, it says nothing has been published',
+              /nothing has been published|no se publicó nada|nada foi publicado/.test(said.without));
+
         check('no page errors', errors.length === 0, errors[0] || '');
     } finally {
         await browser.close();

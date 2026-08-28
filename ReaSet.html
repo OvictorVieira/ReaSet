@@ -7032,6 +7032,12 @@
              "Nenhuma leitura chegou ainda."],
             ["Reads attempted", "Lecturas intentadas", "Leituras tentadas"],
             ["Revision seen", "Revisión vista", "Revisão vista"],
+            ["The Director IS publishing, so Reaset.lua is the missing half: it is not running in REAPER, or it cannot write next to ReaSet.html.",
+             "El Director SÍ está publicando, así que falta Reaset.lua: no está corriendo en REAPER, o no puede escribir junto a ReaSet.html.",
+             "O Diretor ESTÁ publicando, então o que falta é o Reaset.lua: ele não está rodando no REAPER, ou não consegue gravar ao lado do ReaSet.html."],
+            ["No revision has arrived either, so nothing has been published yet — check the Director is really in Director mode.",
+             "Tampoco llegó ninguna revisión, así que no se publicó nada — verificá que el Director esté realmente en modo Director.",
+             "Nenhuma revisão chegou também, então nada foi publicado — confira se o Diretor está mesmo em modo Diretor."],
             ["This is the setlist stored on this device, not the one the Director is on.",
              "Este es el setlist guardado en este dispositivo, no el que tiene el Director.",
              "Este é o setlist salvo neste aparelho, não o que o Diretor está usando."],
@@ -10385,8 +10391,21 @@
                         // the announcement so a newer browser against an older
                         // Reaset.lua still syncs, just with that small window.
                         if (tok[1] === "ReaSet" && tok[2] === "setlistFileRev") {
-                            _syncFileRevSeen = true;
-                            _syncObserveRemoteRev(tok[3]);
+                            // ONLY on a real value. REAPER answers a GET for a
+                            // key that does not exist with an EMPTY value, not
+                            // with silence — so this flag was set by the first
+                            // probe reply on every install, including one where
+                            // Reaset.lua has never run and the key has never
+                            // existed. It then permanently disabled the
+                            // setlistRev fallback below, _syncRemoteRev stayed
+                            // 0 forever, and the 750ms path could never fire:
+                            // the follower fell back to the slow poll and its
+                            // diagnosis reported "revision seen: —" while the
+                            // Director was pushing revisions the whole time.
+                            if (tok[3]) {
+                                _syncFileRevSeen = true;
+                                _syncObserveRemoteRev(tok[3]);
+                            }
                         }
                         if (tok[1] === "ReaSet" && tok[2] === "setlistRev") {
                             if (!_syncFileRevSeen) _syncObserveRemoteRev(tok[3]);
@@ -15114,6 +15133,15 @@
             var lines = [];
             if (_syncFailReason === 'nofile' && _syncDiag.status === 404) {
                 lines.push(t('The shared setlist file does not exist.'));
+                // Which half is missing? REAPER's web server serves this page
+                // with or without Reaset.lua, so "the browser works" says
+                // nothing about the script. The Director's own revision does:
+                // it reaches ExtState through the web interface directly, so
+                // seeing one proves the Director is publishing and only the
+                // script is missing.
+                lines.push(_syncRemoteRev
+                    ? t('The Director IS publishing, so Reaset.lua is the missing half: it is not running in REAPER, or it cannot write next to ReaSet.html.')
+                    : t('No revision has arrived either, so nothing has been published yet — check the Director is really in Director mode.'));
                 lines.push(t('Reaset.lua writes it. Check it is running on the REAPER machine, that it is the version that came with this ReaSet.html, and that the script was RESTARTED after you replaced the file — replacing it does not change the code already running in REAPER.'));
             } else if (_syncFailReason === 'nofile') {
                 lines.push(t('The shared setlist file could not be fetched.'));

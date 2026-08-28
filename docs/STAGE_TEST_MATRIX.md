@@ -164,6 +164,7 @@ in B.
 | **S07f** | Director on B, phone following. Pull the REAPER machine's network cable for 20 s. | The phone goes to **SEM SINCRONIA** rather than continuing to present B as current. It must never show a stale set as live. | | |
 | **S07g** | With the phone on **SEM SINCRONIA**, tap the banner. | It states which of the three causes it is, plus the exact URL it fetched, the HTTP status and how many reads it has tried. One screenshot must be enough to know what to fix. | | |
 | **S07h** | On the Director, open the setlist picker and choose a different set. | The closed picker shows the **new** name immediately. It must not still read the old one until the picker is opened again. | | |
+| **S07i** | Open ReaSet with REAPER running but **Reaset.lua NOT started**. Switch setlist on the Director, then tap the phone's banner. | It must report a revision (the Director publishes straight to ExtState, which needs no script) AND name Reaset.lua as the missing half. A dash where the revision should be means the empty-ExtState-reply bug is back. | | |
 | **S08** | Director switches A → B → C quickly. | Phone eventually shows C, not stuck on B. | | |
 | **S09** | Mac is Director. Phone requests Director. | Second Director **denied by default**, with the current Director's device name shown. | | |
 | **S10** | Close the Director browser. Wait the documented TTL. Phone requests Director. | Phone can acquire after the stale lease expires. | | |
