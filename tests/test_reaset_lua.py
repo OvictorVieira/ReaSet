@@ -70,8 +70,11 @@ def test_bridge_backs_off_when_no_track_exists() -> None:
         reaper = {
           -- Every call to this is one walk of the project.
           CountTracks = function() scans = scans + 1; return 8 end,
-          GetTrack = function() return nil end,
-          GetTrackName = function() return true, 'guitar' end,
+          GetTrack = function(_, i) return { index = i } end,
+          GetTrackName = function(track)
+            if track == nil then error('MediaTrack expected') end
+            return true, 'guitar'
+          end,
           GetTrackNumMediaItems = function() return 0 end,
           ValidatePtr = function(p) return p ~= nil end,
           SetExtState = function() end,

@@ -498,6 +498,11 @@ local function bridge_tick(b, cur_pos, tick)
         end
         b.miss_tick = nil                   -- found one: no backoff to carry
     end
+    -- During the no-track backoff above, needs_scan is false and b.track is
+    -- still nil. Do not fall through into GetTrackName/items_around: REAPER's
+    -- API rejects nil instead of returning an empty name, and that exception
+    -- aborts the rest of tick_body (including the shared-setlist write).
+    if not reaper.ValidatePtr(b.track, 'MediaTrack*') then return end
     if not HAS_ULT then
         -- Track exists but item notes cannot be read without SWS.
         bridge_publish_status(b, "!NOSWS")
