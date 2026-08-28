@@ -634,7 +634,7 @@
             min-width: 0;
         }
         body.reaset-controller .setlist-picker { display: none; }
-        body.reaset-controller .setlist-banner { display: flex; }
+        body.reaset-controller .setlist-banner { display: flex; cursor: pointer; }
         .setlist-banner .slb-name {
             flex: 1; min-width: 0;
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -5435,7 +5435,7 @@
                  musician concludes the app is stuck. This states the same fact
                  without offering anything. Populated from renderSetlistPicker()
                  so both surfaces read one source. -->
-            <div class="setlist-banner" id="setlistBanner" aria-live="polite">
+            <div class="setlist-banner" id="setlistBanner" aria-live="polite" onclick="showSyncDiagnosis()">
                 <span class="slb-dot" id="setlistBannerDot"></span>
                 <span class="slb-name" id="setlistBannerName">Default</span>
                 <span class="slb-tag" id="setlistBannerTag" style="display:none">NOT SYNCED</span>
@@ -7012,6 +7012,26 @@
             ["Visible elements", "Elementos visibles", "Elementos visíveis"],
             // The Controller's banner when it is not reading the Director's file.
             ["NOT SYNCED", "SIN SINCRONIZAR", "SEM SINCRONIA"],
+            ["Not synced", "Sin sincronizar", "Sem sincronia"],
+            ["Shared setlist", "Setlist compartido", "Setlist compartilhado"],
+            ["Following the Director. Last read", "Siguiendo al Director. Última lectura",
+             "Seguindo o Diretor. Última leitura"],
+            ["The shared setlist file does not exist.",
+             "El archivo de setlist compartido no existe.",
+             "O arquivo de setlist compartilhado não existe."],
+            ["Reaset.lua writes it. Check it is running on the REAPER machine, that it is the version that came with this ReaSet.html, and that the script was RESTARTED after you replaced the file — replacing it does not change the code already running in REAPER.",
+             "Lo escribe Reaset.lua. Verificá que esté corriendo en la máquina de REAPER, que sea la versión que vino con este ReaSet.html, y que el script se haya REINICIADO después de reemplazar el archivo — reemplazarlo no cambia el código que ya está corriendo en REAPER.",
+             "Quem grava é o Reaset.lua. Confira se ele está rodando na máquina do REAPER, se é a versão que veio com este ReaSet.html, e se o script foi REINICIADO depois de você trocar o arquivo — trocar o arquivo não muda o código que já está rodando no REAPER."],
+            ["The shared setlist file could not be fetched.",
+             "No se pudo descargar el archivo de setlist compartido.",
+             "Não foi possível baixar o arquivo de setlist compartilhado."],
+            ["The shared setlist file was read but could not be understood.",
+             "El archivo de setlist compartido se leyó pero no se pudo interpretar.",
+             "O arquivo de setlist compartilhado foi lido mas não pôde ser interpretado."],
+            ["No read has landed yet.", "Todavía no llegó ninguna lectura.",
+             "Nenhuma leitura chegou ainda."],
+            ["Reads attempted", "Lecturas intentadas", "Leituras tentadas"],
+            ["Revision seen", "Revisión vista", "Revisão vista"],
             ["This is the setlist stored on this device, not the one the Director is on.",
              "Este es el setlist guardado en este dispositivo, no el que tiene el Director.",
              "Este é o setlist salvo neste aparelho, não o que o Diretor está usando."],
@@ -7987,6 +8007,13 @@
         var _syncEverApplied  = false;
         var _syncLastOkTs     = 0;
         var _syncFailReason   = null;   // 'nofile' | 'bad' | null
+        // Enough to tell the three causes apart from one screenshot, because
+        // "it is not syncing" has three completely different fixes: the file is
+        // not being written (Reaset.lua), the file cannot be read (the URL the
+        // browser resolves is not the one Reaset.lua writes), or nothing has
+        // ever been published (no Director has pushed). Guessing between them
+        // costs a rehearsal.
+        var _syncDiag = { url: '', status: 0, err: '', tries: 0, lastTry: 0 };
         // Following means a payload landed recently. Generous, because the
         // Director only pushes when something CHANGES — silence is the normal
         // state of a show that is running — so this asks "did the shared file
@@ -7998,9 +8025,14 @@
 
         function _syncPullNow(manual) {
             if (!manual && Date.now() < _syncPullBackoffUntil) return;
-            fetch(SYNC_FILE + '?t=' + Date.now(), { cache: 'no-store' })
+            var _url = new URL(SYNC_FILE + '?t=' + Date.now(), window.location.href).href;
+            _syncDiag.url = _url.split('?')[0];
+            _syncDiag.tries++;
+            _syncDiag.lastTry = Date.now();
+            fetch(_url, { cache: 'no-store' })
                 .then(function (res) {
-                    if (!res.ok) { var e = new Error('no shared setlist yet'); e.kind = 'nofile'; throw e; }
+                    _syncDiag.status = res.status;
+                    if (!res.ok) { var e = new Error('HTTP ' + res.status); e.kind = 'nofile'; throw e; }
                     return res.json();
                 })
                 .then(function (envelope) {
@@ -8021,6 +8053,7 @@
                 .catch(function (err) {
                     _syncPullBackoffUntil = Date.now() + SYNC_PULL_BACKOFF_MS;
                     _syncFailReason = err.kind || 'bad';
+                    _syncDiag.err = err.message || String(err);
                     RSDiag.log('SYNC_PULL_FAIL', { err: err.message, kind: _syncFailReason });
                     _refreshSetlistBanner();
                     if (manual) {
@@ -15067,6 +15100,36 @@
         // shows: which set is active, and whether the project is reachable.
         // Called from renderSetlistPicker() so it cannot drift, and from the
         // transport poll so the dot follows playback.
+        // What is actually wrong, in the words of the thing that has to be
+        // fixed. A Controller that is not following is useless AND dangerous,
+        // and until now the only way to find out why was to read the source.
+        function showSyncDiagnosis() {
+            if (canEditSetlist()) return;          // the Director has a picker
+            if (_syncIsFollowing()) {
+                showAppAlert(t('Following the Director. Last read') + ': ' +
+                             Math.max(0, Math.round((Date.now() - _syncLastOkTs) / 1000)) + 's',
+                             t('Shared setlist'));
+                return;
+            }
+            var lines = [];
+            if (_syncFailReason === 'nofile' && _syncDiag.status === 404) {
+                lines.push(t('The shared setlist file does not exist.'));
+                lines.push(t('Reaset.lua writes it. Check it is running on the REAPER machine, that it is the version that came with this ReaSet.html, and that the script was RESTARTED after you replaced the file — replacing it does not change the code already running in REAPER.'));
+            } else if (_syncFailReason === 'nofile') {
+                lines.push(t('The shared setlist file could not be fetched.'));
+            } else if (_syncFailReason) {
+                lines.push(t('The shared setlist file was read but could not be understood.'));
+            } else {
+                lines.push(t('No read has landed yet.'));
+            }
+            lines.push('');
+            lines.push('URL: ' + (_syncDiag.url || '—'));
+            lines.push('HTTP: ' + (_syncDiag.status || '—') + (_syncDiag.err ? '  (' + _syncDiag.err + ')' : ''));
+            lines.push(t('Reads attempted') + ': ' + _syncDiag.tries);
+            lines.push(t('Revision seen') + ': ' + (_syncRemoteRev || '—'));
+            showAppAlert(lines.join('\n'), t('Not synced'));
+        }
+
         function _refreshSetlistBanner() {
             var b = document.getElementById('setlistBanner');
             if (!b) return;
@@ -15314,6 +15377,12 @@
             RSDiag.log('SETLIST_CHANGE', { from: currentSetlistName, to: next });
             currentSetlistName = next;
             localStorage.setItem(CURRENT_KEY, currentSetlistName);
+            // Repaint the label NOW, not on the next thing that happens to
+            // rebuild it. Nothing here refreshed it, and the only other caller
+            // is toggleSetlistPicker() — so the picker closed still showing the
+            // OLD name, and the new one appeared only when you opened it again.
+            // On the one control whose entire job is to say which set is live.
+            updateSetlistDropdown();
             displayList = []; initialized = false;
             // Rebuilds displayList for the new set (and calls saveCurrentState,
             // which schedules the debounced push).

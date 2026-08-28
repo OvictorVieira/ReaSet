@@ -162,6 +162,8 @@ in B.
 | **S07d** | Quit `Reaset.lua` on the REAPER machine (or run an old copy of it), then open the phone. | The phone's setlist banner turns amber and reads **SEM SINCRONIA / NOT SYNCED**. The name beside it is this device's own memory and must not be presented as the show's. Tapping the banner explains that Reaset.lua is not writing the shared file. | | |
 | **S07e** | With S07d showing, start `Reaset.lua` and switch setlist on the Director. | The phone drops the warning and follows **within ~2 s**. Time it: this is the "real time" the show depends on. | | |
 | **S07f** | Director on B, phone following. Pull the REAPER machine's network cable for 20 s. | The phone goes to **SEM SINCRONIA** rather than continuing to present B as current. It must never show a stale set as live. | | |
+| **S07g** | With the phone on **SEM SINCRONIA**, tap the banner. | It states which of the three causes it is, plus the exact URL it fetched, the HTTP status and how many reads it has tried. One screenshot must be enough to know what to fix. | | |
+| **S07h** | On the Director, open the setlist picker and choose a different set. | The closed picker shows the **new** name immediately. It must not still read the old one until the picker is opened again. | | |
 | **S08** | Director switches A → B → C quickly. | Phone eventually shows C, not stuck on B. | | |
 | **S09** | Mac is Director. Phone requests Director. | Second Director **denied by default**, with the current Director's device name shown. | | |
 | **S10** | Close the Director browser. Wait the documented TTL. Phone requests Director. | Phone can acquire after the stale lease expires. | | |

@@ -253,6 +253,60 @@ const SEED = `
         ` + '})()');
         check('a read that stopped landing goes back to unsynced', stale === true);
 
+        // ── 6. The picker reports the choice it just made ───────────────
+        //
+        // changeSetlist() moved currentSetlistName and nothing repainted the
+        // label. The only other caller of renderSetlistPicker() is the picker's
+        // own toggle, so the list closed still showing the OLD name and the new
+        // one appeared when you opened it again — on the one control whose
+        // entire job is to say which set is live.
+        console.log('\n6. The picker shows what was picked');
+        const picked = await director.evaluate('(function(){' + `
+            REASET_MODE = 'director';
+            document.body.classList.remove('reaset-controller');
+            setlists = { Default: [{id:'1'}], Gig: [{id:'3'}], 'GIG B': [{id:'4'}] };
+            currentSetlistName = 'Default';
+            displayList = []; initialized = false; syncRegions(); updateSetlistDropdown();
+            var before = document.getElementById('setlistPickerLabel').textContent;
+            // Through the picker, the way a finger does it.
+            toggleSetlistPicker(null);
+            var items = document.querySelectorAll('.setlist-picker-item');
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].textContent.indexOf('GIG B') !== -1) { items[i].click(); break; }
+            }
+            return { before: before,
+                     label: document.getElementById('setlistPickerLabel').textContent,
+                     state: currentSetlistName };
+        ` + '})()');
+        check('the setlist actually changed', picked.state === 'GIG B', picked.state);
+        check('and the label says so without reopening the picker',
+              picked.label === 'GIG B', `label "${picked.label}" after picking ${picked.state}`);
+
+        // ── 7. Not synced explains itself ───────────────────────────────
+        //
+        // "It is not syncing" has three different fixes: the file is not being
+        // written, the file cannot be fetched from where the browser looks, or
+        // nothing was ever published. Guessing between them costs a rehearsal.
+        console.log('\n7. The failure names itself');
+        const diag = await controller.evaluate('(function(){' + `
+            REASET_MODE = 'controller';
+            document.body.classList.add('reaset-controller');
+            _syncEverApplied = false; _syncLastOkTs = 0; _syncFailReason = 'nofile';
+            _syncDiag = { url: 'http://x/reaset_setlist_sync.json', status: 404,
+                          err: 'HTTP 404', tries: 7, lastTry: Date.now() };
+            showSyncDiagnosis();
+            var o = document.getElementById('appAlertOverlay');
+            return { shown: getComputedStyle(o).display !== 'none',
+                     body: document.getElementById('appAlertBody').innerText };
+        ` + '})()');
+        check('tapping the banner opens a diagnosis', diag.shown === true);
+        check('it names Reaset.lua and the restart',
+              /Reaset\.lua/.test(diag.body) && /(RESTART|REINICI)/i.test(diag.body));
+        check('it shows the URL it actually fetched',
+              diag.body.indexOf('reaset_setlist_sync.json') !== -1);
+        check('and the HTTP status', /404/.test(diag.body));
+        check('and how many reads were attempted', /7/.test(diag.body));
+
         check('no page errors', errors.length === 0, errors[0] || '');
     } finally {
         await browser.close();
