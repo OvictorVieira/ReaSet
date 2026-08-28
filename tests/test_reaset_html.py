@@ -4009,6 +4009,103 @@ def test_a_follower_resolves_a_payload_against_the_whole_project(script_body: st
     )
 
 
+def test_a_follower_that_is_not_following_says_so(script_body: str) -> None:
+    """A Controller has no picker, so the banner is the only place it can say
+    which setlist it is on — and it said the same thing whether it had just
+    read the Director's file or was reciting its own localStorage from last
+    week.
+
+    That second state is not hypothetical. If Reaset.lua is missing on the
+    REAPER machine, is an older copy, or was replaced without restarting the
+    script, the shared file is never written and every fetch 404s forever. The
+    app said nothing at all, and from the stage that is indistinguishable from
+    working — which is exactly how somebody plays the wrong song.
+    """
+    body = strip_comments(script_body)
+    html = REASET_HTML.read_text(encoding="utf-8")
+
+    pull = strip_comments(extract_function(body, "_syncPullNow"))
+    assert "_syncEverApplied" in pull and "_syncLastOkTs" in pull, (
+        "the pull no longer records whether it succeeded, so nothing can tell "
+        "a followed setlist from a remembered one"
+    )
+    assert "_syncFailReason" in pull, "a failed pull no longer records why"
+    assert "_refreshSetlistBanner()" in pull, (
+        "a pull result never reaches the banner, so the warning can only "
+        "appear on some unrelated repaint"
+    )
+
+    banner = strip_comments(extract_function(body, "_refreshSetlistBanner"))
+    assert "_syncIsFollowing()" in banner, (
+        "the banner presents the stored setlist name exactly as it presents "
+        "the Director's"
+    )
+    assert "is-unsynced" in banner, "nothing marks the banner as unsynced"
+
+    follow = strip_comments(extract_function(body, "_syncIsFollowing"))
+    assert "_syncEverApplied" in follow and "SYNC_STALE_MS" in follow, (
+        "following is no longer judged on a recent successful read"
+    )
+
+    # The tag has to be an element, not only a colour: a colour alone is not
+    # readable on a dark stage by someone who has never seen the good state.
+    assert 'id="setlistBannerTag"' in html, "the banner has no unsynced tag"
+    css = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
+    assert re.search(r"(?m)^ {8}\.setlist-banner\.is-unsynced\s*\{", css), (
+        "the unsynced state has no styling, so it looks like the normal one"
+    )
+
+    # And the reason has to name the thing the user must actually go and fix.
+    rows = _i18n_rows()
+    reason = [r for r in rows if "Reaset.lua" in r[0]]
+    assert reason, (
+        "no message tells the user that Reaset.lua is not writing the shared "
+        "file — the one fault that produces this and the one they can fix"
+    )
+    for cell in reason[0]:
+        assert "Reaset.lua" in cell, f"the reason lost its instruction in {cell[:40]!r}"
+
+
+def test_the_follower_notices_in_seconds_not_in_a_verse(script_body: str) -> None:
+    """The 750ms path only fires when a revision has been observed, and that
+    signal can silently never arrive — an older Reaset.lua that never publishes
+    setlistFileRev, a dropped recurring GET, a registration made before REAPER's
+    own script defined wwr_req_recur. The only thing left was a 15-second poll,
+    behind a 5-second backoff on every failure.
+
+    Fifteen seconds is a long time to stand in front of the wrong setlist, and
+    the show only has to be wrong once.
+    """
+    body = strip_comments(script_body)
+
+    def const(name):
+        m = re.search(r"var\s+" + name + r"\s*=\s*(\d+)", body)
+        assert m, f"{name} is gone"
+        return int(m.group(1))
+
+    assert const("SYNC_FULL_POLL_MS") <= 5000, (
+        f"the safety net is back to {const('SYNC_FULL_POLL_MS')}ms — it is the "
+        "only path whenever the revision signal does not arrive"
+    )
+    assert const("SYNC_PULL_BACKOFF_MS") <= 2000, (
+        "a failed read backs off long enough to hide a Director that has just "
+        "started publishing"
+    )
+    assert const("SYNC_BLIND_POLL_MS") <= 2000, (
+        "the no-revision fallback is too slow to be an answer"
+    )
+
+    start = strip_comments(extract_function(body, "_syncStartPlayerPolling"))
+    assert "_syncRemoteRev > _syncLastAppliedRev" in start, (
+        "the cheap rev-gated pull is gone; every follower would fetch the whole "
+        "file on a timer instead"
+    )
+    assert "!_syncRemoteRev" in start and "SYNC_BLIND_POLL_MS" in start, (
+        "nothing polls the file while no revision has ever been seen, so a "
+        "follower in that state waits out the safety net for every change"
+    )
+
+
 # ── EDIT-mode search ────────────────────────────────────────────────────────
 
 

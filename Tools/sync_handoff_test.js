@@ -208,6 +208,51 @@ const SEED = `
               shared.ext.setlistRev === pushedBefore,
               `rev ${pushedBefore} -> ${shared.ext.setlistRev}`);
 
+        // ── 5. Not following is a state the device has to SHOW ──────────
+        //
+        // The dangerous install: Reaset.lua is missing, old, or was replaced
+        // without restarting the script, so the shared file is never written
+        // and every fetch 404s forever. The Controller then recites its own
+        // localStorage under a setlist name that looks exactly as authoritative
+        // as a real one. From the stage that is indistinguishable from working,
+        // and it is how somebody plays the wrong song.
+        console.log('\n5. A Controller that is not following says so');
+        const unsynced = await controller.evaluate('(function(){' + `
+            _syncEverApplied = false; _syncLastOkTs = 0; _syncFailReason = 'nofile';
+            _refreshSetlistBanner();
+            var b = document.getElementById('setlistBanner');
+            var tag = document.getElementById('setlistBannerTag');
+            return { warned: b.classList.contains('is-unsynced'),
+                     tagShown: !!tag && getComputedStyle(tag).display !== 'none',
+                     title: b.title,
+                     name: document.getElementById('setlistBannerName').textContent };
+        ` + '})()');
+        check('the banner marks itself unsynced', unsynced.warned === true);
+        check('and carries a visible tag, not just a colour', unsynced.tagShown === true);
+        check('the reason names Reaset.lua', /Reaset\.lua/.test(unsynced.title), unsynced.title.slice(0, 90));
+        check('the set name is still readable beside it', !!unsynced.name, unsynced.name);
+
+        const synced = await controller.evaluate('(function(){' + `
+            _syncEverApplied = true; _syncLastOkTs = Date.now(); _syncFailReason = null;
+            _refreshSetlistBanner();
+            var b = document.getElementById('setlistBanner');
+            var tag = document.getElementById('setlistBannerTag');
+            return { warned: b.classList.contains('is-unsynced'),
+                     tagShown: !!tag && getComputedStyle(tag).display !== 'none' };
+        ` + '})()');
+        check('and drops the warning once it is reading the file',
+              synced.warned === false && synced.tagShown === false, JSON.stringify(synced));
+
+        // Staleness, not silence. A Director only pushes when something
+        // CHANGES, so a quiet show must not be reported as a lost one — but a
+        // file that stopped being readable must.
+        const stale = await controller.evaluate('(function(){' + `
+            _syncEverApplied = true; _syncLastOkTs = Date.now() - (SYNC_STALE_MS + 1000);
+            _refreshSetlistBanner();
+            return document.getElementById('setlistBanner').classList.contains('is-unsynced');
+        ` + '})()');
+        check('a read that stopped landing goes back to unsynced', stale === true);
+
         check('no page errors', errors.length === 0, errors[0] || '');
     } finally {
         await browser.close();

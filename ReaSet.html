@@ -653,6 +653,26 @@
         /* Not connected to the project: the banner is the only place a
            Controller would ever find out, since it has no picker to open. */
         .setlist-banner.is-offline { color: #FFD60A; }
+
+        /* Not following the Director. The name in the banner is then this
+           device's own memory, not the show's, and a musician reading it in
+           the dark has no other way to tell. Amber rather than red: nothing is
+           broken on THIS device, it simply is not being told anything. */
+        .setlist-banner.is-unsynced {
+            background: rgba(255, 159, 10, 0.14);
+            color: #FFD60A;
+        }
+        .setlist-banner.is-unsynced .slb-dot {
+            background: #FF9F0A; opacity: 1; animation: none;
+        }
+        .slb-tag {
+            flex: 0 0 auto;
+            font-size: 10px; font-weight: 800; letter-spacing: 0.06em;
+            padding: 2px 7px; border-radius: 5px;
+            background: rgba(255, 159, 10, 0.22);
+            color: #FFD60A;
+            white-space: nowrap;
+        }
         @keyframes slbPulse {
             0%, 100% { transform: scale(1);    opacity: 1; }
             50%      { transform: scale(1.45); opacity: 0.55; }
@@ -5418,6 +5438,7 @@
             <div class="setlist-banner" id="setlistBanner" aria-live="polite">
                 <span class="slb-dot" id="setlistBannerDot"></span>
                 <span class="slb-name" id="setlistBannerName">Default</span>
+                <span class="slb-tag" id="setlistBannerTag" style="display:none">NOT SYNCED</span>
             </div>
             <button class="n-btn-new authoring-only" onclick="createSetlist()" title="New">+</button>
             <button class="n-btn-new" id="editModeBtn" onclick="enterEditMode()" title="Edit setlist"><span class="emb-icon">&#9998;</span><span class="emb-label" id="editModeLabel">EDIT</span></button>
@@ -6989,6 +7010,18 @@
             ["Close", "Cerrar", "Fechar"],
             ["MIDI access denied: ", "Acceso MIDI denegado: ", "Acesso MIDI negado: "],
             ["Visible elements", "Elementos visibles", "Elementos visíveis"],
+            // The Controller's banner when it is not reading the Director's file.
+            ["NOT SYNCED", "SIN SINCRONIZAR", "SEM SINCRONIA"],
+            ["This is the setlist stored on this device, not the one the Director is on.",
+             "Este es el setlist guardado en este dispositivo, no el que tiene el Director.",
+             "Este é o setlist salvo neste aparelho, não o que o Diretor está usando."],
+            ["No Director has published a setlist yet. If one is running, Reaset.lua is not writing the shared file — check it is installed on the REAPER machine and that the script was restarted after updating it.",
+             "Ningún Director publicó un setlist todavía. Si hay uno activo, Reaset.lua no está escribiendo el archivo compartido — verificá que esté instalado en la máquina de REAPER y que el script se haya reiniciado después de actualizarlo.",
+             "Nenhum Diretor publicou um setlist ainda. Se houver um ativo, o Reaset.lua não está gravando o arquivo compartilhado — confira se ele está instalado na máquina do REAPER e se o script foi reiniciado depois de atualizado."],
+            ["The shared setlist file could not be read.",
+             "No se pudo leer el archivo de setlist compartido.",
+             "Não foi possível ler o arquivo de setlist compartilhado."],
+            ["Pull", "Pull", "Pull"],
             // EDIT-mode search.
             ["Search songs", "Buscar canciones", "Buscar músicas"],
             ["Clear search", "Borrar búsqueda", "Limpar busca"],
@@ -7935,23 +7968,66 @@
         // this, that reads as a fetch every 750ms, forever, on a device whose
         // whole problem is that the bridge is down.
         var _syncPullBackoffUntil = 0;
-        var SYNC_PULL_BACKOFF_MS  = 5000;
+        var SYNC_PULL_BACKOFF_MS  = 2000;
+
+        // ── Is this device actually following the Director? ─────────────
+        //
+        // A Controller with no picker shows one setlist name, and until now it
+        // showed the same way whether it had just received it from the Director
+        // or was reciting its own localStorage from last week. Those are
+        // completely different facts and the second one is dangerous: the whole
+        // reason this device exists is so nobody plays the wrong song, and a
+        // stale name presented as live is exactly how that happens.
+        //
+        // It is not hypothetical. If Reaset.lua is not running on the REAPER
+        // machine, or is an older copy, or was replaced without restarting the
+        // script, the shared file is never written — every fetch 404s, forever,
+        // and the app said nothing at all. That is a real install state, and
+        // from the stage it is indistinguishable from working.
+        var _syncEverApplied  = false;
+        var _syncLastOkTs     = 0;
+        var _syncFailReason   = null;   // 'nofile' | 'bad' | null
+        // Following means a payload landed recently. Generous, because the
+        // Director only pushes when something CHANGES — silence is the normal
+        // state of a show that is running — so this asks "did the shared file
+        // read at all", not "did it change".
+        var SYNC_STALE_MS = 12000;
+        function _syncIsFollowing() {
+            return _syncEverApplied && (Date.now() - _syncLastOkTs) < SYNC_STALE_MS;
+        }
 
         function _syncPullNow(manual) {
             if (!manual && Date.now() < _syncPullBackoffUntil) return;
             fetch(SYNC_FILE + '?t=' + Date.now(), { cache: 'no-store' })
-                .then(function (res) { if (!res.ok) throw new Error('sin setlist compartido aún'); return res.json(); })
+                .then(function (res) {
+                    if (!res.ok) { var e = new Error('no shared setlist yet'); e.kind = 'nofile'; throw e; }
+                    return res.json();
+                })
                 .then(function (envelope) {
                     _syncPullBackoffUntil = 0;
-                    if (!envelope || typeof envelope.b64 !== 'string') throw new Error('archivo de sincronización inválido');
+                    if (!envelope || typeof envelope.b64 !== 'string') {
+                        var e2 = new Error('invalid sync file'); e2.kind = 'bad'; throw e2;
+                    }
+                    // READ, not merely fetched. The file being on disk and
+                    // readable is what "this device is following" means; whether
+                    // its revision is newer than the last one is a separate
+                    // question, answered inside _syncApplyPayload.
+                    _syncEverApplied = true;
+                    _syncLastOkTs    = Date.now();
+                    _syncFailReason  = null;
                     _syncApplyPayload(JSON.parse(_b64uDecode(envelope.b64)), manual);
+                    _refreshSetlistBanner();
                 })
                 .catch(function (err) {
                     _syncPullBackoffUntil = Date.now() + SYNC_PULL_BACKOFF_MS;
-                    RSDiag.log('SYNC_PULL_FAIL', { err: err.message });
-                    // A missing shared file just means no Director has pushed
-                    // one; only an explicit Pull click deserves to be told.
-                    if (manual) showAppAlert('No se pudo leer el setlist compartido: ' + err.message, 'Pull');
+                    _syncFailReason = err.kind || 'bad';
+                    RSDiag.log('SYNC_PULL_FAIL', { err: err.message, kind: _syncFailReason });
+                    _refreshSetlistBanner();
+                    if (manual) {
+                        showAppAlert(_syncFailReason === 'nofile'
+                            ? t('No Director has published a setlist yet. If one is running, Reaset.lua is not writing the shared file — check it is installed on the REAPER machine and that the script was restarted after updating it.')
+                            : t('The shared setlist file could not be read.'), t('Pull'));
+                    }
                 });
         }
 
@@ -8156,7 +8232,20 @@
         // ever missed (a dropped reply, a Director that pushed while this
         // device was asleep) the file is still reconciled, just later.
         var SYNC_REV_POLL_MS  = 750;
-        var SYNC_FULL_POLL_MS = 15000;
+        // The safety net was 15 s. That is a long time to stand in front of the
+        // wrong setlist, and it is the ONLY path left whenever the revision
+        // signal does not arrive — which is a silent, plausible state: an older
+        // Reaset.lua that never publishes setlistFileRev, a dropped recurring
+        // GET, a registration made before REAPER's own script had defined
+        // wwr_req_recur. The cheap rev-gated pull stays the fast path; this is
+        // what happens when it is not available, so it has to be quick enough
+        // to be a real answer rather than a formality.
+        var SYNC_FULL_POLL_MS = 4000;
+        // Until a revision has actually been observed, the rev-gated path is
+        // not a path at all. Poll the file itself at this rate instead of
+        // waiting out the net above, and stop as soon as a revision proves the
+        // cheap route works.
+        var SYNC_BLIND_POLL_MS = 1500;
         var _syncPlayerPollTimer = null;
         var _syncRevPollTimer    = null;
         // Registered at most once for the lifetime of the page: wwr_req_recur has
@@ -8164,6 +8253,7 @@
         // a two-key GET and it keeps _syncLocalRev reconciled on a Director too,
         // which is why it is safe to leave running.
         var _syncRevRecurStarted = false;
+        var _syncBlindLast = 0;
 
         function _syncStartPlayerPolling() {
             if (_syncPlayerPollTimer) return;
@@ -8178,7 +8268,15 @@
                 // revision can be visible a frame before the file it names.
                 // Retrying until the payload actually applies is what closes
                 // that window, and costs nothing when there is nothing new.
-                if (_syncRemoteRev > _syncLastAppliedRev) _syncPullNow(false);
+                if (_syncRemoteRev > _syncLastAppliedRev) { _syncPullNow(false); return; }
+                // No revision has EVER been seen, so the test above can never
+                // be true and this device is not following anything — it just
+                // does not know it. Read the file directly until a revision
+                // shows up and the cheap route takes over.
+                if (!_syncRemoteRev && (Date.now() - _syncBlindLast) >= SYNC_BLIND_POLL_MS) {
+                    _syncBlindLast = Date.now();
+                    _syncPullNow(false);
+                }
             }, SYNC_REV_POLL_MS);
             _syncPlayerPollTimer = setInterval(function () { _syncPullNow(false); }, SYNC_FULL_POLL_MS);
         }
@@ -14976,6 +15074,25 @@
             if (nm) nm.textContent = currentSetlistName;
             b.classList.toggle('is-live', !!isPlaying);
             b.classList.toggle('is-offline', !_libConnected);
+
+            // The name above is only the SHOW's name while this device is
+            // actually reading the Director's file. When it is not, the same
+            // name is this device's own memory of a previous session — and
+            // saying so is the entire point of the banner.
+            var following = _syncIsFollowing();
+            b.classList.toggle('is-unsynced', !following);
+            var tag = document.getElementById('setlistBannerTag');
+            if (tag) {
+                tag.style.display = following ? 'none' : '';
+                tag.textContent = t('NOT SYNCED');
+            }
+            if (!following) {
+                b.title = _syncFailReason === 'nofile'
+                    ? t('No Director has published a setlist yet. If one is running, Reaset.lua is not writing the shared file — check it is installed on the REAPER machine and that the script was restarted after updating it.')
+                    : t('This is the setlist stored on this device, not the one the Director is on.');
+                _sbTitleConnected = null;   // the connection title must re-state itself later
+                return;
+            }
             // Guarded because this is called from updatePlaybackUI(), which
             // runs at TRANSPORT poll rate. An unconditional attribute write
             // thirty times a second is the exact shape of the two performance
