@@ -7809,6 +7809,48 @@
 
         setInterval(_refreshConnBadge, 1000);
 
+        // ── One command per HTTP request, in order ──────────────────────────
+        //
+        // REAPER's stock main.js does not send wwr_req commands one by one: it
+        // concatenates EVERYTHING queued into a single "/_/cmd;cmd;..." GET and
+        // clears its queue before the request even completes. A setlist push is
+        // ~30 SET/EXTSTATE commands of ~700 characters each — over 20KB of URL
+        // — and REAPER's web server refuses the connection somewhere past 8KB
+        // (measured on a real install: 8KB lands, 16KB is dropped with no HTTP
+        // status at all). The whole push died in one closed socket, nothing
+        // retried, and no error surfaced anywhere: a big setlist never reached
+        // Reaset.lua while a small one synced fine.
+        //
+        // So bulk payloads bypass the shared queue: each command travels as its
+        // OWN request, awaited in sequence so the ordering guarantees survive
+        // (chunk bodies before the count, revision strictly last). A failed
+        // send stops the chain — the completion signal must never outrun the
+        // data it certifies.
+        function _syncSendSeq(cmds, label, onDone) {
+            if (!canPublishSetlist()) {
+                RSDiag.blocked(label || 'seq', 'role-cannot-publish');
+                if (onDone) onDone(false);
+                return;
+            }
+            var i = 0;
+            function next() {
+                if (i >= cmds.length) { if (onDone) onDone(true); return; }
+                var cmd = cmds[i++];
+                RSDiag.cmd(cmd, label);
+                fetch('/_/' + cmd)
+                    .then(function (res) {
+                        if (!res.ok) throw new Error('HTTP ' + res.status);
+                        next();
+                    })
+                    .catch(function (e) {
+                        RSDiag.log('SEQ_SEND_FAIL', { label: label, at: i - 1,
+                                                      of: cmds.length, err: String(e) });
+                        if (onDone) onDone(false);
+                    });
+            }
+            next();
+        }
+
         // Sends the current setlist to Reaset.lua for writing into the shared
         // file. Director-only by construction: wwr_req's own Player-mode gate
         // makes every SET/EXTSTATE call inside a silent no-op if this somehow
@@ -7825,8 +7867,13 @@
             // Chunk bodies first, count LAST: Reaset.lua treats the count key
             // changing as "the chunks are ready, go reassemble" — so it must
             // never observe a fresh count before the chunks it names exist.
+            // Sent through _syncSendSeq, NOT wwr_req: the stock lib batches its
+            // whole queue into one URL, and a push this size exceeds what
+            // REAPER's web server accepts — the entire batch vanished with no
+            // error anywhere.
+            var cmds = [];
             for (var c = 0; c < chunks.length; c++) {
-                wwr_req('SET/EXTSTATE/ReaSet/setlistChunk' + c + '/' + chunks[c]);
+                cmds.push('SET/EXTSTATE/ReaSet/setlistChunk' + c + '/' + chunks[c]);
             }
             // Total length, published with the count. The chunk bodies, the
             // count and the revision are separate HTTP requests, and
@@ -7838,14 +7885,15 @@
             // generations decodes to garbage and dies at JSON.parse on every
             // follower at once, with nothing to say why. A length check costs
             // one ExtState key and makes that assembly refuse to be written.
-            wwr_req('SET/EXTSTATE/ReaSet/setlistChunkLen/' + b64.length);
-            wwr_req('SET/EXTSTATE/ReaSet/setlistChunkCount/' + chunks.length);
+            cmds.push('SET/EXTSTATE/ReaSet/setlistChunkLen/' + b64.length);
+            cmds.push('SET/EXTSTATE/ReaSet/setlistChunkCount/' + chunks.length);
             // Monotonic revision, sent LAST, is what Reaset.lua triggers on. It
             // used to trigger on the chunk COUNT changing, which silently dropped
             // most pushes: toggling a skip flag moves the payload by three
             // characters, the count stays identical, and the shared file was never
             // rewritten — Players kept showing the old setlist.
-            wwr_req('SET/EXTSTATE/ReaSet/setlistRev/' + _syncLocalRev, 'sync-push');
+            cmds.push('SET/EXTSTATE/ReaSet/setlistRev/' + _syncLocalRev);
+            _syncSendSeq(cmds, 'sync-push');
             RSDiag.log('SYNC_PUSH', { rev: _syncLocalRev, set: currentSetlistName, chunks: chunks.length });
         }
 
@@ -7860,6 +7908,26 @@
             if (_syncApplying) return;
             if (_syncPushTimer) clearTimeout(_syncPushTimer);
             _syncPushTimer = setTimeout(_syncPushNow, 1000);
+        }
+
+        // Boot has two independent async prerequisites: the Director lease and
+        // the first complete REGION list. Whichever arrived first used to call
+        // saveCurrentState while the other was still missing; the publish was
+        // refused, its unchanged-state signature was nevertheless remembered,
+        // and refreshing the Director could never recreate a missing shared
+        // file until somebody edited the setlist. Check from both completion
+        // sites and publish once per browser instance + REAPER project.
+        var _syncDirectorReadyKey = '';
+        function _syncPublishOnDirectorReady() {
+            if (REASET_MODE !== 'director' || _directorLease !== 'held') {
+                _syncDirectorReadyKey = '';
+                return;
+            }
+            if (!g_projectKey || !initialized) return;
+            var key = _syncInstanceId() + '|' + g_projectKey;
+            if (_syncDirectorReadyKey === key) return;
+            _syncDirectorReadyKey = key;
+            _syncPushSoon();
         }
 
         // ── Setlist library: the disk is the source of truth ────────────────
@@ -7908,17 +7976,24 @@
                 var b64 = _b64uEncode(JSON.stringify(entries));
                 for (var i = 0; i < b64.length; i += SYNC_CHUNK_LEN) chunks.push(b64.slice(i, i + SYNC_CHUNK_LEN));
             }
-            wwr_req('SET/EXTSTATE/ReaSet/libName/' + nameB64);
+            // Same transport as the shared-setlist push, for the same reason: a
+            // big setlist's chunks batched into one wwr_req URL exceed what
+            // REAPER's web server accepts, and the entire write disappears
+            // silently. One request per command, revision strictly last.
+            var cmds = ['SET/EXTSTATE/ReaSet/libName/' + nameB64];
             for (var c = 0; c < chunks.length; c++) {
-                wwr_req('SET/EXTSTATE/ReaSet/libChunk' + c + '/' + chunks[c]);
+                cmds.push('SET/EXTSTATE/ReaSet/libChunk' + c + '/' + chunks[c]);
             }
-            wwr_req('SET/EXTSTATE/ReaSet/libChunks/' + chunks.length);
+            cmds.push('SET/EXTSTATE/ReaSet/libChunks/' + chunks.length);
             // The revision goes last: it is the "this one is complete" signal.
-            wwr_req('SET/EXTSTATE/ReaSet/libRev/' + (++_libRev));
+            cmds.push('SET/EXTSTATE/ReaSet/libRev/' + (++_libRev));
 
-            // Spaced out on purpose: the whole library at once would be dozens
-            // of requests, and REAPER's web interface collapses bursts.
-            setTimeout(_libraryDrain, LIB_SEND_GAP);
+            // The next NAME still waits out a gap: sequential sends pace one
+            // setlist's chunks, and the gap keeps the whole-library case from
+            // monopolising the connection the transport polls also need.
+            _syncSendSeq(cmds, 'library-push', function () {
+                setTimeout(_libraryDrain, LIB_SEND_GAP);
+            });
         }
 
         // Reads the index and adopts whatever the disk says. No branches, no
@@ -10163,6 +10238,7 @@
             // device was ever a Player. Outside the chain above because it
             // applies to any Director, whatever its lease state.
             if (REASET_MODE === 'director') _syncStopPlayerPolling();
+            _syncPublishOnDirectorReady();
             _refreshSessionClockTitle();
             _refreshSetlistBanner();
             // A role change moves what the list is allowed to show
@@ -11200,6 +11276,7 @@
                 g_offSetlist = newItems2;
             }
             saveCurrentState();
+            _syncPublishOnDirectorReady();
             // REAPER has spoken: anything staged that it now agrees with is
             // confirmed, and the staging can go.
             _confirmStagedColors();

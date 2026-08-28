@@ -4106,6 +4106,120 @@ def test_the_follower_notices_in_seconds_not_in_a_verse(script_body: str) -> Non
     )
 
 
+@requires_node
+def test_director_boot_publishes_after_both_async_prerequisites(script_body: str) -> None:
+    """Refreshing the Director must recreate a missing shared file.
+
+    The project REGION list and the Director lease resolve independently. The
+    first save can therefore happen while the page is still a Controller; its
+    publish is refused, but its unchanged-state signature remains. With no edit
+    afterward, setlistRev stayed empty forever and every phone fetch returned
+    404. Exercise both arrival orders and the one-shot/project-change rules.
+    """
+    body = strip_comments(script_body)
+    helper = extract_function(body, "_syncPublishOnDirectorReady")
+    harness = """
+        var REASET_MODE = 'controller';
+        var _directorLease = 'none';
+        var g_projectKey = null;
+        var initialized = false;
+        var _syncDirectorReadyKey = '';
+        var pushes = 0;
+        function _syncInstanceId() { return 'tab-a'; }
+        function _syncPushSoon() { pushes++; }
+    """ + helper + """
+        // Data first, lease second.
+        g_projectKey = 'project-a'; initialized = true;
+        _syncPublishOnDirectorReady();
+        REASET_MODE = 'director'; _directorLease = 'held';
+        _syncPublishOnDirectorReady(); _syncPublishOnDirectorReady();
+        // A different project needs its own initial snapshot.
+        g_projectKey = 'project-b';
+        _syncPublishOnDirectorReady();
+        // Lease first, data second.
+        REASET_MODE = 'controller'; _directorLease = 'lost';
+        _syncPublishOnDirectorReady();
+        REASET_MODE = 'director'; _directorLease = 'held'; initialized = false;
+        _syncPublishOnDirectorReady();
+        initialized = true;
+        _syncPublishOnDirectorReady();
+        console.log(pushes);
+    """
+    assert run_node(harness).strip() == "3"
+
+    apply_ui = strip_comments(extract_function(body, "applyModeUI"))
+    sync = strip_comments(extract_function(body, "syncRegions"))
+    assert "_syncPublishOnDirectorReady()" in apply_ui, (
+        "lease completion never retries the boot publish"
+    )
+    assert "_syncPublishOnDirectorReady()" in sync, (
+        "REGION completion never retries the boot publish"
+    )
+
+
+@requires_node
+def test_a_big_push_travels_one_command_per_request(script_body: str) -> None:
+    """A bulk publish must never ride the batched wwr_req queue.
+
+    REAPER's stock main.js flushes EVERYTHING queued as one "/_/cmd;cmd;..."
+    GET, clearing the queue before the reply. A real setlist push is ~25
+    SET/EXTSTATE commands of ~700 characters — over 17KB of URL — and REAPER's
+    web server refuses the connection somewhere past 8KB (measured: 8KB lands,
+    16KB dies with no HTTP status at all). The whole push vanished silently:
+    big setlists never reached Reaset.lua while small ones synced, which is
+    exactly the failure that shipped. Bulk payloads go one command per
+    request; ordering survives (revision strictly last) and a failed send
+    stops the chain instead of certifying a hole.
+    """
+    body = strip_comments(script_body)
+
+    # The two bulk producers must build command lists for the sequential
+    # sender, not call the batching queue for chunk bodies.
+    push = extract_function(body, "_syncPushNow")
+    assert "_syncSendSeq(" in push, "_syncPushNow no longer uses the sequential sender"
+    assert "wwr_req('SET/EXTSTATE/ReaSet/setlistChunk" not in push, (
+        "setlist chunks are back on the batched wwr_req queue"
+    )
+    lib = extract_function(body, "_libraryDrain")
+    assert "_syncSendSeq(" in lib, "_libraryDrain no longer uses the sequential sender"
+    assert "wwr_req('SET/EXTSTATE/ReaSet/libChunk" not in lib, (
+        "library chunks are back on the batched wwr_req queue"
+    )
+
+    seq = extract_function(body, "_syncSendSeq")
+    harness = """
+        var sent = [];
+        var failAt = -1;
+        function canPublishSetlist() { return true; }
+        var RSDiag = { cmd: function () {}, blocked: function () {}, log: function () {} };
+        function fetch(url) {
+            var i = sent.push(url) - 1;
+            return Promise.resolve({ ok: i !== failAt });
+        }
+    """ + seq + """
+        var cmds = ['SET/A/1', 'SET/B/2', 'SET/C/3', 'SET/rev/9'];
+        _syncSendSeq(cmds, 'test', function (ok) {
+            var oneEach = sent.length === 4 && sent.every(function (u, i) {
+                return u === '/_/' + cmds[i] && u.indexOf(';') === -1;
+            });
+            console.log('full:' + ok + ':' + oneEach);
+
+            // A failure mid-chain must stop before the completion signal.
+            sent = []; failAt = 1;
+            _syncSendSeq(cmds, 'test', function (ok2) {
+                console.log('fail:' + ok2 + ':' + sent.length);
+            });
+        });
+    """
+    out = run_node(harness).strip().splitlines()
+    assert out[0] == "full:true:true", (
+        "commands were batched, reordered, or the chain never completed"
+    )
+    assert out[1] == "fail:false:2", (
+        "a failed send did not stop the chain before the revision"
+    )
+
+
 # ── EDIT-mode search ────────────────────────────────────────────────────────
 
 
