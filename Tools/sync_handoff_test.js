@@ -115,6 +115,20 @@ const SEED = `
     const state = (page) => page.evaluate(() => ({
         set: currentSetlistName, rows: displayList.map(r => r.name).join(',')
     }));
+    // What a Controller can actually READ. It has no picker — the Director
+    // owns which set is live — so the banner is the only place the show's name
+    // appears on that device, and a name that stays on the local default while
+    // the rows change is the same bug from the other side.
+    const banner = (page) => page.evaluate(() => {
+        const nm = document.getElementById('setlistBannerName');
+        const bn = document.getElementById('setlistBanner');
+        const pk = document.getElementById('setlistPicker');
+        return {
+            text: nm ? nm.textContent : '(gone)',
+            shown: !!bn && getComputedStyle(bn).display !== 'none',
+            pickerShown: !!pk && getComputedStyle(pk).display !== 'none'
+        };
+    });
 
     try {
         const director = await openDevice('director');
@@ -141,6 +155,13 @@ const SEED = `
         let got = await pull(controller);
         check('the Controller follows the set change',
               !!got && got.set === 'Gig' && got.rows === 'THREE,FOUR', JSON.stringify(got));
+
+        const bn = await banner(controller);
+        check('the Controller reads the show name, not its own default',
+              bn.text === 'Gig', JSON.stringify(bn));
+        check('and it is on screen', bn.shown === true, JSON.stringify(bn));
+        check('with no picker beside it — the Director owns the choice',
+              bn.pickerShown === false, JSON.stringify(bn));
 
         console.log('\n2. A reload must not fall back to the local default');
         await controller.context().close();
