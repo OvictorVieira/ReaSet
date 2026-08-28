@@ -139,6 +139,14 @@ Tick each after the run. A regression here is as serious as a failed test.
 **Two physical devices.** Two browser tabs on one machine share a clock, a
 network path and a localStorage origin, and will pass tests that a phone fails.
 
+**Setlist A and setlist B must contain DIFFERENT SONGS.** This is not a detail.
+The follower used to resolve each song in the payload against the set it
+already had open, so a switch between two overlapping sets appeared to work
+while a switch to a genuinely different one silently kept the old list under
+the new name. Two sets that share their songs cannot tell the two apart. Use at
+least one song that exists in B and not in A, and one that exists in A and not
+in B.
+
 | ID | Steps | Expected | Result | Notes |
 |---|---|---|---|---|
 | **S01** | Mac Director on Setlist A; phone shows A. Director switches to B. | Phone follows to B automatically, **≤ 1 s**, no manual pull. Record the measured latency. | | |
@@ -148,6 +156,9 @@ network path and a localStorage origin, and will pass tests that a phone fails.
 | **S05** | Director on A. Turn phone Wi-Fi off. Director switches A → B. Turn Wi-Fi back on. | Phone adopts B. **No transport command is issued by the phone** on reconnect. | | |
 | **S06** | Open a different REAPER project. | The old project's payload is not applied. | | |
 | **S07** | Director switches to B, then reorders B. | Phone stays on B and receives the new order. | | |
+| **S07a** | Director **removes** a song from the open set. | The phone loses it too. A follower that cannot lose a song is the same defect as one that cannot gain one. | | |
+| **S07b** | Director **adds** a song the set did not contain, from the + picker. | The phone gains it, in the same position. | | |
+| **S07c** | On the phone, open the setlist picker. | It states the set and offers no choice — the Director owns which set is live. If it looks tappable and does nothing, that is a bug. | | |
 | **S08** | Director switches A → B → C quickly. | Phone eventually shows C, not stuck on B. | | |
 | **S09** | Mac is Director. Phone requests Director. | Second Director **denied by default**, with the current Director's device name shown. | | |
 | **S10** | Close the Director browser. Wait the documented TTL. Phone requests Director. | Phone can acquire after the stale lease expires. | | |
