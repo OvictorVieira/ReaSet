@@ -464,6 +464,10 @@ def test_save_current_state_skips_unchanged_state(script_body: str) -> None:
         function _syncPushSoon() { pushes++; }
         function _libraryEnqueue() { calls++; }
         """
+        # _partitionActiveFirst is declared beside saveCurrentState and is part
+        # of its first line now — the grouped order has to reach the sig and
+        # the saved format.
+        + extract_function(script_body, "_partitionActiveFirst")
         + extract_function(script_body, "saveCurrentState")
         + """
         saveCurrentState(); saveCurrentState(); saveCurrentState();
@@ -4476,6 +4480,47 @@ def test_the_edit_row_button_toggles_active_in_place(script_body: str) -> None:
         "edit mode can hide skipped rows — the + that reactivates a song "
         "would be unreachable"
     )
+
+
+@requires_node
+def test_active_rows_always_sit_together_above_the_grey_ones(script_body: str) -> None:
+    """Reactivating a song must bring it up with the actives.
+
+    Pressing + on a grey row halfway down the list used to light it up WHERE
+    IT STOOD — active, but stranded between grey rows, nowhere near the songs
+    it will actually play with. The set reads actives first, in their order,
+    then the inactive rows, in theirs.
+
+    Enforced by a stable partition at saveCurrentState — the choke point every
+    edit already passes through — so a toggle, an add, a drag, an import and a
+    legacy interleaved set all come out grouped, and no path needs to remember
+    to do it. Stability is the load-bearing half: within each group the order
+    must never change, or the partition would fight the user's drag.
+    """
+    body = strip_comments(script_body)
+    save = strip_comments(extract_function(body, "saveCurrentState"))
+    partition_at = save.index("_partitionActiveFirst")
+    fmt_at = save.index("displayList.map")
+    assert partition_at < fmt_at, (
+        "saveCurrentState builds the saved format before partitioning — the "
+        "grouped order never reaches disk or the other devices"
+    )
+
+    harness = """
+    """ + extract_function(body, "_partitionActiveFirst") + """
+        function row(id, sk) { return { id: id, skipped: sk }; }
+        var mixed = [row('a', false), row('b', true), row('c', false),
+                     row('d', true), row('e', false)];
+        var out = _partitionActiveFirst(mixed);
+        console.log(out.map(function (r) { return r.id; }).join(''));
+        // Idempotent: partitioning twice changes nothing.
+        console.log(_partitionActiveFirst(out).map(function (r) { return r.id; }).join(''));
+    """
+    out = run_node(harness).strip().splitlines()
+    assert out[0] == "acebd", (
+        f"partition is not stable actives-first (got {out[0]!r}, want 'acebd')"
+    )
+    assert out[1] == "acebd", "partition is not idempotent"
 
 
 def test_edit_mode_keeps_removed_songs_on_screen_with_an_add_button(script_body: str) -> None:

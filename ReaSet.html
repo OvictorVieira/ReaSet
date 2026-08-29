@@ -11347,7 +11347,27 @@
         // state can be recognised as unchanged.
         var _lastSavedSig = null;
 
+        // ACTIVE ROWS STAY TOGETHER. A reactivated song used to light up
+        // wherever it stood — halfway down a run of grey rows — so the show's
+        // playing order and the order on screen only agreed if you mentally
+        // skipped the greys. The set is: actives first, in their order, then
+        // the inactive rows, in theirs. A stable partition is enough — it
+        // never reorders WITHIN either group, so it cannot fight a drag —
+        // and it is enforced here at the choke point every edit already
+        // passes through (toggle, add, drag, import, pull), which also
+        // normalises legacy sets that stored the two interleaved. Skipped
+        // rows never play, so moving them cannot change what the transport
+        // does — only make the screen tell the truth about it.
+        function _partitionActiveFirst(list) {
+            var active = [], inactive = [];
+            for (var i = 0; i < list.length; i++) {
+                (list[i].skipped ? inactive : active).push(list[i]);
+            }
+            return active.concat(inactive);
+        }
+
         function saveCurrentState() {
+            displayList = _partitionActiveFirst(displayList);
             var fmt = displayList.map(function (r) { return { id: r.id, chain: r.chain, skipped: r.skipped, loop: r.loop }; });
 
             // SAVE ONLY WHAT CHANGED.
