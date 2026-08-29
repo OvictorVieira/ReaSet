@@ -36,6 +36,20 @@ two lines, and the drawer's last section sitting under the mobile browser
 toolbar.
         ]]></changelog>
       </version>
+      <version name="3.2" author="Victor Vieira (OvictorVieira)" time="2026-08-29T16:00:52Z">
+        <source file="Reaset.lua" type="script" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/0a90f845349b5b22b0d3d5a19f57b6bdc3fbeb04/Reaset.lua</source>
+        <source file="ReaSet.html">https://raw.githubusercontent.com/OvictorVieira/ReaSet/0a90f845349b5b22b0d3d5a19f57b6bdc3fbeb04/ReaSet.html</source>
+        <source file="Sortable.min.js">https://raw.githubusercontent.com/OvictorVieira/ReaSet/0a90f845349b5b22b0d3d5a19f57b6bdc3fbeb04/Sortable.min.js</source>
+        <changelog><![CDATA[
+ReaSet v3.2: imported setlists were erased by the next disk reload.
+importSetlists() only touched memory and localStorage; the project library
+on disk is the source of truth, so the next _librarySyncWithProject() (fired
+on every dropdown open, changeSetlist and boot) silently replaced the import
+with the old disk contents and "Default" reappeared selected. Import now
+enqueues deletes for the names it drops and upserts for every incoming name,
+and arms the disk-refresh guard so writes still in flight are not undone.
+        ]]></changelog>
+      </version>
       <metadata>
         <link rel="website">https://github.com/OvictorVieira/ReaSet</link>
         <link rel="donation">https://www.paypal.com/donate/?hosted_button_id=JNX7Q2G8S6YT8</link>
@@ -62,6 +76,12 @@ setlists, controls transport and displays real-time lyrics and chords.
         <source file="ReaSet_Diagnose.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/82325faab0991a2b1178de34a22e7db5f349467e/Tools/ReaSet_Diagnose.lua</source>
         <source file="ReaSet_LibraryDoctor.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/82325faab0991a2b1178de34a22e7db5f349467e/Tools/ReaSet_LibraryDoctor.lua</source>
         <source file="Text to MIDI Bitmap.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/82325faab0991a2b1178de34a22e7db5f349467e/Tools/Text%20to%20MIDI%20Bitmap.lua</source>
+      </version>
+      <version name="3.2" author="Victor Vieira (OvictorVieira)" time="2026-08-29T16:00:52Z">
+        <source file="Lyrics_Tapper.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/0a90f845349b5b22b0d3d5a19f57b6bdc3fbeb04/Tools/Lyrics_Tapper.lua</source>
+        <source file="ReaSet_Diagnose.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/0a90f845349b5b22b0d3d5a19f57b6bdc3fbeb04/Tools/ReaSet_Diagnose.lua</source>
+        <source file="ReaSet_LibraryDoctor.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/0a90f845349b5b22b0d3d5a19f57b6bdc3fbeb04/Tools/ReaSet_LibraryDoctor.lua</source>
+        <source file="Text to MIDI Bitmap.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/0a90f845349b5b22b0d3d5a19f57b6bdc3fbeb04/Tools/Text%20to%20MIDI%20Bitmap.lua</source>
       </version>
       <metadata>
         <link rel="website">https://github.com/OvictorVieira/ReaSet#5-tools</link>

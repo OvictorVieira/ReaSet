@@ -14,8 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "reaboot/index.xml"
 RECIPE = ROOT / "reaboot.json"
 REPO_INDEX_URL = "https://raw.githubusercontent.com/OvictorVieira/ReaSet/main/reaboot/index.xml"
-RELEASE_VERSION = "3.1"
-RELEASE_COMMIT = "82325faab0991a2b1178de34a22e7db5f349467e"
+RELEASE_VERSION = "3.2"
+RELEASE_COMMIT = "0a90f845349b5b22b0d3d5a19f57b6bdc3fbeb04"
 
 
 def packages(root: ET.Element) -> dict[tuple[str, str], ET.Element]:
