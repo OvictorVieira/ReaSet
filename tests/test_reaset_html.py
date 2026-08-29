@@ -1565,8 +1565,15 @@ def test_off_setlist_songs_never_reach_playback(script_body: str) -> None:
     # one transition this rule has always allowed. What it must not do is
     # append off-setlist rows on its own, so that is checked below rather than
     # waved through.
+    # renderSetlist joined the readers when edit mode started showing the
+    # off-set songs inline (dimmed, + button) instead of hiding them in the
+    # picker overlay — removing a song must not look like deleting it. The
+    # rule it must keep is the same one the picker keeps: nothing about an
+    # off-set row may reach playback, which the edit-mode test below pins
+    # (no .song-container, no drag handle, no playRegion).
     allowed = {"syncRegions", "openAddSongPicker", "renderAddSongList",
-               "addSongToSetlist", "removeFromSetlist", "_syncApplyPayload"}
+               "addSongToSetlist", "removeFromSetlist", "_syncApplyPayload",
+               "renderSetlist"}
     assert set(readers) <= allowed, (
         f"g_offSetlist is read outside the picker and its two actions: "
         f"{sorted(set(readers) - allowed)}"
@@ -4420,6 +4427,66 @@ def test_importing_setlists_writes_them_into_the_project_library(script_body: st
     )
     assert out.endswith("refreshed=true"), (
         "the disk-refresh guard was not armed; the writes above can be undone"
+    )
+
+
+def test_edit_mode_keeps_removed_songs_on_screen_with_an_add_button(script_body: str) -> None:
+    """The ✕ must never look like DELETE.
+
+    Removing a song from the set used to make its row vanish from the edit
+    screen entirely — it moved into the add-picker overlay, which nobody has
+    open at that moment, so the gesture read as "the song was deleted from
+    the project". While editing, the whole project belongs on one screen:
+    the set on top, every off-set song below it with a + that puts it back.
+
+    Three properties, each load-bearing:
+    - the off-set block renders ONLY in edit mode (a Controller, or a
+      Director mid-show, sees only the show);
+    - its rows are NOT .song-container — Sortable rebuilds the set order
+      from .song-container rows on drag-end, and an off-set row in that
+      scan would be written into the setlist by any reorder;
+    - entering and leaving edit mode both rebuild the list, because these
+      rows are DOM that a CSS class cannot conjure or remove.
+    """
+    body = strip_comments(script_body)
+    render = strip_comments(extract_function(body, "renderSetlist"))
+
+    off = re.search(r"if \(REASET_EDITING && !isGridView && g_offSetlist\.length\)"
+                    r"\s*\{([\s\S]*?)\n            \}", render)
+    assert off, (
+        "renderSetlist no longer renders the off-setlist block in edit mode — "
+        "removing a song makes it vanish from the screen again"
+    )
+    block = off.group(1)
+    assert "song-container-off" in block and "'song-container'" not in block, (
+        "off-set rows must not be .song-container, or a drag reorder writes "
+        "them into the setlist"
+    )
+    assert "addSongToSetlist" in block, "the off-set row carries no + button"
+    assert "drag-handle" not in block, (
+        "an off-set row with a drag handle can be picked up by Sortable"
+    )
+    assert "_matchesEditFilter(off)" in block, (
+        "the edit search does not narrow the off-set rows"
+    )
+    assert "playRegion" not in block, (
+        "an off-set row can start playback — it is not in the show"
+    )
+
+    enter = strip_comments(extract_function(body, "enterEditMode"))
+    leave = strip_comments(extract_function(body, "_exitEditMode"))
+    for name, fn in (("enterEditMode", enter), ("_exitEditMode", leave)):
+        assert "renderSetlist()" in fn, (
+            f"{name} does not rebuild the list, so the off-set rows do not "
+            "appear/disappear with the mode"
+        )
+
+    # removeFromSetlist keeps parking the removed song in g_offSetlist —
+    # that is what the block above renders from.
+    remove = strip_comments(extract_function(body, "removeFromSetlist"))
+    assert "g_offSetlist.push(inst)" in remove, (
+        "a removed song no longer reaches g_offSetlist, so it appears "
+        "nowhere at all"
     )
 
 

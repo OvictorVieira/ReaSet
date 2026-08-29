@@ -2825,6 +2825,34 @@
         }
         .song-row .song-remove-btn:hover { background: rgba(252, 60, 68, 0.28); }
 
+        /* ── Off-setlist rows (edit mode only) ──────────────────────────
+           Removing a song from the set must not make it VANISH from the edit
+           screen — it moves down here, dimmed, with a + to bring it back.
+           These rows are rendered only while editing; they carry no drag
+           handle (Sortable cannot pick them up) and no transport actions
+           (they are not in the show, there is nothing to cue). */
+        .offset-divider {
+            list-style: none;
+            padding: 14px 4px 6px;
+            font-size: 10px; font-weight: 700;
+            letter-spacing: 1.2px; text-transform: uppercase;
+            color: var(--text-subdued);
+        }
+        .song-container-off .song-row { opacity: 0.55; }
+        .song-container-off .song-row:hover { opacity: 0.8; }
+        .song-row .song-add-btn {
+            display: flex;
+            align-items: center; justify-content: center;
+            width: 26px; height: 26px; flex: 0 0 auto;
+            margin-right: 2px;
+            border: none; border-radius: 8px;
+            background: rgba(48, 209, 88, 0.14);
+            color: var(--color-brand);
+            font-size: 15px; line-height: 1; cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .song-row .song-add-btn:hover { background: rgba(48, 209, 88, 0.28); }
+
         /* ── EDIT-mode search ───────────────────────────────────────────
            A long set is a long scroll, and the two things edit mode is FOR —
            adding a song and taking one out — both start with finding it.
@@ -7192,6 +7220,8 @@
             ["Add a song to this setlist", "Agregar una canción a este setlist",
              "Adicionar uma música a este setlist"],
             ["Remove from setlist", "Quitar del setlist", "Remover do setlist"],
+            ["Add to setlist", "Añadir al setlist", "Adicionar ao setlist"],
+            ["Not in setlist", "Fuera del setlist", "Fora do setlist"],
             ["AGAIN", "OTRA VEZ", "DE NOVO"],
             ["This project has no regions yet.", "Este proyecto todavía no tiene regiones.",
              "Este projeto ainda não tem regiões."],
@@ -11935,6 +11965,56 @@
                 listEl.appendChild(none);
             }
 
+            // ── Off-setlist songs, inline, EDIT MODE ONLY ───────────────
+            //
+            // Removing a song used to make it vanish from the edit screen
+            // into the add-picker overlay, which read as DELETED — the one
+            // thing the ✕ must never look like it did. While editing, the
+            // whole project is on one screen: the set on top, everything
+            // else down here, dimmed, each row carrying a + that puts it
+            // back. Outside edit mode nothing is rendered — a Controller,
+            // or a Director mid-show, sees only the show.
+            //
+            // The rows are .song-container-off, NOT .song-container:
+            // Sortable rebuilds the set order from .song-container rows on
+            // drag-end, and an off-set row in that scan would be written
+            // into the setlist by any reorder. No drag handle either, so
+            // it cannot even start a drag.
+            if (REASET_EDITING && !isGridView && g_offSetlist.length) {
+                var offShown = 0;
+                var offFrag = document.createDocumentFragment();
+                for (var o = 0; o < g_offSetlist.length; o++) {
+                    var off = g_offSetlist[o];
+                    if (!_matchesEditFilter(off)) continue;
+                    offShown++;
+                    var offLi = document.createElement('li');
+                    offLi.className = 'song-container-off';
+                    offLi.setAttribute('data-off-id', off.id);
+                    var offRow = document.createElement('div');
+                    offRow.className = 'song-row off-set';
+                    var offColor = _songColor(off.id, null) || off.color;
+                    if (offColor) {
+                        offRow.setAttribute('style', buildColorVarsFromHex(offColor));
+                        offRow.classList.add('has-mapped-color');
+                    }
+                    offRow.innerHTML =
+                        '<button class="song-add-btn" title="' + t('Add to setlist') + '" onclick="event.stopPropagation(); addSongToSetlist(\'' + off.id + '\')">&#43;</button>'
+                        + '<div class="song-title-area">'
+                        + '  <div class="song-name">' + (off.displayName || off.name) + '</div>'
+                        + '</div>'
+                        + '<span class="song-duration">' + formatTime(off.duration) + '</span>';
+                    offLi.appendChild(offRow);
+                    offFrag.appendChild(offLi);
+                }
+                if (offShown) {
+                    var divider = document.createElement('li');
+                    divider.className = 'offset-divider';
+                    divider.textContent = t('Not in setlist');
+                    listEl.appendChild(divider);
+                    listEl.appendChild(offFrag);
+                }
+            }
+
             // Appended after the rows and OUTSIDE any .song-container, so
             // Sortable — which rebuilds the order from those — cannot pick it
             // up as a draggable entry.
@@ -12161,6 +12241,9 @@
             _editTakeSnapshot();
             _refreshEditModeBtn();
             closeOpenCtxPanel();
+            // The off-setlist rows exist only in this mode, and they are DOM
+            // the CSS class cannot conjure — the list has to rebuild.
+            lastRenderChecksum = ""; renderSetlist();
             RSDiag.log('EDIT_ENTER', { rows: _editSnapshot.rows.length });
         }
 
@@ -12173,6 +12256,8 @@
             _editSnapshot = null;
             _refreshEditModeBtn();
             closeOpenCtxPanel();
+            // Drop the off-setlist rows: they are edit furniture, not show.
+            lastRenderChecksum = ""; renderSetlist();
         }
 
         function applyEdits() {
