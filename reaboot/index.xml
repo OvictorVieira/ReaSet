@@ -20,6 +20,22 @@ ReaSet v3.0: armed transport, project-local setlist library, reliability
 improvements and proprietary free-to-use licensing for v3 and later.
         ]]></changelog>
       </version>
+      <version name="3.1" author="Victor Vieira (OvictorVieira)" time="2026-08-29T15:38:17Z">
+        <source file="Reaset.lua" type="script" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/82325faab0991a2b1178de34a22e7db5f349467e/Reaset.lua</source>
+        <source file="ReaSet.html">https://raw.githubusercontent.com/OvictorVieira/ReaSet/82325faab0991a2b1178de34a22e7db5f349467e/ReaSet.html</source>
+        <source file="Sortable.min.js">https://raw.githubusercontent.com/OvictorVieira/ReaSet/82325faab0991a2b1178de34a22e7db5f349467e/Sortable.min.js</source>
+        <changelog><![CDATA[
+ReaSet v3.1: stage-reliability epic. Deterministic transport, single-Director
+arbitration, Controller role, active-setlist sync across devices, visual
+playback blocks, PT-BR localization, and a real-device stage test matrix.
+
+Fixes from the first stage run: a big setlist push never reached REAPER
+(bulk publishes now bypass the batched wwr_req URL), a nil-track exception
+that aborted the shared-setlist write, the pt-BR "AO VIVO" tab wrapping onto
+two lines, and the drawer's last section sitting under the mobile browser
+toolbar.
+        ]]></changelog>
+      </version>
       <metadata>
         <link rel="website">https://github.com/OvictorVieira/ReaSet</link>
         <link rel="donation">https://www.paypal.com/donate/?hosted_button_id=JNX7Q2G8S6YT8</link>
@@ -40,6 +56,12 @@ setlists, controls transport and displays real-time lyrics and chords.
         <source file="ReaSet_Diagnose.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/dea2bbda162a16750ca65bcb82ad684f84079629/Tools/ReaSet_Diagnose.lua</source>
         <source file="ReaSet_LibraryDoctor.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/dea2bbda162a16750ca65bcb82ad684f84079629/Tools/ReaSet_LibraryDoctor.lua</source>
         <source file="Text to MIDI Bitmap.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/dea2bbda162a16750ca65bcb82ad684f84079629/Tools/Text%20to%20MIDI%20Bitmap.lua</source>
+      </version>
+      <version name="3.1" author="Victor Vieira (OvictorVieira)" time="2026-08-29T15:38:17Z">
+        <source file="Lyrics_Tapper.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/82325faab0991a2b1178de34a22e7db5f349467e/Tools/Lyrics_Tapper.lua</source>
+        <source file="ReaSet_Diagnose.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/82325faab0991a2b1178de34a22e7db5f349467e/Tools/ReaSet_Diagnose.lua</source>
+        <source file="ReaSet_LibraryDoctor.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/82325faab0991a2b1178de34a22e7db5f349467e/Tools/ReaSet_LibraryDoctor.lua</source>
+        <source file="Text to MIDI Bitmap.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/82325faab0991a2b1178de34a22e7db5f349467e/Tools/Text%20to%20MIDI%20Bitmap.lua</source>
       </version>
       <metadata>
         <link rel="website">https://github.com/OvictorVieira/ReaSet#5-tools</link>
