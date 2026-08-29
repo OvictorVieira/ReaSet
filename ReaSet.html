@@ -12476,6 +12476,19 @@
                     r.loop = !r.loop; saveCurrentState(); lastRenderChecksum = ""; syncRegions(); return;
                 }
             }
+            // STOPPED, cursor inside no song: the scan above found nothing and
+            // the button silently did nothing — "loop only works while
+            // playing", reported from a real stage twice. But a stopped
+            // transport with a SELECTED song is not ambiguous: the selection
+            // is the intent, it is what Play would start, so it is what Loop
+            // must mark. Resolved by uid so a repeat's second row loops
+            // itself, not its twin.
+            var sel = selectedRegion && selectedRegion.uid
+                ? _findInstanceByUid(selectedRegion.uid) : null;
+            if (sel) {
+                sel.loop = !sel.loop;
+                saveCurrentState(); lastRenderChecksum = ""; syncRegions();
+            }
         }
         function toggleSubLoop(id) {
             if (!canEditSetlist()) { RSDiag.blocked('toggleSubLoop', 'role-cannot-edit-setlist'); return; }

@@ -539,6 +539,73 @@ def test_lyrics_polling_is_cancellable(script_body: str) -> None:
         )
 
 
+@requires_node
+def test_loop_works_while_stopped_on_the_selected_song(script_body: str) -> None:
+    """LOOP must arm on a stopped transport.
+
+    toggleCurrentLoop resolved its target only by currentPos sitting inside a
+    song. Stopped, with the cursor parked between songs (or at a boundary),
+    the scan found nothing and the button silently did nothing — "loop only
+    turns on while playing", reported from a real stage twice. A stopped
+    transport with a SELECTED song is not ambiguous: the selection is what
+    Play would start, so it is what Loop marks. Resolved by uid so a repeat's
+    second row loops itself, not its twin.
+    """
+    body = strip_comments(script_body)
+    fns = extract_function(body, "toggleCurrentLoop")
+    harness = """
+        var RSDiag = { log: function () {}, blocked: function () {} };
+        function canEditSetlist() { return true; }
+        function saveCurrentState() {}
+        function syncRegions() {}
+        function toggleSubLoop() {}
+        var lastRenderChecksum = '';
+        var g_subRegionMap = {};
+        var displayList = [
+            { id: '1', uid: 'u1', name: 'A', start: 10, end: 20, loop: false },
+            { id: '1', uid: 'u2', name: 'A', start: 10, end: 20, loop: false },
+            { id: '2', uid: 'u3', name: 'B', start: 30, end: 40, loop: false }
+        ];
+        function _findInstanceByUid(uid) {
+            for (var i = 0; i < displayList.length; i++) {
+                if (displayList[i].uid === uid) return displayList[i];
+            }
+            return null;
+        }
+        function activeInstanceIdx() {
+            for (var i = 0; i < displayList.length; i++) {
+                if (currentPos >= displayList[i].start && currentPos < displayList[i].end) return i;
+            }
+            return -1;
+        }
+        // STOPPED: cursor at 0, inside no song; the repeat's SECOND row is
+        // the selection.
+        var currentPos = 0;
+        var selectedRegion = { id: '1', uid: 'u2' };
+    """ + fns + """
+        toggleCurrentLoop();
+        console.log(displayList.map(function (r) { return r.loop ? 1 : 0; }).join(''));
+        // No selection, still stopped: nothing to mark, nothing marked.
+        selectedRegion = null;
+        toggleCurrentLoop();
+        console.log(displayList.map(function (r) { return r.loop ? 1 : 0; }).join(''));
+        // PLAYING (cursor inside B): the playing song wins, selection ignored.
+        currentPos = 35; selectedRegion = { id: '1', uid: 'u1' };
+        toggleCurrentLoop();
+        console.log(displayList.map(function (r) { return r.loop ? 1 : 0; }).join(''));
+    """
+    out = run_node(harness).strip().splitlines()
+    assert out[0] == "010", (
+        f"stopped + selected repeat row: expected only u2 to loop, got {out[0]!r}"
+    )
+    assert out[1] == "010", (
+        f"stopped with no selection must be a no-op, got {out[1]!r}"
+    )
+    assert out[2] == "011", (
+        f"while playing, the playing song loops (not the selection), got {out[2]!r}"
+    )
+
+
 def test_the_shell_tracks_the_visual_viewport(script_body: str) -> None:
     """The transport bar must sit on the real bottom of the screen.
 
