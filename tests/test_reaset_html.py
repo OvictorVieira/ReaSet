@@ -539,6 +539,40 @@ def test_lyrics_polling_is_cancellable(script_body: str) -> None:
         )
 
 
+def test_the_shell_tracks_the_visual_viewport(script_body: str) -> None:
+    """The transport bar must sit on the real bottom of the screen.
+
+    .app-frame is fixed to the LAYOUT viewport. On iOS Chrome, scrolling the
+    setlist collapses the bottom toolbar and grows the VISUAL viewport — the
+    layout viewport does not follow, so the bar floated a toolbar's height
+    above the true bottom, over bare page background. The visualViewport API
+    is the only honest report of that geometry; the shell resizes to it when
+    the two viewports disagree and steps aside (clears the inline style) when
+    they agree, so the stylesheet's inset rule — the one measured gap-0.0 on
+    iOS Home Screen — keeps ruling the normal case.
+    """
+    body = strip_comments(script_body)
+    assert "window.visualViewport" in body, (
+        "the shell no longer watches the visual viewport — the transport bar "
+        "floats above iOS Chrome's collapsed toolbar again"
+    )
+    block = re.search(
+        r"var vv = window\.visualViewport;([\s\S]*?)\n        \}\)\(\);", body)
+    assert block, "the visual-viewport fit block is gone"
+    fit = block.group(1)
+    for needle, why in (
+        ("vv.addEventListener('resize'", "toolbar collapse never re-fits the frame"),
+        ("vv.addEventListener('scroll'", "viewport offset changes never re-fit the frame"),
+        ("vv.height", "the frame is not sized from the visual viewport"),
+        ("vv.scale", "pinch-zoom would shrink the shell to the zoomed crop"),
+    ):
+        assert needle in fit, why
+    assert re.search(r"frame\.style\.height = ''", fit), (
+        "the fit never returns control to the stylesheet's inset rule, so the "
+        "verified iOS Home Screen geometry is overridden even when correct"
+    )
+
+
 def test_the_drawer_is_pinned_to_the_viewport_not_measured_in_vh() -> None:
     """The sidebar's last section has to be reachable on a phone.
 

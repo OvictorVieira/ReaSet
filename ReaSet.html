@@ -7603,6 +7603,46 @@
             setInterval(draw, 500);
         })();
 
+        // ── Glue the shell to the VISUAL viewport ───────────────────────
+        //
+        // .app-frame is position:fixed, inset:0 — which pins it to the LAYOUT
+        // viewport. On iOS Chrome those are not the same thing: scrolling the
+        // setlist collapses the browser's bottom toolbar, the visual viewport
+        // grows ~100pt, and the layout viewport the frame is pinned to does
+        // not — so the transport bar floats a toolbar's height above the real
+        // bottom of the screen, over a strip of bare page background.
+        //
+        // The visualViewport API reports the real thing, live, on every
+        // engine that has the problem. When it disagrees with the layout
+        // viewport the frame is sized to it explicitly; when they agree the
+        // inline style is cleared so the stylesheet's inset rule — the one
+        // measured gap-0.0 on iOS Home Screen — stays the ruling geometry.
+        //
+        // Pinch-zoom also changes vv.height, with scale > 1 saying why; the
+        // frame must not shrink to the zoomed crop, so it resets to the
+        // stylesheet and lets fixed-position behave as the browser prefers.
+        (function () {
+            var vv = window.visualViewport;
+            if (!vv) return;
+            function fit() {
+                var frame = document.querySelector('.app-frame');
+                if (!frame) return;
+                var zoomed = vv.scale && Math.abs(vv.scale - 1) > 0.01;
+                var agrees = Math.abs(vv.height - window.innerHeight) < 1 && vv.offsetTop < 1;
+                if (zoomed || agrees) {
+                    frame.style.top = ''; frame.style.height = ''; frame.style.bottom = '';
+                    return;
+                }
+                frame.style.top = vv.offsetTop + 'px';
+                frame.style.height = vv.height + 'px';
+                frame.style.bottom = 'auto';
+            }
+            vv.addEventListener('resize', fit);
+            vv.addEventListener('scroll', fit);
+            window.addEventListener('orientationchange', function () { setTimeout(fit, 250); });
+            fit();
+        })();
+
         var BANNER_CSS = 'display:block;text-align:center;font-size:13px;color:#fff;' +
             'font-weight:600;padding:6px 10px;letter-spacing:.02em;' +
             'box-shadow:0 2px 8px rgba(0,0,0,.35);pointer-events:none;' +
