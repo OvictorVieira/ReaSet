@@ -464,6 +464,10 @@ def test_save_current_state_skips_unchanged_state(script_body: str) -> None:
         function _syncPushSoon() { pushes++; }
         function _libraryEnqueue() { calls++; }
         """
+        # _partitionActiveFirst is declared beside saveCurrentState and is part
+        # of its first line now — the grouped order has to reach the sig and
+        # the saved format.
+        + extract_function(script_body, "_partitionActiveFirst")
         + extract_function(script_body, "saveCurrentState")
         + """
         saveCurrentState(); saveCurrentState(); saveCurrentState();
@@ -533,6 +537,108 @@ def test_lyrics_polling_is_cancellable(script_body: str) -> None:
             "the lyrics/chords poll is registered with wwr_req_recur again — it "
             "can never be slowed down or stopped after that"
         )
+
+
+@requires_node
+def test_loop_works_while_stopped_on_the_selected_song(script_body: str) -> None:
+    """LOOP must arm on a stopped transport.
+
+    toggleCurrentLoop resolved its target only by currentPos sitting inside a
+    song. Stopped, with the cursor parked between songs (or at a boundary),
+    the scan found nothing and the button silently did nothing — "loop only
+    turns on while playing", reported from a real stage twice. A stopped
+    transport with a SELECTED song is not ambiguous: the selection is what
+    Play would start, so it is what Loop marks. Resolved by uid so a repeat's
+    second row loops itself, not its twin.
+    """
+    body = strip_comments(script_body)
+    fns = extract_function(body, "toggleCurrentLoop")
+    harness = """
+        var RSDiag = { log: function () {}, blocked: function () {} };
+        function canEditSetlist() { return true; }
+        function canControlTransport() { return true; }
+        function saveCurrentState() {}
+        function syncRegions() {}
+        function toggleSubLoop() {}
+        var lastRenderChecksum = '';
+        var g_subRegionMap = {};
+        var displayList = [
+            { id: '1', uid: 'u1', name: 'A', start: 10, end: 20, loop: false },
+            { id: '1', uid: 'u2', name: 'A', start: 10, end: 20, loop: false },
+            { id: '2', uid: 'u3', name: 'B', start: 30, end: 40, loop: false }
+        ];
+        function _findInstanceByUid(uid) {
+            for (var i = 0; i < displayList.length; i++) {
+                if (displayList[i].uid === uid) return displayList[i];
+            }
+            return null;
+        }
+        function activeInstanceIdx() {
+            for (var i = 0; i < displayList.length; i++) {
+                if (currentPos >= displayList[i].start && currentPos < displayList[i].end) return i;
+            }
+            return -1;
+        }
+        // STOPPED: cursor at 0, inside no song; the repeat's SECOND row is
+        // the selection.
+        var currentPos = 0;
+        var selectedRegion = { id: '1', uid: 'u2' };
+    """ + fns + """
+        toggleCurrentLoop();
+        console.log(displayList.map(function (r) { return r.loop ? 1 : 0; }).join(''));
+        // No selection, still stopped: nothing to mark, nothing marked.
+        selectedRegion = null;
+        toggleCurrentLoop();
+        console.log(displayList.map(function (r) { return r.loop ? 1 : 0; }).join(''));
+        // PLAYING (cursor inside B): the playing song wins, selection ignored.
+        currentPos = 35; selectedRegion = { id: '1', uid: 'u1' };
+        toggleCurrentLoop();
+        console.log(displayList.map(function (r) { return r.loop ? 1 : 0; }).join(''));
+    """
+    out = run_node(harness).strip().splitlines()
+    assert out[0] == "010", (
+        f"stopped + selected repeat row: expected only u2 to loop, got {out[0]!r}"
+    )
+    assert out[1] == "010", (
+        f"stopped with no selection must be a no-op, got {out[1]!r}"
+    )
+    assert out[2] == "011", (
+        f"while playing, the playing song loops (not the selection), got {out[2]!r}"
+    )
+
+
+def test_the_shell_tracks_the_visual_viewport(script_body: str) -> None:
+    """The transport bar must sit on the real bottom of the screen.
+
+    .app-frame is fixed to the LAYOUT viewport. On iOS Chrome, scrolling the
+    setlist collapses the bottom toolbar and grows the VISUAL viewport — the
+    layout viewport does not follow, so the bar floated a toolbar's height
+    above the true bottom, over bare page background. The visualViewport API
+    is the only honest report of that geometry; the shell resizes to it when
+    the two viewports disagree and steps aside (clears the inline style) when
+    they agree, so the stylesheet's inset rule — the one measured gap-0.0 on
+    iOS Home Screen — keeps ruling the normal case.
+    """
+    body = strip_comments(script_body)
+    assert "window.visualViewport" in body, (
+        "the shell no longer watches the visual viewport — the transport bar "
+        "floats above iOS Chrome's collapsed toolbar again"
+    )
+    block = re.search(
+        r"var vv = window\.visualViewport;([\s\S]*?)\n        \}\)\(\);", body)
+    assert block, "the visual-viewport fit block is gone"
+    fit = block.group(1)
+    for needle, why in (
+        ("vv.addEventListener('resize'", "toolbar collapse never re-fits the frame"),
+        ("vv.addEventListener('scroll'", "viewport offset changes never re-fit the frame"),
+        ("vv.height", "the frame is not sized from the visual viewport"),
+        ("vv.scale", "pinch-zoom would shrink the shell to the zoomed crop"),
+    ):
+        assert needle in fit, why
+    assert re.search(r"frame\.style\.height = ''", fit), (
+        "the fit never returns control to the stylesheet's inset rule, so the "
+        "verified iOS Home Screen geometry is overridden even when correct"
+    )
 
 
 def test_the_drawer_is_pinned_to_the_viewport_not_measured_in_vh() -> None:
@@ -1565,8 +1671,15 @@ def test_off_setlist_songs_never_reach_playback(script_body: str) -> None:
     # one transition this rule has always allowed. What it must not do is
     # append off-setlist rows on its own, so that is checked below rather than
     # waved through.
+    # renderSetlist joined the readers when edit mode started showing the
+    # off-set songs inline (dimmed, + button) instead of hiding them in the
+    # picker overlay — removing a song must not look like deleting it. The
+    # rule it must keep is the same one the picker keeps: nothing about an
+    # off-set row may reach playback, which the edit-mode test below pins
+    # (no .song-container, no drag handle, no playRegion).
     allowed = {"syncRegions", "openAddSongPicker", "renderAddSongList",
-               "addSongToSetlist", "removeFromSetlist", "_syncApplyPayload"}
+               "addSongToSetlist", "removeFromSetlist", "_syncApplyPayload",
+               "renderSetlist"}
     assert set(readers) <= allowed, (
         f"g_offSetlist is read outside the picker and its two actions: "
         f"{sorted(set(readers) - allowed)}"
@@ -2922,22 +3035,20 @@ def test_a_looping_section_is_marked_where_it_happens(script_body: str) -> None:
 def test_loop_cannot_look_pressable_to_a_role_that_cannot_press_it(script_body: str) -> None:
     """A control that lights itself and then refuses is worse than a missing one.
 
-    Loop is an EDIT — it changes what REAPER plays, and it is published — so
-    toggleCurrentLoop() refuses on a Controller. The footer button did not know
-    that: it lit from the Director's song, did nothing when tapped, and could
-    never be turned off. From a phone that is indistinguishable from "the loop
-    button is stuck on", which is exactly how it was reported.
-
-    Same rule the RECONNECT button had to learn. `disabled` stops the click;
-    only CSS stops it LOOKING pressable, and the two have to agree.
+    Both roles hold LOOP now (see test_loop_is_transport_and_both_roles_hold_it),
+    but the rule this test carries outlives that change: whatever role gate the
+    handler asks, the BUTTON must ask the same one, be re-applied on the
+    transport tick that redraws the bar, and look disabled whenever it is —
+    `disabled` stops the click, only CSS stops it LOOKING pressable, and the
+    two have to agree. An unrecognised mode still fails closed.
     """
     html = REASET_HTML.read_text(encoding="utf-8")
     body = strip_comments(script_body)
 
     toggle = strip_comments(extract_function(body, "toggleCurrentLoop"))
-    assert "canEditSetlist()" in toggle, (
-        "toggleCurrentLoop no longer refuses on a Controller — if that is "
-        "deliberate, this whole test is the wrong shape"
+    assert "canControlTransport()" in toggle, (
+        "toggleCurrentLoop lost its role gate — an unrecognised mode must "
+        "still fail closed"
     )
 
     # It used to disable the button inline here. It is one function now,
@@ -2954,7 +3065,7 @@ def test_loop_cannot_look_pressable_to_a_role_that_cannot_press_it(script_body: 
     assert re.search(r"\.disabled\s*=\s*!", perm), (
         "nothing disables the LOOP button any more"
     )
-    assert "canEditSetlist()" in perm, "the button's enabled state is not the role's"
+    assert "canControlTransport()" in perm, "the button's enabled state is not the role's"
 
     # Disabled must also LOOK it, and .active must still read through — "does
     # this song loop" is worth knowing on every device in the room.
@@ -3783,71 +3894,77 @@ def test_the_palettes_offer_fixed_colours_only() -> None:
         )
 
 
-def test_every_loop_button_knows_a_controller_cannot_press_it() -> None:
-    """Loop is an edit: it changes what REAPER plays and it is published, so
-    toggleCurrentLoop() refuses on a Controller.
+def test_loop_is_transport_and_both_roles_hold_it() -> None:
+    """Loop is performance control: the Controller runs the show.
 
-    The footer's LOOP was taught that. The Live view's was not — so on the one
-    screen a phone is most likely to be showing during a song, the button
-    looked exactly as pressable as PLAY beside it, lit itself from the
-    Director's song, and did nothing at all when pressed.
-
-    A rule that holds for a ROLE cannot be applied per button and stay
-    applied. Every button wired to toggleCurrentLoop has to be governed from
-    the one place, and that place has to run when the role changes — not on
-    whatever transport tick happens to arrive next.
+    It was Director-only on the argument that the loop flags are published
+    state. The owner\'s ruling is the opposite: the Director BUILDS the show,
+    the Controller RUNS it, and looping the section being rehearsed is running
+    it. What must not wait on anyone is the AUDIO path — the native-loop keys
+    Reaset.lua consumes — so those, and only those, are transport-class:
+    a Controller arms the loop directly, with no relay and no relay\'s
+    latency. Authoring (the shared setlist) keeps its one writer: the
+    publish gate and canEditSetlist stay Director-only elsewhere.
     """
     html = REASET_HTML.read_text(encoding="utf-8")
-    body = strip_comments(html)
+    body = strip_comments(inline_scripts(html)[0])
 
+    # Both wired buttons stay governed from one place, and that place asks
+    # the TRANSPORT question now.
     wired = set(
         re.findall(r'<button[^>]*\bid="([^"]+)"[^>]*onclick="toggleCurrentLoop', html)
     ) | set(
         re.findall(r'<button[^>]*onclick="toggleCurrentLoop[^>]*\bid="([^"]+)"', html)
     )
     assert len(wired) >= 2, f"expected the footer and the Live view, found {wired}"
-
     gov = strip_comments(extract_function(html, "_applyLoopPermission"))
-    assert "canEditSetlist()" in gov, (
-        "the loop buttons no longer ask whether this device may edit"
-    )
-    assert ".disabled = " in gov, (
-        "nothing disables the loop buttons, so a Controller's press is refused "
-        "silently"
-    )
-    assert "Only the Director can change the loop" in gov, (
-        "a disabled loop button says nothing about why"
+    assert "canControlTransport()" in gov, (
+        "the loop buttons no longer ask the transport question — a Controller "
+        "is locked out of a control the owner says it holds"
     )
     for bid in wired:
         assert f"'{bid}'" in gov, (
             f"{bid} is wired to toggleCurrentLoop but is not governed by "
-            f"_applyLoopPermission — it will look pressable and refuse"
+            f"_applyLoopPermission"
         )
-
-    # And it has to be applied when the role changes, when the Live view
-    # opens, and on the transport tick that redraws the footer.
     for fn in ("applyModeUI", "openLiveView", "updateLiveView"):
         assert "_applyLoopPermission()" in strip_comments(extract_function(html, fn)), (
-            f"{fn}() does not re-apply the loop permission, so a button can be "
-            f"left offering a control this device cannot use"
+            f"{fn}() does not re-apply the loop permission on a role change"
         )
 
-    # `disabled` stops the click; only CSS stops it LOOKING pressable, and the
-    # two have to agree.
-    css = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
-    for sel in (r"\.t-btn-loop:disabled", r"\.lt-btn:disabled"):
-        assert re.search(r"(?m)^ {8}" + sel + r"\s*\{", css), (
-            f"{sel} has no rule, so a disabled loop button looks exactly as "
-            f"pressable as PLAY beside it"
+    # The handlers a press reaches ask transport, not edit.
+    for fn in ("toggleCurrentLoop", "toggleSubLoop", "_reaperNativeLoopOn"):
+        gate = strip_comments(extract_function(body, fn))
+        assert "canControlTransport()" in gate, (
+            f"{fn}() no longer asks canControlTransport — either it is locked "
+            f"to the Director again or it lost its role gate entirely"
+        )
+        assert "canEditSetlist()" not in gate and "canPublishSetlist()" not in gate, (
+            f"{fn}() asks the edit/publish question again — a Controller\'s "
+            f"LOOP press dies at this gate"
         )
 
-    # The guard in the handler is the thing that actually refuses. Both of
-    # them: the song-level toggle and the section-level one.
-    for fn in ("toggleCurrentLoop", "toggleSubLoop", "toggleLoop"):
-        assert "canEditSetlist()" in strip_comments(extract_function(body, fn)), (
-            f"{fn}() no longer checks the role, so a Controller can publish an "
-            f"edit to every device in the room"
+    # Row-level loop AUTHORING stays the Director\'s.
+    assert "canEditSetlist()" in strip_comments(extract_function(body, "toggleLoop")), (
+        "toggleLoop() lost its Director gate — setlist authoring has one writer"
+    )
+
+    # The audio path is transport-class for exactly the loop keys, so the
+    # wwr_req gate passes a Controller\'s arm/disarm through.
+    cls = strip_comments(extract_function(body, "_commandClass"))
+    for key in ("loopStart", "loopEnd", "loopMax", "nativeLoop"):
+        assert f"SET/EXTSTATEPERSIST/ReaSet/{key}/" in cls, (
+            f"the {key} key is publish-class again — a Controller\'s loop "
+            f"press is silently dropped by the wwr_req gate"
         )
+    assert "SET/REPEAT/0" in cls, (
+        "the Repeat cancel is publish-class — a Controller can arm a native "
+        "loop it can never disarm"
+    )
+    assert "SET/EXTSTATE/ReaSet/" not in cls.replace("SET/EXTSTATEPERSIST/ReaSet/", ""), (
+        "plain SET/EXTSTATE is transport-class — that hands a Controller the "
+        "whole shared-state namespace, not just the loop"
+    )
 
 
 def test_the_live_view_keeps_its_geometry_in_the_stylesheet() -> None:
@@ -4420,6 +4537,155 @@ def test_importing_setlists_writes_them_into_the_project_library(script_body: st
     )
     assert out.endswith("refreshed=true"), (
         "the disk-refresh guard was not armed; the writes above can be undone"
+    )
+
+
+def test_the_edit_row_button_toggles_active_in_place(script_body: str) -> None:
+    """✕ deactivates where the row stands; + reactivates it. Nothing moves.
+
+    The row button used to call removeFromSetlist, which tore the row out of
+    the list into the add-picker overlay nobody had open — on stage that read
+    as DELETE. The Director's report from the M1: grey rows carried ✕ instead
+    of +, and pressing ✕ made the song vanish from the screen.
+
+    Three parts, each reported as its own symptom:
+    - the row button calls toggleSkip for BOTH states — ✕ on an active row,
+      + on a grey one, same slot, row stays put;
+    - a deliberate add arrives ACTIVE: it used to inherit the region's +SKIP
+      default, so the song the Director just added appeared greyed out — or,
+      with Hide Skips on, appeared NOWHERE ("adiciono e ela não aparece");
+    - edit mode always shows skipped rows, whatever Hide Skips says: the +
+      that brings a song back lives ON the row it would hide.
+    """
+    body = strip_comments(script_body)
+
+    row = re.search(r"rowDiv\.innerHTML =(.*?);\n", body, re.S)
+    assert row, "list-mode row template not found"
+    template = row.group(1)
+    assert "removeFromSetlist" not in template, (
+        "the row button removes again — a ✕ that makes the row vanish"
+    )
+    toggles = re.findall(r"toggleSkip\(", template)
+    assert len(toggles) >= 2, (
+        "the row button does not toggle the active state in both directions"
+    )
+    assert "song-add-btn" in template and "song-remove-btn" in template, (
+        "the two states of the row button lost their two looks"
+    )
+    skipped_branch = re.search(r"r\.skipped\s*\?\s*'<button class=\"song-add-btn\"", template)
+    assert skipped_branch, "a grey (skipped) row does not show the + button"
+
+    add = strip_comments(extract_function(body, "addSongToSetlist"))
+    assert "skipped: false" in add and "defaultSkip" not in add, (
+        "an explicit add inherits the +SKIP default again — the song the "
+        "Director just chose arrives greyed out or hidden"
+    )
+
+    hide = strip_comments(extract_function(body, "_hideSkippedEffective"))
+    assert "REASET_EDITING" in hide and "return false" in hide, (
+        "edit mode can hide skipped rows — the + that reactivates a song "
+        "would be unreachable"
+    )
+
+
+@requires_node
+def test_active_rows_always_sit_together_above_the_grey_ones(script_body: str) -> None:
+    """Reactivating a song must bring it up with the actives.
+
+    Pressing + on a grey row halfway down the list used to light it up WHERE
+    IT STOOD — active, but stranded between grey rows, nowhere near the songs
+    it will actually play with. The set reads actives first, in their order,
+    then the inactive rows, in theirs.
+
+    Enforced by a stable partition at saveCurrentState — the choke point every
+    edit already passes through — so a toggle, an add, a drag, an import and a
+    legacy interleaved set all come out grouped, and no path needs to remember
+    to do it. Stability is the load-bearing half: within each group the order
+    must never change, or the partition would fight the user's drag.
+    """
+    body = strip_comments(script_body)
+    save = strip_comments(extract_function(body, "saveCurrentState"))
+    partition_at = save.index("_partitionActiveFirst")
+    fmt_at = save.index("displayList.map")
+    assert partition_at < fmt_at, (
+        "saveCurrentState builds the saved format before partitioning — the "
+        "grouped order never reaches disk or the other devices"
+    )
+
+    harness = """
+    """ + extract_function(body, "_partitionActiveFirst") + """
+        function row(id, sk) { return { id: id, skipped: sk }; }
+        var mixed = [row('a', false), row('b', true), row('c', false),
+                     row('d', true), row('e', false)];
+        var out = _partitionActiveFirst(mixed);
+        console.log(out.map(function (r) { return r.id; }).join(''));
+        // Idempotent: partitioning twice changes nothing.
+        console.log(_partitionActiveFirst(out).map(function (r) { return r.id; }).join(''));
+    """
+    out = run_node(harness).strip().splitlines()
+    assert out[0] == "acebd", (
+        f"partition is not stable actives-first (got {out[0]!r}, want 'acebd')"
+    )
+    assert out[1] == "acebd", "partition is not idempotent"
+
+
+def test_edit_mode_keeps_removed_songs_on_screen_with_an_add_button(script_body: str) -> None:
+    """The ✕ must never look like DELETE.
+
+    Removing a song from the set used to make its row vanish from the edit
+    screen entirely — it moved into the add-picker overlay, which nobody has
+    open at that moment, so the gesture read as "the song was deleted from
+    the project". While editing, the whole project belongs on one screen:
+    the set on top, every off-set song below it with a + that puts it back.
+
+    Three properties, each load-bearing:
+    - the off-set block renders ONLY in edit mode (a Controller, or a
+      Director mid-show, sees only the show);
+    - its rows are NOT .song-container — Sortable rebuilds the set order
+      from .song-container rows on drag-end, and an off-set row in that
+      scan would be written into the setlist by any reorder;
+    - entering and leaving edit mode both rebuild the list, because these
+      rows are DOM that a CSS class cannot conjure or remove.
+    """
+    body = strip_comments(script_body)
+    render = strip_comments(extract_function(body, "renderSetlist"))
+
+    off = re.search(r"if \(REASET_EDITING && !isGridView && g_offSetlist\.length\)"
+                    r"\s*\{([\s\S]*?)\n            \}", render)
+    assert off, (
+        "renderSetlist no longer renders the off-setlist block in edit mode — "
+        "removing a song makes it vanish from the screen again"
+    )
+    block = off.group(1)
+    assert "song-container-off" in block and "'song-container'" not in block, (
+        "off-set rows must not be .song-container, or a drag reorder writes "
+        "them into the setlist"
+    )
+    assert "addSongToSetlist" in block, "the off-set row carries no + button"
+    assert "drag-handle" not in block, (
+        "an off-set row with a drag handle can be picked up by Sortable"
+    )
+    assert "_matchesEditFilter(off)" in block, (
+        "the edit search does not narrow the off-set rows"
+    )
+    assert "playRegion" not in block, (
+        "an off-set row can start playback — it is not in the show"
+    )
+
+    enter = strip_comments(extract_function(body, "enterEditMode"))
+    leave = strip_comments(extract_function(body, "_exitEditMode"))
+    for name, fn in (("enterEditMode", enter), ("_exitEditMode", leave)):
+        assert "renderSetlist()" in fn, (
+            f"{name} does not rebuild the list, so the off-set rows do not "
+            "appear/disappear with the mode"
+        )
+
+    # removeFromSetlist keeps parking the removed song in g_offSetlist —
+    # that is what the block above renders from.
+    remove = strip_comments(extract_function(body, "removeFromSetlist"))
+    assert "g_offSetlist.push(inst)" in remove, (
+        "a removed song no longer reaches g_offSetlist, so it appears "
+        "nowhere at all"
     )
 
 

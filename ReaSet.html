@@ -2807,6 +2807,7 @@
         .song-row .drag-handle,
         .song-row .song-dotmenu-btn,
         .song-row .song-remove-btn,
+        .song-row .song-add-btn,
         .section-row .sub-dotmenu-btn { display: none; }
 
         /* Removing is destructive-ish and structural, so it reads as the one
@@ -2824,6 +2825,33 @@
             -webkit-tap-highlight-color: transparent;
         }
         .song-row .song-remove-btn:hover { background: rgba(252, 60, 68, 0.28); }
+
+        /* ── Off-setlist rows (edit mode only) ──────────────────────────
+           Removing a song from the set must not make it VANISH from the edit
+           screen — it moves down here, dimmed, with a + to bring it back.
+           These rows are rendered only while editing; they carry no drag
+           handle (Sortable cannot pick them up) and no transport actions
+           (they are not in the show, there is nothing to cue). */
+        .offset-divider {
+            list-style: none;
+            padding: 14px 4px 6px;
+            font-size: 10px; font-weight: 700;
+            letter-spacing: 1.2px; text-transform: uppercase;
+            color: var(--text-subdued);
+        }
+        .song-container-off .song-row { opacity: 0.55; }
+        .song-container-off .song-row:hover { opacity: 0.8; }
+        .song-row .song-add-btn {
+            align-items: center; justify-content: center;
+            width: 26px; height: 26px; flex: 0 0 auto;
+            margin-right: 2px;
+            border: none; border-radius: 8px;
+            background: rgba(48, 209, 88, 0.14);
+            color: var(--color-brand);
+            font-size: 15px; line-height: 1; cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .song-row .song-add-btn:hover { background: rgba(48, 209, 88, 0.28); }
 
         /* ── EDIT-mode search ───────────────────────────────────────────
            A long set is a long scroll, and the two things edit mode is FOR —
@@ -2964,6 +2992,7 @@
         body.reaset-editing .song-row .drag-handle,
         body.reaset-editing .song-row .song-dotmenu-btn,
         body.reaset-editing .song-row .song-remove-btn,
+        body.reaset-editing .song-row .song-add-btn,
         body.reaset-editing .section-row .sub-dotmenu-btn { display: flex; }
 
         /* Reordering a FILTERED list would write the filtered order back as
@@ -6469,6 +6498,19 @@
                 sawWrite = true;
                 if (TRANSPORT_ACTION_IDS[seg] === 1) continue;
                 if (seg.indexOf('SET/POS/') === 0) continue;
+                // The native-loop keys are TRANSPORT, not publish. Looping a
+                // section mid-song is performance control — the musician
+                // holding the Controller reaches for LOOP exactly like PLAY,
+                // and routing it through the Director would add a relay's
+                // latency to a button that has to answer the beat. The
+                // whitelist names the four keys Reaset.lua's loop consumes
+                // plus the Repeat cancel; the Director remains the only
+                // writer of everything else, the setlist included.
+                if (seg.indexOf('SET/EXTSTATEPERSIST/ReaSet/loopStart/') === 0) continue;
+                if (seg.indexOf('SET/EXTSTATEPERSIST/ReaSet/loopEnd/') === 0) continue;
+                if (seg.indexOf('SET/EXTSTATEPERSIST/ReaSet/loopMax/') === 0) continue;
+                if (seg.indexOf('SET/EXTSTATEPERSIST/ReaSet/nativeLoop/') === 0) continue;
+                if (seg === 'SET/REPEAT/0') continue;
                 allTransport = false;
             }
             if (!sawWrite) return 'read';
@@ -7192,6 +7234,8 @@
             ["Add a song to this setlist", "Agregar una canción a este setlist",
              "Adicionar uma música a este setlist"],
             ["Remove from setlist", "Quitar del setlist", "Remover do setlist"],
+            ["Add to setlist", "Añadir al setlist", "Adicionar ao setlist"],
+            ["Not in setlist", "Fuera del setlist", "Fora do setlist"],
             ["AGAIN", "OTRA VEZ", "DE NOVO"],
             ["This project has no regions yet.", "Este proyecto todavía no tiene regiones.",
              "Este projeto ainda não tem regiões."],
@@ -7570,6 +7614,46 @@
             }
             draw();
             setInterval(draw, 500);
+        })();
+
+        // ── Glue the shell to the VISUAL viewport ───────────────────────
+        //
+        // .app-frame is position:fixed, inset:0 — which pins it to the LAYOUT
+        // viewport. On iOS Chrome those are not the same thing: scrolling the
+        // setlist collapses the browser's bottom toolbar, the visual viewport
+        // grows ~100pt, and the layout viewport the frame is pinned to does
+        // not — so the transport bar floats a toolbar's height above the real
+        // bottom of the screen, over a strip of bare page background.
+        //
+        // The visualViewport API reports the real thing, live, on every
+        // engine that has the problem. When it disagrees with the layout
+        // viewport the frame is sized to it explicitly; when they agree the
+        // inline style is cleared so the stylesheet's inset rule — the one
+        // measured gap-0.0 on iOS Home Screen — stays the ruling geometry.
+        //
+        // Pinch-zoom also changes vv.height, with scale > 1 saying why; the
+        // frame must not shrink to the zoomed crop, so it resets to the
+        // stylesheet and lets fixed-position behave as the browser prefers.
+        (function () {
+            var vv = window.visualViewport;
+            if (!vv) return;
+            function fit() {
+                var frame = document.querySelector('.app-frame');
+                if (!frame) return;
+                var zoomed = vv.scale && Math.abs(vv.scale - 1) > 0.01;
+                var agrees = Math.abs(vv.height - window.innerHeight) < 1 && vv.offsetTop < 1;
+                if (zoomed || agrees) {
+                    frame.style.top = ''; frame.style.height = ''; frame.style.bottom = '';
+                    return;
+                }
+                frame.style.top = vv.offsetTop + 'px';
+                frame.style.height = vv.height + 'px';
+                frame.style.bottom = 'auto';
+            }
+            vv.addEventListener('resize', fit);
+            vv.addEventListener('scroll', fit);
+            window.addEventListener('orientationchange', function () { setTimeout(fit, 250); });
+            fit();
         })();
 
         var BANNER_CSS = 'display:block;text-align:center;font-size:13px;color:#fff;' +
@@ -9631,6 +9715,11 @@
         // value is persisted, and forcing it would silently rewrite the
         // Director's own preference on any device that was ever a Controller.
         function _hideSkippedEffective() {
+            // Edit mode always shows every row: the + that reactivates a
+            // greyed-out song lives ON that row, so hiding it would make the
+            // song impossible to bring back — the exact dead end the edit
+            // screen exists to prevent. Hide Skips is a SHOW preference.
+            if (REASET_EDITING) return false;
             return hideSkippedMode || !canEditSetlist();
         }
         var isGridView = false;
@@ -10719,10 +10808,12 @@
         // loopMax = 0 means infinite (cancelled via "off" or stop).
         function _reaperNativeLoopOn(start, end, loopMax, subId) {
             if (!window.REASET_NATIVE_LOOP) return;
-            // Same reasoning as auto-stop arming: these are publish writes and
-            // the Director owns them. A Controller that armed a native loop
-            // would be handing REAPER's Repeat a second opinion.
-            if (!canPublishSetlist()) return;
+            // Transport permission: the loop keys are transport-class in
+            // _commandClass for exactly this call. The device that arms the
+            // loop is the one that counts crossings and disarms it — that
+            // contract is per-device state (_nativeLoopSubId) and holds for a
+            // Controller the same way it holds for the Director.
+            if (!canControlTransport()) return;
             wwr_req("SET/EXTSTATEPERSIST/ReaSet/loopStart/" + start.toFixed(5));
             wwr_req("SET/EXTSTATEPERSIST/ReaSet/loopEnd/"   + end.toFixed(5));
             // Always send 0 (infinite) — JS counts crossings and sends 'off' when done.
@@ -10740,7 +10831,7 @@
         function _reaperNativeLoopOff() {
             if (!window.REASET_NATIVE_LOOP) return;
             if (!window._nativeLoopSubId) return;
-            if (!canPublishSetlist()) { window._nativeLoopSubId = null; return; }
+            if (!canControlTransport()) { window._nativeLoopSubId = null; return; }
             wwr_req("SET/REPEAT/0");                               // synchronous: same HTTP batch as next SET/POS
             wwr_req("SET/EXTSTATEPERSIST/ReaSet/nativeLoop/off");  // async: Lua cleans up region + loop points
             window._nativeLoopSubId = null;
@@ -11311,7 +11402,27 @@
         // state can be recognised as unchanged.
         var _lastSavedSig = null;
 
+        // ACTIVE ROWS STAY TOGETHER. A reactivated song used to light up
+        // wherever it stood — halfway down a run of grey rows — so the show's
+        // playing order and the order on screen only agreed if you mentally
+        // skipped the greys. The set is: actives first, in their order, then
+        // the inactive rows, in theirs. A stable partition is enough — it
+        // never reorders WITHIN either group, so it cannot fight a drag —
+        // and it is enforced here at the choke point every edit already
+        // passes through (toggle, add, drag, import, pull), which also
+        // normalises legacy sets that stored the two interleaved. Skipped
+        // rows never play, so moving them cannot change what the transport
+        // does — only make the screen tell the truth about it.
+        function _partitionActiveFirst(list) {
+            var active = [], inactive = [];
+            for (var i = 0; i < list.length; i++) {
+                (list[i].skipped ? inactive : active).push(list[i]);
+            }
+            return active.concat(inactive);
+        }
+
         function saveCurrentState() {
+            displayList = _partitionActiveFirst(displayList);
             var fmt = displayList.map(function (r) { return { id: r.id, chain: r.chain, skipped: r.skipped, loop: r.loop }; });
 
             // SAVE ONLY WHAT CHANGED.
@@ -11837,7 +11948,17 @@
                         '<div class="card-bg-fill" id="bg-' + r.uid + '"></div>'
                         + (loopMarks ? '<div class="loop-marks">' + loopMarks + '</div>' : '')
                         + '<div class="drag-handle">⋮⋮</div>'
-                        + '<button class="song-remove-btn" title="' + t('Remove from setlist') + '" onclick="event.stopPropagation(); removeFromSetlist(\'' + r.uid + '\')">&#10005;</button>'
+                        // The edit-mode button TOGGLES THE ROW'S ACTIVE STATE
+                        // in place — it does not remove the row. It used to
+                        // call removeFromSetlist, and on stage that read as
+                        // DELETE: the row vanished from the screen into the
+                        // add-picker overlay nobody had open. The Director
+                        // edits by looking at the whole show at once: ✕ on an
+                        // active row greys it out where it stands; + on a grey
+                        // row lights it back up. Nothing ever leaves the list.
+                        + (r.skipped
+                            ? '<button class="song-add-btn" title="' + t('Add to setlist') + '" onclick="event.stopPropagation(); toggleSkip(\'' + r.uid + '\')">&#43;</button>'
+                            : '<button class="song-remove-btn" title="' + t('Remove from setlist') + '" onclick="event.stopPropagation(); toggleSkip(\'' + r.uid + '\')">&#10005;</button>')
                         + '<button class="song-dotmenu-btn" onclick="event.stopPropagation(); openSongMenu(event,\'' + r.uid + '\')"><svg width="4" height="18" viewBox="0 0 4 18" fill="currentColor"><circle cx="2" cy="2" r="2"/><circle cx="2" cy="9" r="2"/><circle cx="2" cy="16" r="2"/></svg></button>'
                         + '<button class="' + chevClass + '" id="chev-' + r.uid + '" onclick="event.stopPropagation();toggleExpand(\'' + r.uid + '\',' + hasSubs + ')">' + chevIcon + '</button>'
                         + '<div class="song-title-area" onclick="playRegion(' + r.start + ',\'' + r.id + '\',\'' + r.uid + '\')">'
@@ -11933,6 +12054,56 @@
                 none.className = 'setlist-empty';
                 none.textContent = t('No song matches that search');
                 listEl.appendChild(none);
+            }
+
+            // ── Off-setlist songs, inline, EDIT MODE ONLY ───────────────
+            //
+            // Removing a song used to make it vanish from the edit screen
+            // into the add-picker overlay, which read as DELETED — the one
+            // thing the ✕ must never look like it did. While editing, the
+            // whole project is on one screen: the set on top, everything
+            // else down here, dimmed, each row carrying a + that puts it
+            // back. Outside edit mode nothing is rendered — a Controller,
+            // or a Director mid-show, sees only the show.
+            //
+            // The rows are .song-container-off, NOT .song-container:
+            // Sortable rebuilds the set order from .song-container rows on
+            // drag-end, and an off-set row in that scan would be written
+            // into the setlist by any reorder. No drag handle either, so
+            // it cannot even start a drag.
+            if (REASET_EDITING && !isGridView && g_offSetlist.length) {
+                var offShown = 0;
+                var offFrag = document.createDocumentFragment();
+                for (var o = 0; o < g_offSetlist.length; o++) {
+                    var off = g_offSetlist[o];
+                    if (!_matchesEditFilter(off)) continue;
+                    offShown++;
+                    var offLi = document.createElement('li');
+                    offLi.className = 'song-container-off';
+                    offLi.setAttribute('data-off-id', off.id);
+                    var offRow = document.createElement('div');
+                    offRow.className = 'song-row off-set';
+                    var offColor = _songColor(off.id, null) || off.color;
+                    if (offColor) {
+                        offRow.setAttribute('style', buildColorVarsFromHex(offColor));
+                        offRow.classList.add('has-mapped-color');
+                    }
+                    offRow.innerHTML =
+                        '<button class="song-add-btn" title="' + t('Add to setlist') + '" onclick="event.stopPropagation(); addSongToSetlist(\'' + off.id + '\')">&#43;</button>'
+                        + '<div class="song-title-area">'
+                        + '  <div class="song-name">' + (off.displayName || off.name) + '</div>'
+                        + '</div>'
+                        + '<span class="song-duration">' + formatTime(off.duration) + '</span>';
+                    offLi.appendChild(offRow);
+                    offFrag.appendChild(offLi);
+                }
+                if (offShown) {
+                    var divider = document.createElement('li');
+                    divider.className = 'offset-divider';
+                    divider.textContent = t('Not in setlist');
+                    listEl.appendChild(divider);
+                    listEl.appendChild(offFrag);
+                }
             }
 
             // Appended after the rows and OUTSIDE any .song-container, so
@@ -12161,6 +12332,9 @@
             _editTakeSnapshot();
             _refreshEditModeBtn();
             closeOpenCtxPanel();
+            // The off-setlist rows exist only in this mode, and they are DOM
+            // the CSS class cannot conjure — the list has to rebuild.
+            lastRenderChecksum = ""; renderSetlist();
             RSDiag.log('EDIT_ENTER', { rows: _editSnapshot.rows.length });
         }
 
@@ -12173,6 +12347,8 @@
             _editSnapshot = null;
             _refreshEditModeBtn();
             closeOpenCtxPanel();
+            // Drop the off-setlist rows: they are edit furniture, not show.
+            lastRenderChecksum = ""; renderSetlist();
         }
 
         function applyEdits() {
@@ -12281,10 +12457,8 @@
         // screen a phone is most likely to be showing during a song. A rule
         // that holds for a role cannot be applied per button and stay applied.
         function _applyLoopPermission() {
-            var can = canEditSetlist();
-            var title = can
-                ? t('Loop this song or section')
-                : t('Only the Director can change the loop');
+            var can = canControlTransport();
+            var title = t('Loop this song or section');
             var ids = ['footer-loop-btn', 'live-loop-btn'];
             for (var i = 0; i < ids.length; i++) {
                 var b = document.getElementById(ids[i]);
@@ -12294,9 +12468,20 @@
             }
         }
 
+        // LOOP IS PERFORMANCE CONTROL, and both roles hold the transport.
+        // The Director builds the show; the Controller runs it — and looping
+        // the section being rehearsed is running it. This used to be
+        // Director-only on the argument that the loop flags are published
+        // state; the part of a loop that must not wait on anyone is the AUDIO,
+        // and that path (the native-loop keys Reaset.lua consumes) is now
+        // transport-class in _commandClass, so a Controller arms it directly,
+        // with no relay and no relay's latency. What stays Director-only is
+        // authoring: saveCurrentState's publish side is already a no-op on a
+        // Controller, so its flag lives locally and the shared setlist still
+        // has one writer.
         function toggleCurrentLoop(e) {
             if (e) e.stopPropagation();
-            if (!canEditSetlist()) { RSDiag.blocked('toggleCurrentLoop', 'role-cannot-edit-setlist'); return; }
+            if (!canControlTransport()) { RSDiag.blocked('toggleCurrentLoop', 'role-cannot-control-transport'); return; }
             var activeIdx = -1;
             // Starts at the resolved instance rather than at 0, so a repeat's
             // second row gets its own loop toggled instead of the first row's.
@@ -12315,9 +12500,24 @@
                     r.loop = !r.loop; saveCurrentState(); lastRenderChecksum = ""; syncRegions(); return;
                 }
             }
+            // STOPPED, cursor inside no song: the scan above found nothing and
+            // the button silently did nothing — "loop only works while
+            // playing", reported from a real stage twice. But a stopped
+            // transport with a SELECTED song is not ambiguous: the selection
+            // is the intent, it is what Play would start, so it is what Loop
+            // must mark. Resolved by uid so a repeat's second row loops
+            // itself, not its twin.
+            var sel = selectedRegion && selectedRegion.uid
+                ? _findInstanceByUid(selectedRegion.uid) : null;
+            if (sel) {
+                sel.loop = !sel.loop;
+                saveCurrentState(); lastRenderChecksum = ""; syncRegions();
+            }
         }
         function toggleSubLoop(id) {
-            if (!canEditSetlist()) { RSDiag.blocked('toggleSubLoop', 'role-cannot-edit-setlist'); return; }
+            // Transport permission, not edit: looping the section under the
+            // cursor is running the show, and the Controller runs the show.
+            if (!canControlTransport()) { RSDiag.blocked('toggleSubLoop', 'role-cannot-control-transport'); return; }
             if (window.subStates[id]) {
                 window.subStates[id].loop = !window.subStates[id].loop;
                 var isNowOn = window.subStates[id].loop;
@@ -12480,7 +12680,13 @@
             if (!src) { for (var j = 0; j < displayList.length; j++) { if (displayList[j].id == regionId) { src = displayList[j]; break; } } }
             if (!src) { RSDiag.log('ADD_MISS', { song: String(regionId) }); return; }
 
-            displayList.push(_makeInstance(src, _newUid(src.id), { skipped: !!src.defaultSkip }));
+            // Explicitly added means ACTIVE. This used to inherit the region's
+            // +SKIP default, so a song the Director just chose to put in the
+            // show arrived greyed out — and with Hide Skips on it arrived
+            // INVISIBLE: pressed +, saw nothing change, pressed Add again.
+            // The +SKIP default is for the bootstrap absorb, where nobody
+            // chose anything; a deliberate add IS the choice.
+            displayList.push(_makeInstance(src, _newUid(src.id), { skipped: false }));
             for (var g = g_offSetlist.length - 1; g >= 0; g--) {
                 if (g_offSetlist[g].id == regionId) g_offSetlist.splice(g, 1);
             }
