@@ -119,12 +119,15 @@ La validación funcional final se hizo en REAPER con pruebas reales de uso en se
 > antiguos helpers separados de loop, letras y acordes.
 
 ### Pistas requeridas para letras/acordes
-- Una pista cuyo nombre sea `lyrics` — alimenta el panel 🎤 Letras.
-- Una pista cuyo nombre sea `chords` — alimenta el panel 🎸 Acordes.
-- Cada item debe tener texto en **Item Notes**.
+- Una pista llamada **exactamente** `Lyrics` — alimenta el panel 🎤 Letras.
+- Una pista llamada **exactamente** `Chords` — alimenta el panel 🎸 Acordes.
+- Cada item debe llevar su texto en **Item Notes**.
 
-El nombre se compara **sin distinguir mayúsculas** y admite prefijos/sufijos como
-`*Lyrics`, `#Chords` o `01 Lyrics`. Ambas pistas son **opcionales**.
+El nombre **es** el comando, y es exacto: con mayúscula inicial y nada
+alrededor de la palabra. `lyrics`, `LYRICS` y `01 - Lyrics` **no** coinciden —
+pero una pista que está a un solo renombrado de distancia se reconoce y se
+nombra en el panel, así te dice qué corregir en vez de dejarte con una pantalla
+vacía. Ambas pistas son **opcionales**.
 Ver [Nombres de las pistas de Letras y Acordes](#nombres-de-las-pistas-de-letras-y-acordes)
 para las reglas completas.
 
@@ -186,7 +189,7 @@ simplemente no se guarda y no dice nada.
 
 ### Recomendado — Instalar con ReaBoot
 
-[**Instalar ReaSet con ReaBoot**](https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2Fdjenttleman%2FReaSet%2Fmain%2Freaboot.json)
+[**Instalar ReaSet con ReaBoot**](https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2FOvictorVieira%2FReaSet%2Fmain%2Freaboot.json)
 
 ReaBoot instala ReaPack (si hace falta), registra `Reaset.lua` en la lista de
 acciones Main de REAPER y coloca los archivos web en `reaper_www_root`. El
@@ -409,30 +412,63 @@ por su nombre. `Reaset.lua` recorre el proyecto buscando estas dos palabras clav
 | 🎤 Letras | `lyrics` |
 | 🎸 Acordes | `chords` |
 
-**La regla:** no distingue mayúsculas de minúsculas, e ignora cualquier decoración de
-*símbolos* o *numeración* alrededor de la palabra clave. Se quitan los símbolos/números
-del inicio y los símbolos del final — lo que quede debe ser **exactamente** la palabra
-`lyrics` o `chords`.
+**La regla: el nombre es exacto.** Mayúscula inicial, el resto en minúsculas,
+nada alrededor de la palabra. Hay una sola grafía y es la de arriba.
 
 | Nombre de pista | ¿Detectada? | Por qué |
 |---|---|---|
-| `lyrics` · `Lyrics` · `LYRICS` | ✅ | las mayúsculas se ignoran |
-| `*Lyrics` · `**Chords**` | ✅ | se quitan los asteriscos |
-| `#Chords` · `-- Lyrics` · `[Chords]` · `>Lyrics` | ✅ | se quita cualquier símbolo inicial/final |
-| `01 Lyrics` · `3 - Chords` | ✅ | se quita la numeración inicial |
-| `* 01 - Lyrics` | ✅ | los prefijos mixtos se resuelven en cualquier orden |
-| `Backing Lyrics` · `Lyrics Bus` · `Chords Gtr` | ❌ | queda una **palabra** extra |
+| `Lyrics` · `Chords` | ✅ | exactamente el comando |
+| `lyrics` · `LYRICS` | ❌ | mayúsculas incorrectas — se reporta como casi-acierto |
+| `*Lyrics` · `01 - Lyrics` · `[Chords]` | ❌ | la decoración no es parte del nombre — se reporta como casi-acierto |
+| `Backing Lyrics` · `Lyrics Bus` · `Chords Gtr` | ❌ | pista de audio normal; no se ofrece como casi-acierto |
 
-Las palabras extra nunca coinciden: es intencional, para que las pistas de audio normales
-que contienen la palabra "lyrics"/"chords" no sean capturadas por error. Si dos pistas
-coinciden con la misma palabra clave, gana la que esté **más arriba** en la lista de pistas.
+Antes era permisivo — ignoraba mayúsculas, quitaba símbolos y numeración — así
+que ocho grafías funcionaban. Fue el intercambio equivocado: una convención que
+acepta ocho grafías no es una convención, nadie converge en una, y la regla que
+decide qué es una pista de letras se vuelve algo que hay que leer en el código
+para saber.
 
-El texto va en las **notas del item** (doble clic en el item → *Notes*), un item por bloque
-de letra/acorde; la posición del item en la línea de tiempo es lo que lo sincroniza con la
-reproducción.
+Ser estricto solo sirve si equivocarse es **ruidoso**, así que un
+**casi-acierto** se reconoce y se nombra. Una pista llamada `lyrics` hace que el
+panel diga *«hay una pista «lyrics» — renómbrala a «Lyrics»»* en vez de reportar
+"sin pista". El Lyrics Tapper hace lo mismo: se niega y te dice que renombres,
+en vez de crear una segunda pista `Lyrics` al lado de la que ya tienes.
 
-Ambas pistas son **opcionales**: si falta `lyrics` o `chords`, ese panel simplemente queda
-inactivo y todo lo demás (transporte, loops, setlist) sigue funcionando.
+Si dos pistas se llaman `Lyrics`, gana la que **tiene items** — así una pista
+divisoria o de carpeta no puede tapar silenciosamente a la real.
+
+Ambas pistas son **opcionales**: si falta `Lyrics` o `Chords`, ese panel
+simplemente queda inactivo y todo lo demás (transporte, loops, setlist) sigue
+funcionando.
+
+#### ¿Qué tipo de item?
+
+**Un item vacío** — sin take, sin audio, sin MIDI. Es el equivalente en REAPER
+de un clip MIDI vacío en Ableton, y es lo que crea el Lyrics Tapper
+(`AddMediaItemToTrack`). Un item MIDI o de audio también sirve: el puente nunca
+mira *dentro* del item, solo tres cosas —
+
+| Qué | Decide |
+|---|---|
+| **Posición** | cuándo aparece la línea |
+| **Duración** | cuánto se queda — un hueco entre items no muestra nada |
+| **Item Notes** | el texto |
+
+El texto va en las **notas del item** (doble clic en el item → *Notes*), un item
+por bloque de letra o acorde.
+
+#### Acordes dentro de la letra
+
+Los acordes pueden escribirse **dentro del texto de la letra**, en la convención
+ChordPro, y se dibujan encima de la sílaba donde caen:
+
+```
+[Am]Cuando te [F]vi, el [C]mundo se [G]paró
+```
+
+Se reconocen fundamentales, alteraciones, cualidades, extensiones y bajos con
+barra — `C`, `Am`, `F#m7`, `Bb`, `Gsus4`, `Dadd9`, `G/B`. Un corchete que **no**
+es un acorde se deja tal cual, así que `[intro]` y `[2x]` siguen legibles.
 
 ### Interacción de Canciones (Filas)
 - Canciones con sub-secciones mostrarán un botón desplegable (Chevrón). Expándelo para ver/operar sobre las sub-regiones individualmente (Intro, Coro, etc.).

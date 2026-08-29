@@ -1,0 +1,63 @@
+name: Validate ReaSet
+
+# Separate from the ReaBoot workflow on purpose. That one validates the
+# packaging surface (index, recipe, immutable source hashes) and is
+# path-filtered to it; ReaSet.html matches none of those paths, so until this
+# file existed nothing in CI ever looked at the file the whole app lives in.
+#
+# The paths list only what is actually validated. Reaset.lua joined them once
+# there were real checks for it — a green tick that checked nothing would be
+# worse than no tick.
+
+on:
+  push:
+    paths:
+      - ReaSet.html
+      - Reaset.lua
+      - Tools/stage_race_test.js
+      - Tools/sync_handoff_test.js
+      - tests/test_reaset_html.py
+      - tests/test_reaset_lua.py
+      - .github/workflows/reaset-html.yml
+  pull_request:
+    paths:
+      - ReaSet.html
+      - Reaset.lua
+      - Tools/stage_race_test.js
+      - Tools/sync_handoff_test.js
+      - tests/test_reaset_html.py
+      - tests/test_reaset_lua.py
+      - .github/workflows/reaset-html.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Node is preinstalled on GitHub-hosted runners, but the tests SKIP when
+      # it is missing rather than fail — so relying on that implicitly would
+      # turn a broken runner image into a silent pass. Pinned explicitly.
+      #
+      # Current LTS rather than the oldest version that works: the runners
+      # already warn that Node 20 is on its way out, and `node --check` plus a
+      # handful of ES5 functions will run on anything, so there is nothing to
+      # gain from pinning to something with a deprecation notice on it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install test runner
+        # lupa embeds a Lua interpreter so the bridge test can RUN Reaset.lua
+        # against a stubbed reaper API and count how often it walks the
+        # project; luaparser is the syntax check.
+        run: python -m pip install --disable-pip-version-check pytest lupa luaparser
+      - name: Check ReaSet.html contracts
+        run: python -m pytest tests/test_reaset_html.py -q
+      - name: Check Reaset.lua contracts
+        run: python -m pytest tests/test_reaset_lua.py -q

@@ -96,7 +96,7 @@ local function get_current_pos()
     return reaper.GetCursorPosition()
 end
 
--- ─── Flexible track name matching ──────────────────────────────────────────
+-- ─── Exact track name matching ─────────────────────────────────────────────
 -- This MUST stay byte-identical to normalize_track_name() in Reaset.lua.
 -- If the two diverge, the web bridge and this tapper can disagree on which
 -- track is "the lyrics track" — the tapper writes to one, the bridge reads
@@ -107,13 +107,10 @@ end
 -- numbering) but NOT here — the tapper would have silently created a
 -- duplicate "Chords" track next to it.
 --
--- The track must still BE the keyword, not just contain it — decoration
--- around it is stripped, extra words are not:
---   • case is ignored             → "LYRICS", "Lyrics", "lyrics"
---   • leading symbols ignored     → "*Lyrics", "##Chords", "_Lyrics", ">Lyrics"
---   • leading numbering ignored   → "01 Lyrics", "3 - Chords"
---   • trailing symbols ignored    → "Lyrics*", "Chords --", "[Lyrics]"
--- "Backing Lyrics" or "Lyrics Bus" stay ordinary tracks, on purpose.
+-- THE NAME IS THE COMMAND, AND IT IS EXACT: "Lyrics", "Chords", "Notes".
+-- One spelling, capitalised. The loose form below is no longer what decides a
+-- match — it exists only so the bridge can recognise a near miss and tell the
+-- user what to rename. Kept identical to Reaset.lua for that reason.
 local function normalize_track_name(name)
     local s = (name or ""):lower()
     local prev
@@ -138,7 +135,7 @@ local function find_matching_track(canonical)
     for i = 0, n - 1 do
         local tr = reaper.GetTrack(0, i)
         local _, name = reaper.GetTrackName(tr)
-        if normalize_track_name(name) == canonical:lower() then
+        if name == canonical then
             matches[#matches + 1] = tr
             if not with_items and reaper.GetTrackNumMediaItems(tr) > 0 then
                 with_items = tr
@@ -154,7 +151,7 @@ local function ensure_target_track()
     -- Check cached track still valid
     if target_track and reaper.ValidatePtr(target_track, 'MediaTrack*') then
         local _, name = reaper.GetTrackName(target_track)
-        if normalize_track_name(name) == canonical:lower() then
+        if name == canonical then
             return target_track
         end
     end
@@ -165,6 +162,25 @@ local function ensure_target_track()
     if #matches > 0 then
         target_track = preferred
         return target_track
+    end
+
+    -- Before creating one: is there a track that is one rename away? The name
+    -- is exact now, so "lyrics" or "01 - Lyrics" no longer matches — and
+    -- creating a second track beside it is the worst possible answer. The
+    -- tapper would fill the new one while the bridge reads neither, and it
+    -- would not surface until a show.
+    local n = reaper.CountTracks(0)
+    for i = 0, n - 1 do
+        local tr = reaper.GetTrack(0, i)
+        local _, name = reaper.GetTrackName(tr)
+        if normalize_track_name(name) == canonical:lower() then
+            reaper.MB('There is a track called "' .. name .. '".\n\n' ..
+                      'The name has to be exactly "' .. canonical .. '" — ' ..
+                      'capitalised, nothing around it.\n\n' ..
+                      'Rename that track and try again. Nothing was created.',
+                      'ReaSet — wrong track name', 0)
+            return nil
+        end
     end
 
     -- Create new track with the canonical name
@@ -373,6 +389,89 @@ function do_stop()
         current_idx, canonical)
 end
 
+-- ─── Generate: place every line at once, no tapping ────────────────────────
+--
+-- Tapping is how you get timing that matches the vocal. Generating is how you
+-- get the words INTO the project in one gesture, roughly placed, so you can
+-- drag the few that matter instead of typing forty items by hand. They are the
+-- same tool because they share the parse, the section filter and the track
+-- rule — three things this file has already had to keep in sync by hand once.
+--
+-- Where the lines go, in order of how explicit the intent is:
+--   1. the time selection, if there is one — you drew it, so you meant it
+--   2. the region under the edit cursor — ReaSet is region-based and a song IS
+--      a region, so this is almost always what was meant
+-- and nothing otherwise: guessing a span from a bare cursor would scatter
+-- forty items across a project with no way to know where.
+local function resolve_span()
+    local ts_start, ts_end = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
+    if ts_end > ts_start then
+        return ts_start, ts_end, "time selection"
+    end
+
+    local pos = reaper.GetCursorPosition()
+    local i = 0
+    while true do
+        local ok, isrgn, rs, re_, name = reaper.EnumProjectMarkers(i)
+        if ok == 0 then break end
+        if isrgn and pos >= rs and pos < re_ then
+            return rs, re_, 'region "' .. (name or "") .. '"'
+        end
+        i = i + 1
+    end
+    return nil, nil, nil
+end
+
+local function do_generate()
+    if #lines == 0 then
+        ui_msg = "Paste or load some text first!"
+        return
+    end
+    local a, b, what = resolve_span()
+    if not a then
+        ui_msg = "No time selection, and the cursor is not inside a region. " ..
+                 "Make a time selection, or put the cursor inside the song."
+        return
+    end
+    -- Explains itself in a message box when the track name is a near miss.
+    if not ensure_target_track() then return end
+
+    reaper.Undo_BeginBlock()
+    local step = (b - a) / #lines
+    for i = 1, #lines do
+        local item = create_item_at(target_track, a + (i - 1) * step, lines[i])
+        reaper.SetMediaItemInfo_Value(item, "D_LENGTH", step)
+    end
+    local canonical = TRACK_TYPES[track_type_idx]
+    reaper.Undo_EndBlock("Lyrics Tapper: generated " .. #lines ..
+                         " items on " .. canonical, -1)
+    reaper.UpdateArrange()
+    ui_msg = string.format(
+        "OK  %d lines spread evenly across the %s (%.2fs each) on '%s'. " ..
+        "Drag the edges to fit.", #lines, what, step, canonical)
+end
+
+-- Reads a plain .txt, one line per lyric line — the format a lyrics sheet is
+-- already in, and the same one the Ableton MIDI generator consumed. Nothing
+-- has to be converted: ReaSet keeps the text in Item Notes, so there are no
+-- MIDI files to make, name, or drag in.
+local function do_load_file()
+    local ok, path = reaper.GetUserFileNameForRead("", "Open a lyrics .txt", "txt")
+    if not ok then return end
+    local f = io.open(path, "r")
+    if not f then
+        ui_msg = "Could not open that file."
+        return
+    end
+    local text = f:read("*a")
+    f:close()
+    full_text = text
+    local parsed, skipped = parse_lines(text)
+    lines = parsed
+    ui_msg = string.format("Loaded %d lines%s. ARM to tap them in, or Generate.",
+        #lines, skipped > 0 and (" (" .. skipped .. " section headers skipped)") or "")
+end
+
 local function do_reset()
     if state == "tapping" then
         reaper.Undo_EndBlock2(0, "", -1)
@@ -579,7 +678,20 @@ local function main_loop()
             end
             pop_font(FONT.tap)
             ImGui.PopStyleColor(ctx, 4)
+
+            -- Generate sits under ARM, not beside it: tapping is still the way
+            -- to get timing that matches the vocal, and this is the shortcut
+            -- for getting the words in at all.
+            ImGui.Dummy(ctx, 0, 4)
+            if ImGui.Button(ctx, "Generate across region / time selection", -1, 30) then
+                do_generate()
+            end
             if disabled_open then ImGui.EndDisabled(ctx) end
+
+            ImGui.Dummy(ctx, 0, 4)
+            if ImGui.Button(ctx, "Load .txt file...", -1, 26) then
+                do_load_file()
+            end
 
         else
             -- ── Teleprompter (tapping / done) ────────────────────────────

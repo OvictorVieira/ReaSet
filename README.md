@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2Fdjenttleman%2FReaSet%2Fmain%2Freaboot.json">
+  <a href="https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2FOvictorVieira%2FReaSet%2Fmain%2Freaboot.json">
     <img src="assets/install-via-reaboot.svg" alt="Install via ReaBoot" height="52">
   </a>
 </p>
@@ -51,7 +51,7 @@
 ### Recommended — ReaBoot
 
 <p>
-  <a href="https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2Fdjenttleman%2FReaSet%2Fmain%2Freaboot.json">
+  <a href="https://www.reaboot.com/install/https%3A%2F%2Fraw.githubusercontent.com%2FOvictorVieira%2FReaSet%2Fmain%2Freaboot.json">
     <img src="assets/install-via-reaboot.svg" alt="Install via ReaBoot" height="52">
   </a>
 </p>
@@ -81,7 +81,15 @@ See the [complete installation guide](docs/USER_GUIDE.md#6-installation) for pla
 4. **Build the show** — create a setlist, add songs and drag them into order.
 5. **Go live** — cue a song, press Play and switch to Live View when needed.
 
-Lyrics and chords are optional. To use them, create tracks matching `lyrics` and `chords`, then place the displayed text in Item Notes.
+Lyrics and chords are optional. To use them, create tracks named **exactly** `Lyrics` and `Chords` — capitalised, nothing around the word — and place the displayed text in Item Notes. The name is the command: `lyrics`, `LYRICS` and `01 - Lyrics` do not match, and the panel says so by name so you know what to rename.
+
+Chords can also be written **inside** the lyric, in the ChordPro convention, and they render above the syllable they land on:
+
+```
+[Am]Quando eu [F]te vi, o [C]mundo [G]parou
+```
+
+A bracket that is not a chord is left exactly as typed, so `[intro]` and `[2x]` stay readable.
 
 ## Requirements
 

@@ -1,0 +1,2296 @@
+# Stage Reliability — Implementation Plan
+
+Epic: [#2](https://github.com/OvictorVieira/ReaSet/issues/2)
+Children: [#3](https://github.com/OvictorVieira/ReaSet/issues/3) ·
+[#4](https://github.com/OvictorVieira/ReaSet/issues/4) ·
+[#5](https://github.com/OvictorVieira/ReaSet/issues/5) ·
+[#6](https://github.com/OvictorVieira/ReaSet/issues/6) ·
+[#7](https://github.com/OvictorVieira/ReaSet/issues/7) ·
+[#8](https://github.com/OvictorVieira/ReaSet/issues/8) ·
+[#9](https://github.com/OvictorVieira/ReaSet/issues/9) ·
+[#10](https://github.com/OvictorVieira/ReaSet/issues/10)
+
+Out of scope for this epic: #1.
+
+This document is the **pre-work audit** required by #2. It records what the code
+does *today*, before any change, so that every later commit can be read against
+a fixed baseline. Line numbers refer to `ReaSet.html` at commit `9a3c568`
+(`Merge pull request #14 from djenttleman/testing/Auri`).
+
+---
+
+## 0. Architecture as it stands
+
+```text
+┌────────────────────┐   wwr_req / wwr_req_recur (HTTP)   ┌──────────────────┐
+│  ReaSet.html (JS)  │ ─────────────────────────────────► │ REAPER Web Remote │
+│  Director / Player │ ◄───────────────────────────────── │  (transport, ext) │
+└────────────────────┘        wwr_onreply(results)        └──────────────────┘
+          │                                                        ▲
+          │ SET/EXTSTATE ReaSet/setlistChunkN + setlistRev          │ GetExtState
+          ▼                                                        │
+   ┌──────────────────────────────────────────────────────────────────┐
+   │  Reaset.lua  (reaper.defer loop — one tick drives everything)     │
+   │  loop_tick · autostop_tick · bridge_tick(lyrics/chords)           │
+   │  sync_tick  → writes  <webroot>/reaset_setlist_sync.json          │
+   │  library_tick → <project>/reaset/setlists/*.json + index          │
+   └──────────────────────────────────────────────────────────────────┘
+                                   │  plain HTTP GET (fetch)
+                                   ▼
+                      ┌────────────────────────────┐
+                      │ Player device (ReaSet.html)│
+                      └────────────────────────────┘
+```
+
+There is **no server**. Every device talks to the same REAPER Web Interface.
+The only shared, cross-device storage is REAPER `ExtState` plus the two files
+`Reaset.lua` writes into the web root / project folder.
+
+---
+
+## 1. Transport — current map
+
+### 1.1 Observed state (produced by REAPER)
+
+| Symbol | Where | Meaning today |
+|---|---|---|
+| `currentPos` | set in `wwr_onreply` `case "TRANSPORT"` (7160) | last position REAPER reported, polled at 33 ms |
+| `isPlaying` | same (7193) | `playState & 1` |
+| `wasPlayingLast` | 7192 | edge detector for the session clock |
+| `_lastTransportTs` | 7180 | timestamp of the last TRANSPORT reply |
+| `getExtrapolatedPos()` | 9255 | `currentPos + elapsed`, used only by the end-of-region trigger |
+| `activeIdx` / `activeRegion` | recomputed **locally in six different places** | first `displayList[i]` whose `[start,end)` contains `currentPos` |
+
+`activeRegion` is *not* a variable. It is re-derived ad hoc in
+`updatePlaybackUI` (8589), `togglePlay` (9362), `smartStop` (9353),
+`liveNav` (10414), `midiGetActiveIdx` (10698) and `toggleCurrentLoop` (8521).
+Every one of those derivations reads the possibly-stale `currentPos`.
+
+### 1.2 Intent state (produced by the user)
+
+| Symbol | Where | Meaning today |
+|---|---|---|
+| `queuedRegion` | global, assigned in `playRegion` (9319/9322) | next song, **only while `queueModeToggle` is checked** |
+| `window._playIntent` | `playRegion` (9313) | `{id, start}` — a *display* clamp for the MIDI-init pre-roll, cleared by TRANSPORT (7167) |
+| `window._playRegionLocked` | `playRegion` (9307), `cueRegion` (9345) | `Date.now()+500` — suppresses the auto-stop STOP only |
+| `window._pendingCuePos` | set by auto-stop (9032/9088), consumed by TRANSPORT (7184) | deferred `SET/POS` that waits for playState 0 |
+
+**There is no `selectedRegion`.** Explicit "the user chose this song while
+stopped" has no representation at all. This is the root of #3.
+
+### 1.3 Play — every entry point
+
+| # | Entry point | Line | Calls |
+|---|---|---|---|
+| 1 | Main transport PLAY button | 4425 | `togglePlay()` |
+| 2 | Live View PLAY | 5080 | `togglePlay()` |
+| 3 | Canvas PLAY | 5228 | `togglePlay()` |
+| 4 | Keyboard `Space` | 10613 | `togglePlay()` |
+| 5 | MIDI `play_pause` | 10687 | `togglePlay()` |
+| 6 | MIDI `play` | 10685 | `wwr_req(1007)` **raw** |
+| 7 | Song row (list) | 8302 | `playRegion(start,id)` |
+| 8 | Song card (grid) | 8217 | `playRegion(start,id)` |
+| 9 | Section row | 8364 | `playRegion(sub.start,sub.id)` |
+| 10 | "Play Song" in expanded panel | 8376 | `playRegion(r.start,r.id)` |
+| 11 | Search result pick | 8187 | `playRegion(...)` |
+| 12 | Keyboard `R` (restart) | 10626 | `playRegion(active…)` |
+| 13 | `delayAfter` timer | 9043 | `wwr_req(1007)` after `SET/POS` |
+
+`togglePlay()` today (9360):
+
+```js
+function togglePlay() {
+    if (isPlaying) { wwr_req(1008); }          // pause
+    else {
+        var activeIdx = /* scan displayList against currentPos */;
+        if (activeIdx === -1 && displayList.length > 0)
+            playRegion(displayList[0].start, displayList[0].id);   // ← #3 race
+        else wwr_req(1007);
+    }
+}
+```
+
+Two defects, both named in #3:
+
+* **`displayList[0]` fallback.** If `currentPos` does not land inside any
+  region — which is exactly what happens in the window between a user's
+  `SET/POS` and the next TRANSPORT reply, and also whenever the cursor sits in
+  a gap between regions — Play starts *song 1*.
+* **No intent input.** Even with a fresh `currentPos`, Play only ever consults
+  the cursor. A tap that has not yet been acknowledged by REAPER is invisible.
+
+### 1.4 `playRegion` — the cue/play/queue conflation
+
+```js
+function playRegion(start, id) {
+    var queueMode = document.getElementById('queueModeToggle').checked;
+    if (!isPlaying || !queueMode) {
+        window._playRegionLocked = Date.now() + 500;
+        window._pendingCuePos    = null;
+        window._playIntent       = { id: id, start: start };
+        seekManualTransport(midiInitPreroll(start), true);   // ← SET/POS + 1007
+        queuedRegion = null;
+        /* clear .queued classes */
+    } else {
+        /* resolve id in displayList or g_subRegionMap → queuedRegion, paint .queued */
+    }
+}
+```
+
+and `seekManualTransport(start, /*startWhenStopped*/ true)` (9281):
+
+```js
+if (!wasPlaying && startWhenStopped) { wwr_req("SET/POS/"+start+";1007"); return true; }
+wwr_req("SET/POS/"+start);
+if (wasPlaying && !smoothSeekEnabled) wwr_req(1007);
+```
+
+Consequences, matching the epic's symptom list one for one:
+
+* **STOPPED + tap = PLAY.** `!isPlaying` takes the first branch, which appends
+  action `1007`. Tapping a song *always* starts it (#3 A/B).
+* **PLAYING + Queue Mode OFF = immediate seek.** `!queueMode` also takes the
+  first branch, so the tap seeks the running transport (#9).
+* **Queue only exists behind a toggle.** `queuedRegion` is reachable only when
+  `queueModeToggle` is checked (#9, Option 1).
+
+### 1.5 Pause
+
+Pause is `wwr_req(1008)` — REAPER action 1008 is *toggle* pause — issued from
+`togglePlay` (9361) and from the `+PAUSE` section marker (8952). There is:
+
+* no manual-intent marker, so the automatic block in `updatePlaybackUI` keeps
+  running against the *pre-pause* `currentPos` for up to a poll interval;
+* no interlock with `queuedRegion` (8966, 9019) — a queued transition whose
+  `subTimeRem`/`timeRem` window is already open will still fire a `SET/POS`
+  after the user pressed Pause;
+* no interlock with `_pendingCuePos` (7184), which fires *on the first
+  `playState == 0` reply* — i.e. it will fire on the reply that reports the
+  user's own pause, moving the cursor off the paused position.
+
+That last one is the concrete mechanism behind "Pause does not feel
+authoritative" in #4.
+
+### 1.6 Stop
+
+`smartStop()` (9352):
+
+```js
+wwr_req(1016);
+if (target !== null) setTimeout(function () { wwr_req("SET/POS/" + target); }, 150);
+```
+
+with `target` = start of the region containing `currentPos`, **or
+`displayList[0].start` if none** — the same first-song fallback as `togglePlay`.
+
+Defects for #4:
+
+* the 150 ms `setTimeout` is un-cancellable and un-guarded — it lands after the
+  user may have already tapped something else;
+* it does **not** clear `queuedRegion`, so 8966/9019 can still fire;
+* it does **not** clear `window._pendingCuePos`, so 7184 fires on the very
+  TRANSPORT reply that confirms the stop;
+* it does not clear `_lastRegionEndTrigger` / `_endOfRegionLocked`, so the
+  end-of-region block can re-arm;
+* `_playRegionLocked` is not set, so the auto-stop branch (9080) is not
+  suppressed either.
+
+Stop entry points: main Stop (4426, hold/tap), Live Stop (5076), Canvas Stop
+(5224), section-row `■` (8358), keyboard `Enter` (10614), MIDI `stop`
+(**raw `wwr_req(1016)`**, 10686).
+
+### 1.7 Automatic transport writers (the complete list)
+
+Everything below can move REAPER without the user touching anything. #4's guard
+must cover all of them.
+
+| Line | Writer | Guarded by `_suppressAutoTransport()` today? |
+|---|---|---|
+| 7187 | `_pendingCuePos` consumption | **no** |
+| 8634 | skipped-region auto-seek | yes |
+| 8696 | skipped sub-section auto-seek | **no** |
+| 8764/8765 | `SONG_END` special marker | yes |
+| 8769/8771 | `STOP` special marker (+ 100 ms `setTimeout`) | yes / **timeout no** |
+| 8920/8938/8943 | `+LOOP:N` / `+LOOPFULL` / `+LOOP` JS fallback | yes |
+| 8952 | `+PAUSE` section marker | yes |
+| 8961 | `>>>` transition | yes |
+| 8966 | queued region at section end | yes |
+| 9017 | song-level loop | yes |
+| 9019 | queued region at region end | yes |
+| 9029/9032 | per-song `stopAfter` | yes |
+| 9039–9044 | per-song `delayAfter` (nested `setTimeout`s) | yes / **timeouts no** |
+| 9056 | chain / auto-advance | yes |
+| 9089 | auto-stop fallback STOP | yes |
+| 7894 | `syncRegions` first-init cursor → `displayList[0].start` | **no** |
+| 9350 | `cueRegion` (`1016;SET/POS`) — used by Next/Prev/MIDI | n/a (user) |
+
+`_suppressAutoTransport()` (5665) is a *reconnect* guard only:
+`Date.now() < _resyncGuardUntil`, armed on a >700 ms reply gap (7119) and on
+page-hide (5800/5806). It has no concept of manual intent. #4 adds a second,
+orthogonal guard rather than overloading this one.
+
+### 1.8 Auto-Stop / NativeLoop / MIDI Init — must be preserved
+
+* **Auto-Stop** is *armed, not detected*: `updatePlaybackUI` (8639–8651)
+  publishes `autoStopStart` / `autoStopEnd` / `autoStop=on` to ExtState only
+  when the key changes; `Reaset.lua:autostop_arm` (166) then stops REAPER at
+  the exact sample in its own defer tick and republishes `autoStopArmed`.
+  JS falls back to `wwr_req(1016)` only when `window._autoStopArmed` is false
+  (9085). **Not to be touched.**
+* **NativeLoop** — `_reaperNativeLoopOn/Off` + `Reaset.lua:loop_arm/loop_tick`
+  (105/207), driving REAPER's own Repeat. **Not to be touched.**
+* **MIDI Init** — `midiInitPreroll()` (9275) subtracts 5 ms so plugins receive
+  MIDI before the region starts; `_playIntent` (9313, consumed at 7167) exists
+  purely to stop that 5 ms from resolving the *previous* region in the display.
+  #3 requires **cue must not pre-roll**: pre-roll belongs to Play, not to
+  selection.
+
+---
+
+## 2. Sync — current map (issue #5)
+
+### 2.1 Producer → transport → receiver → consumer
+
+```text
+PRODUCER (Director browser)
+  saveCurrentState()                        7919
+    ├─ setlists[currentSetlistName] = fmt
+    ├─ localStorage[STORAGE_KEY], [CURRENT_KEY]
+    ├─ _syncPushSoon()                      5963   (1000 ms debounce)
+    └─ _libraryEnqueue(currentSetlistName)  5995
+  _syncPushNow()                            5939
+    ├─ _syncBuildPayload()                  5890   {v,fp,rev,ts,instanceId,currentSetlistName,setlist[]}
+    ├─ SET/EXTSTATE ReaSet/setlistChunk0..N        (base64url, 700 chars each)
+    ├─ SET/EXTSTATE ReaSet/setlistChunkCount
+    └─ SET/EXTSTATE ReaSet/setlistRev              ← Lua's trigger
+
+TRANSPORT (REAPER ExtState → disk)
+  Reaset.lua sync_tick()                    541
+    gate: setlistRev != s_syncLastCount
+    → <webroot>/reaset_setlist_sync.json  = {"v":1,"b64":"…"}
+
+RECEIVER (Player browser)
+  applyModeUI() → _syncStartPlayerPolling() 6160   ← PLAYER MODE ONLY
+    _syncPullNow(false) every 4000 ms       6094
+      fetch(SYNC_FILE + '?t=' + Date.now(), {cache:'no-store'})
+
+CONSUMER
+  _syncApplyPayload(payload,false)          6108
+    ├─ reject if payload.fp !== g_projectKey (only when g_projectKey is truthy)
+    ├─ reject if payload.rev <= _syncLastAppliedRev
+    ├─ reorder displayList by payload.setlist, copy chain/skipped/loop
+    ├─ currentSetlistName = payload.currentSetlistName
+    ├─ saveCurrentState()
+    └─ lastRenderChecksum=''; renderSetlist(); updatePlaybackUI()
+```
+
+### 2.2 Confirmed defects
+
+Each failure mode listed in #5 was checked against the source. Verdicts:
+
+| # | #5's hypothesis | Verdict |
+|---|---|---|
+| 1 | Set switch does not hit the same choke point as edits | **CONFIRMED — primary root cause.** `changeSetlist()` (10511) writes `currentSetlistName`, writes `localStorage[CURRENT_KEY]`, resets `displayList`/`initialized`, calls `syncRegions()` — and **never calls `saveCurrentState()`**. `syncRegions()` *does* call `saveCurrentState()` at 7912, but only after `displayList` has been rebuilt, and the push it schedules carries the **new** name — so the switch does eventually push *if and only if* a REGION reply arrives and the render checksum path runs. Any failure to rebuild (no regions yet, project not loaded) drops the switch silently. The push is also debounced 1000 ms behind it. |
+| 2 | Debounced push never scheduled for a pure switch | **PARTIALLY CONFIRMED** — see above; it is scheduled indirectly and late, never directly. |
+| 3 | Player receives payload but does not rebuild the set | **PARTIALLY CONFIRMED.** `_syncApplyPayload` reorders `displayList` in place from `payload.setlist` (which is order-carrying, so the visible order is right) but never calls `updateSetlistDropdown()`, so the Player's own dropdown keeps showing the old name while the rows change underneath it. |
+| 4 | `saveCurrentState()` after apply re-pushes | **NOT A BUG on a Player** (`_syncPushSoon` returns early outside Director) but **IS a bug for a Director doing a manual Pull**: apply → `saveCurrentState()` → `_syncPushSoon()` → the Director re-broadcasts what it just received under a *new* `rev`. |
+| 5 | localStorage wins over shared state on refresh | **CONFIRMED.** Boot order is: `applyModeUI()` (7102) starts Player polling immediately → a pull can land while `g_projectKey` is still `null`, so the fingerprint check at 6110 is skipped and the payload applies → then the first `REGION_LIST_END` calls `_initProjectStorage()` (6312), which **overwrites** `currentSetlistName` from `localStorage[CURRENT_KEY]` (6324). Stale local name wins. |
+| 6 | library sync and shared sync race during boot | **CONFIRMED** — same window as #5. |
+| 7 | Session-local revision counters ignore a valid payload | **NOT CONFIRMED.** `_syncLastAppliedRev` starts at 0 on every load, so a refreshed Player accepts any `rev >= 1`. The *Director's* `_syncLocalRev` also restarts at 0 after a refresh, which means a refreshed Director's first push carries `rev=1` and a Player that already applied `rev=18` will **ignore it** until the Director pushes 18 more times. Real bug, different from the one hypothesised. |
+| 8 | 4 s polling is an unsafe delay | **CONFIRMED.** 6162: `setInterval(…, 4000)`. Target is ≤1 s. |
+
+### 2.3 `currentSetlistName` — every writer
+
+| Line | Writer | Pushes? |
+|---|---|---|
+| 7033 | boot from `localStorage[CURRENT_KEY]` | n/a |
+| 6324 | `_initProjectStorage()` re-read on project change | **no** |
+| 6070 | library reconcile | writes localStorage directly |
+| 10452 | `createSetlist()` | yes (`saveCurrentState`) |
+| 10500 | `deleteSetlist()` | yes |
+| **10512** | **`changeSetlist()` (the dropdown)** | **no — root cause** |
+| 10536 | `importSetlists()` | **no** |
+| 6137 | `_syncApplyPayload()` | yes (unwanted on a Director) |
+
+---
+
+## 3. Session / Director — current map (issue #6)
+
+| Symbol | Line | Behaviour |
+|---|---|---|
+| `REASET_MODE` | 5277 | `'player'` by default (fails closed) |
+| `REASET_MODE_STORED` | 5278 | true when `localStorage['reaset_mode']` held a real choice |
+| `wwr_req` wrapper | 5303 | Player mode drops any command that is not all-`GET/` segments |
+| `_isWriteCommand` | 5294 | fail-closed classifier |
+| `chooseMode(mode)` | 7060 | PIN prompt, then **`window.confirm` that ALLOWS a second Director** |
+| `applyModeUI()` | 7086 | badge, `body.reaset-player`, starts polling *or* heartbeat |
+| `_dcStartHeartbeat()` | 6268 | writes `directorHeartbeatId/Ts/Name` every **4000 ms** |
+| `_dcForeignActive()` | 6263 | foreign id **and** `Date.now() - _dcLastChangeAt < 9000` |
+| `_dcWatchConflict()` | 6309 | 2000 ms banner poll |
+| probe | 5323 | `GET/EXTSTATE/ReaSet/directorHeartbeat*` every **2000 ms** |
+
+Timing today: beat 4 s · probe 2 s · TTL 9 s (≈2 missed beats) · banner 2 s.
+
+Defects: `chooseMode` **permits** the second Director (7076–7079); the boot path
+`if (REASET_MODE_STORED) applyModeUI()` (7102) starts a heartbeat with **no
+conflict check at all**, so a refreshed stale Director silently re-arms; there is
+no lease, only an advisory last-writer-wins ExtState triple; nothing revokes a
+displaced Director's write authority.
+
+---
+
+## 4. Roles — current map (issue #7)
+
+Only two roles exist. The read-only guarantee is real and lives at one
+chokepoint (`wwr_req`, 5303) plus a visual layer (`body.reaset-player`, CSS
+3802–3960). A third role needs a **third classification**, not a third CSS
+class: transport writes (`1007`/`1008`/`1016`/`SET/POS`) must be separable from
+publish writes (`SET/EXTSTATE/ReaSet/setlist*`, `directorPinHash`,
+`library*`) — today both are simply "not GET".
+
+---
+
+## 5. Visual blocks — current map (issue #8)
+
+* `getSongEnd(song)` (8433) → `'stop' | 'wait' | 'continue' | 'auto'`, derived
+  from `getOverride(id).stopAfter` / `.delayAfter` / `song.chain`.
+* `songEndVisual(song)` (8473) already resolves `'auto'` against
+  `#autoStopToggle.checked` — **for the icon only**. The block logic needs the
+  same resolution as a *value*, so this is where `effectiveSongEnd()` belongs.
+* `renderSetlist()` (8200) builds two layouts. In **list** mode the top-level
+  node is `li.song-container` (8266) with `div.song-row` inside; in **grid**
+  mode the top-level node is `li.grid-card` (8215). Section rows live in
+  `div.section-list > div.section-row` (8362) inside the same `li`, so a margin
+  on `li.song-container` can never leak between sections. That is the safe
+  hook.
+* Skips: the loop `continue`s on `hideSkippedMode && r.skipped` (8218/8241)
+  *after* the totals are accumulated. "Previous relevant song" must therefore be
+  computed over the same predicate the renderer uses to emit rows, not over
+  `displayList[i-1]`.
+* Re-render triggers already exist and all funnel through
+  `lastRenderChecksum = ''; syncRegions()` (or `renderSetlist()`), so live
+  updates need no new plumbing — the checksum at 7913 already includes
+  `g_songOverrides`, but **not** the Auto-Stop toggle state, so a global
+  Auto-Stop flip will not by itself repaint. That is a one-line fix in the
+  Auto-Stop handler.
+
+---
+
+## 6. Dependency graph
+
+```text
+        ┌──────────────────────────────┐
+        │ #10 diagnostics (?diag=…)    │  ← no dependencies; unblocks everyone
+        └──────────────┬───────────────┘
+                       │ (observability used by all)
+      ┌────────────────┼────────────────────────────┐
+      ▼                ▼                            ▼
+┌───────────┐   ┌──────────────┐            ┌───────────────┐
+│ #3 select │──►│ #9 queue     │            │ #5 setlist    │
+│  + Play   │   │ while playing│            │    sync       │
+└─────┬─────┘   └──────┬───────┘            └───────┬───────┘
+      │                │                            │
+      └────────┬───────┘                            │
+               ▼                                    ▼
+        ┌─────────────┐                      ┌─────────────┐
+        │ #4 Pause /  │                      │ #6 single   │
+        │    Stop     │                      │   Director  │
+        └──────┬──────┘                      └──────┬──────┘
+               │                                    │
+               └───────────────┬────────────────────┘
+                               ▼
+                       ┌───────────────┐
+                       │ #7 Controller │
+                       └───────────────┘
+
+        ┌───────────────────────────────┐
+        │ #8 visual blocks (independent)│  ← touches renderSetlist + CSS only
+        └───────────────────────────────┘
+```
+
+Hard edges:
+
+* **#3 → #9 → #4** share one state machine (`selectedRegion` / `queuedRegion` /
+  manual guard). They must land in that order, in one branch.
+* **#7 → #3,#4,#9** — Controller must reuse the transport semantics, not
+  duplicate them.
+* **#7 → #5** — a Controller that does not follow the Director's set is useless.
+* **#7 → #6** — the role model and the lease share `REASET_MODE` and the mode
+  picker.
+* **#8** is independent: it touches `renderSetlist()` row construction and CSS,
+  which no other track edits.
+* **#10** is independent and lands **first** so the other tracks can be
+  instrumented as they are written.
+
+---
+
+## 7. Tracks, branches, and file ownership
+
+`ReaSet.html` is one 11 355-line file, so tracks are separated by **region of
+the file**, and integration is serialized.
+
+| Track | Issues | Branch (deleted after merge — see the rollback table in `STAGE_TEST_MATRIX.md` for the permanent SHAs) | Regions of `ReaSet.html` it owns | Other files |
+|---|---|---|---|---|
+| **F — QA** | #10 | `test/stage-diagnostics` | new `RSDiag` block inserted just after the `wwr_req` gate (~5310); one-line instrumentation calls elsewhere | `docs/STAGE_TEST_MATRIX.md` (new) |
+| **A — Transport** | #3 → #9 → #4 | `fix/stage-transport` | 9281–9370 (`seekManualTransport`/`playRegion`/`cueRegion`/`smartStop`/`togglePlay`), 7160–7195 (TRANSPORT case), 8960–9095 (queue + end-of-region), 10613–10640 (keyboard), 10685–10690 (MIDI), 7894 (init cursor) | — |
+| **B — Sync** | #5 | `fix/active-setlist-sync` | 5890–5975 (payload/push), 6094–6165 (pull/apply/poll), 6312–6330 (`_initProjectStorage`), 10511 (`changeSetlist`), 10530 (`importSetlists`) | `Reaset.lua` `sync_tick` (541) |
+| **C — Session** | #6 | `fix/single-director` | 6255–6320 (heartbeat), 7060–7105 (`chooseMode`/`applyModeUI`/boot), 5277–5310 (mode + gate) | — |
+| **D — Controller** | #7 | `feat/controller-mode` | 5277–5310 (gate → capability classifier), 7060–7105 (picker), CSS 3800–3960, mode badge/i18n | — |
+| **E — Blocks** | #8 | `feat/setlist-block-spacing` | 8200–8390 (`renderSetlist` row construction), 8433–8490 (`getSongEnd`/`songEndVisual`), CSS near `.song-row` | — |
+
+Overlaps that require serialized integration (not blind merge):
+
+* **A ∩ F** at every transport call site — F lands first, A writes its new code
+  already instrumented.
+* **C ∩ D** at `chooseMode`/`applyModeUI`/`REASET_MODE` — C lands first, D
+  extends the role enum it leaves behind.
+* **B ∩ D** at `_syncPushNow`'s Director gate — D reads it, does not rewrite it.
+* **A ∩ E** at `renderSetlist` — A only changes the row's `onclick` target, E
+  only changes the row's classes/wrapper. Different attributes on the same line
+  ⇒ merge by hand.
+
+Integration branch: **`dev/stage-reliability`**, merged in this order:
+
+```text
+#10 → #3 → #9 → #4 → #5 → #6 → #7 → #8
+```
+
+---
+
+## 8. Target state machine (what the tracks build)
+
+```text
+        ┌───────────────────────── observed ─────────────────────────┐
+        │  currentPos      last position REAPER reported             │
+        │  isPlaying       last playState REAPER reported            │
+        │  activeRegion    region containing currentPos (derived)    │
+        └────────────────────────────────────────────────────────────┘
+        ┌───────────────────────── intent ───────────────────────────┐
+        │  selectedRegion  {id,start,end,at}  explicit, while idle    │
+        │  queuedRegion    {id,start,end,at}  explicit, while playing │
+        │  manualGuard     {intent:'pause'|'stop'|null, until:ms}     │
+        └────────────────────────────────────────────────────────────┘
+
+  STOPPED / PAUSED ──tap song X──► selectedRegion = X ; SET/POS X ; stay stopped
+  STOPPED / PAUSED ──Play──────► resolvePlayTarget():
+                                   1. selectedRegion            (explicit)
+                                   2. region containing cursor  (observed)
+                                   3. nothing → plain 1007      (never displayList[0])
+  PLAYING          ──tap song X──► queuedRegion = X ; NO SET/POS ; NO 1007
+  PLAYING          ──Pause─────► manualGuard('pause') ; 1008 ; keep selection
+  ANY              ──Stop──────► manualGuard('stop') ; 1016 ;
+                                 queuedRegion = null ; _pendingCuePos = null ;
+                                 cancel pending timers ; clear end-of-region dedup
+  song end + effectiveEnd == 'continue' + queuedRegion  → SET/POS queued
+  song end + effectiveEnd == 'stop'     + queuedRegion  → stop; queued → selected
+```
+
+`manualGuard` blocks **automatic transport writes only** — never rendering,
+never a subsequent explicit user command.
+
+---
+
+## 9. Risk register / rollback
+
+| Risk | Mitigation |
+|---|---|
+| Cue-only changes muscle memory for existing users | Behaviour is the epic's explicit product decision; documented in `docs/USER_GUIDE*.md` and the test matrix |
+| Manual guard swallows a legitimate auto-advance | Guard is bounded (short TTL) and cleared by the first confirming TRANSPORT reply, never open-ended |
+| Faster polling floods REAPER | Poll a tiny `setlistRev` ExtState value, fetch the full payload only when it changes |
+| Lease arbitration races in the browser | Fail closed — refuse the second Director; move arbitration into `Reaset.lua` only if a real race is reproduced |
+| Rollback mid-show | Every track is a separate branch and a separate small commit; `git revert` of a single track is always possible. The last known-good tag on `main` is `9a3c568`. |
+
+## 10. What cannot be verified in CI
+
+`ReaSet.html` only runs meaningfully inside REAPER's Web Interface (`wwr_req`
+is injected by REAPER; outside it, it is stubbed at 5261). Every behavioural
+claim in #3–#9 therefore ends in **READY FOR MANUAL REAPER TEST**, with the
+procedure in `docs/STAGE_TEST_MATRIX.md`. Static checks that *do* run in this
+repo: `python -m pytest tests/test_reaboot_package.py -q` (packaging contract)
+plus JS syntax validation of the single-file build.
+
+---
+
+## 11. Role permission matrix (as built, #7)
+
+Enforced in three layers, outermost first. The CSS layer is never the only
+thing standing between a role and a write.
+
+1. **Command classifier** (`_commandClass` → `wwr_req` gate). Every command
+   REAPER could receive from this page passes through one function.
+2. **Capability check inside each mutator** (`canEditSetlist()` /
+   `canPublishSetlist()` / `canControlTransport()`).
+3. **CSS** (`body.reaset-controller`) — so a control that would do nothing does
+   not *look* like it worked.
+
+> **Superseded on the Player column.** The read-only *Player* role was retired
+> after this audit; see §13. Both surviving roles drive transport, and the line
+> between them is authoring. The Player column is kept below because it records
+> what the audit measured, and because the migration path depends on it: a
+> device that stored `'player'` comes back as a Controller, gaining exactly the
+> ✅s in the Controller column and nothing else.
+
+| Action | Director | Controller | ~~Player~~ (retired) |
+|---|---|---|---|
+| Play / Pause / Stop | ✅ | ✅ | ❌ |
+| Cue song while stopped / paused | ✅ | ✅ | ❌ |
+| Queue song while playing | ✅ | ✅ | ❌ |
+| Next / Previous (song and section) | ✅ | ✅ | ❌ |
+| MIDI-mapped transport | ✅ | ✅ | ❌ |
+| Reorder setlist | ✅ | ❌ | ❌ |
+| Skip / Loop / Chain / end-state authoring | ✅ | ❌ (state visible, inert) | ❌ (state visible, inert) |
+| Per-song overrides (`⋮` menu) | ✅ | ❌ | ❌ |
+| Create / delete / import / export setlists | ✅ | ❌ | ❌ |
+| Switch active named setlist | ✅ | follow only | follow only |
+| Publish shared setlist (`SET/EXTSTATE ReaSet/setlist*`) | ✅ | ❌ | ❌ |
+| Arm Auto-Stop / NativeLoop in `Reaset.lua` | ✅ | ❌ | ❌ |
+| Set the Director PIN | ✅ | ❌ | ❌ |
+| Claim / take over the Director lease | ✅ | ✅ (explicit, or automatic when nobody is directing — §13) | ✅ (explicit) |
+| Edit mode (drag handles) | ✅ | ❌ | ❌ |
+| Lyrics / chords / Canvas / Live View | ✅ | ✅ | ✅ |
+| Local display prefs (theme, fonts, Auto-Scroll, Hide Skips, Grid) | ✅ | ✅ | ✅ |
+| Smooth Seek, Init Song MIDI, Stop Hold | ✅ | ✅ (local to this device's own seeks / Play / Stop button) | ❌ |
+| Queue Mode switch | ✅ (governs the EDIT-mode audition jump only) | ❌ | ❌ |
+| RECONNECT (restart polling) | ✅ | ✅ | ✅ |
+
+### Command classes
+
+| Class | Shape | Director | Controller |
+|---|---|---|---|
+| `read` | every `;`-segment starts `GET/` | ✅ | ✅ |
+| `transport` | action ids `1007` / `1008` / `1016`, and `SET/POS/…` | ✅ | ✅ |
+| `publish` | everything else — `SET/EXTSTATE`, `SET/EXTSTATEPERSIST`, `SET/REPEAT`, `SET/PROJEXTSTATE`, unrecognised shapes | ✅ | ❌ |
+
+The transport set is a **whitelist**, not a pattern. "Any bare number is an
+action id" would let a Controller send any REAPER action at all, which defeats
+the point of the role. Anything unrecognised is `publish`, so a command added
+later is Director-only until somebody classifies it deliberately.
+
+The one deliberate exception is the Director lease (`_dcWriteLease`), which
+writes `SET/EXTSTATE ReaSet/director*` outside the gate. It has to: the claim
+happens *before* a device is a Director, so gating it would deadlock
+arbitration permanently in favour of whoever was already there. It can write
+those keys and nothing else.
+
+> **Not a security boundary.** REAPER's Web Interface has no authentication
+> unless configured separately, so anyone on the network can drive REAPER
+> directly regardless of what ReaSet allows. This is an operational safety
+> boundary that stops a musician from editing the show by accident, and it is
+> not intended to resist an attacker.
+
+---
+
+## 12. Findings carried over from the first plan revision
+
+An earlier revision of this document (commit `4cb382e`, kept in history) audited
+the same code independently. Its conclusions agree with §1–§5 above almost
+everywhere. Four points it raised are recorded here with what was done about
+each, so nothing from that pass is lost when the two documents merged.
+
+### Acted on
+
+**Followers could not compute block boundaries.** The shared payload carried
+only `chain`, `skipped` and `loop`. But `getSongEnd()` also reads
+`g_songOverrides` — `stopAfter` / `delayAfter`, which live in **this browser's**
+localStorage — and `effectiveSongEnd()` resolves `'auto'` against **this
+device's** Auto-Stop toggle. A Player therefore had no way to know a song was
+marked "always stop" on the Director, and would draw a completely different set
+of blocks from the same setlist. Fixed by adding `end` (the resolved end-state)
+per song and `autoStop` (the global) to the payload, and by having
+`getSongEnd()` prefer a synchronised end-state on a follower.
+
+**Chunked pushes could be assembled across generations.** The chunk bodies,
+the count and the revision are separate HTTP requests. `Reaset.lua` retries
+while any chunk is empty, which covers a *late* chunk — but not a *stale*
+one: a shorter push leaves the previous generation's later chunks in place
+with non-empty values, and a dropped request in the middle of a longer push
+leaves one old chunk between two new ones. Base64 concatenated across two
+generations decodes to garbage and fails at `JSON.parse` on every follower,
+with no signal about why. Fixed by publishing the total payload length
+alongside the count and having `Reaset.lua` refuse to write a file whose
+reassembled length does not match.
+
+### Considered and not done
+
+**Lease arbitration in `Reaset.lua`.** That revision proposed moving
+owner/epoch/TTL into Lua. #6 says explicitly not to add that complexity unless
+a reproducible browser-only race requires it. The claim/settle/check protocol
+in §3 resolves simultaneous acquisition through ExtState's own
+last-writer-wins, and the id tiebreak bounds the residual window to a couple of
+seconds rather than leaving it open. If real-device testing (S11) produces a
+dual-Director state that persists, the Lua arbiter is the next step and this is
+the note that says so.
+
+**Two tabs in one browser share an `instanceId`,** so they are invisible to
+each other's conflict detection. Real, and out of scope: `instanceId` is
+persisted precisely so a Director that refreshes is still recognised as the
+same Director, and the stage scenario is two devices, not two tabs. Noted here
+because it makes two tabs a *bad way to test* #6 — see the test matrix, which
+requires physical devices for exactly this reason.
+
+---
+
+## 13. Role model, revised: two roles and no question on the way in
+
+Added after the epic's implementation, on the project owner's decision. It
+supersedes the three-role model §11 audited.
+
+### What changed
+
+**The read-only *Player* role is retired.** Two roles remain:
+
+| | Director | Controller |
+|---|---|---|
+| Setlist: order, chains, loops, skips, end-states, overrides | ✅ owns it | ❌ follows |
+| Publishes to the other devices | ✅ | ❌ |
+| Play / Pause / Stop / cue / queue | ✅ | ✅ |
+| How many per session | exactly one | any number |
+
+The line between them is **editing, not transport**. Every device in the room is
+there to play the show; a phone on a mic stand that can display the setlist but
+cannot start it is a worse instrument than the spacebar it replaced. Anyone who
+opens ReaSet can move REAPER — only the Director can change what REAPER plays.
+
+**The mode picker no longer opens on the way in.** A device with no stored
+choice used to be held behind a forced three-option modal asking a musician a
+question about a distributed lease protocol, thirty seconds before downbeat.
+The answer is one the code can derive, so it does: the page opens as a
+Controller — usable immediately, transport live, following whatever the
+Director has published — and `_dcAutoResolveRole()` then reads the room. A live
+foreign heartbeat means somebody is already directing; its absence means
+somebody has to.
+
+The picker still exists and is still reachable from the mode badge. It is now
+what it should always have been: the way to *change* a role, not a tollgate.
+
+### Why the automatic claim waits longer than a deliberate one
+
+`_dcBeatIsProofOfLife` judges a foreign Director alive by **whether its
+timestamp changed**, never by comparing a foreign clock to ours (see §6 — two
+devices' clocks disagree, and the heartbeat must not care). The cost is that a
+foreign heartbeat id read once is *ambiguous*: a Director beating normally whose
+timestamp has simply not been seen to change yet, or a corpse left in ExtState
+by a laptop that closed without releasing the lease. Distinguishing them takes
+one full `DIRECTOR_BEAT_MS` observed across the 2s probe — **longer** than the
+`DIRECTOR_CLAIM_MS` window a deliberate claim uses.
+
+A deliberate claim can live with that gap: a human pressed the button, and
+`_dcWatchConflict` resolves a double-claim by id tiebreak within a couple of
+seconds. An automatic claim cannot, because it fires on **every boot of every
+device** — the same odds that are acceptable once are, repeated, a phone that
+walks in during the second song and takes the show off the Mac. So when a
+foreign heartbeat id is present but unproven, the resolver waits a full
+`DIRECTOR_TTL_MS` and looks again. Nothing is lost by waiting: the device is
+already a working Controller with live transport; the only thing it cannot do
+meanwhile is edit.
+
+### Two things the automatic path deliberately refuses
+
+**A configured Director PIN blocks it.** The PIN exists to make directing a
+deliberate act, and an automatic claim would satisfy it without anyone typing
+it. `_directorPinHash === null` (probe reply not yet landed) is treated as
+*unknown*, not as "no PIN" — claiming on a value that has not been read is
+exactly the blind claim the PIN prevents — so the resolver defers once and
+decides on evidence.
+
+**An automatic role is never persisted.** It is a reading of the room right
+now, not a decision, so every boot takes the reading again. That is what makes
+it self-healing: close the Director's laptop and the next device to reload
+picks the lease up, instead of a room full of Controllers with nothing to
+follow. Only an explicit pick — the selector, or the badge — is stored, and
+`_roleChosenExplicitly` guards the resolver so a choice made during its claim
+window always wins.
+
+### Consequences elsewhere
+
+- **`REASET_MODE` now defaults to `'controller'`**, not `'player'`. It still
+  fails closed on the property that matters: a race before the mode resolves
+  can move the playhead but can never mutate the shared setlist. A stray seek
+  is undone with one tap; a setlist overwritten by a device that turned out not
+  to be the Director is not.
+- **`_dcStandDown()` drops to Controller.** A displaced Director loses the
+  *setlist*, not the transport. The musician holding it is still in the band and
+  still has to be able to start the next song.
+- **`localStorage['reaset_mode'] === 'player'` is migrated to `'controller'`**
+  on read, so devices carrying the retired role come back usable rather than
+  booting into a role nothing renders.
+- **The `body.reaset-player` stylesheet is gone** — ~140 lines of dimmed
+  transport and inert rows that nothing could match any more.
+- **The read-only keyboard gate is gone.** Space / Enter / KeyO / arrows are all
+  transport, and both roles may drive transport.
+- **`director-only` rows are no longer hidden from a Controller.** The three
+  that carry it without `authoring-only` — Smooth Seek, MIDI Init, Stop Hold —
+  all tune how *this device* issues *its own* transport (verified:
+  `setSmoothSeek` and `setStopMode` write only localStorage, and
+  `initSongMidiToggle` is read solely by `midiInitPreroll`). A Controller that
+  may press Stop is entitled to say whether its own Stop button takes a tap or a
+  hold. The rows that publish — Queue Mode, Auto-Stop — carry `authoring-only`
+  as well, and that is what hides them.
+
+### Locked by tests
+
+`tests/test_reaset_html.py`: `test_player_role_is_gone`,
+`test_default_mode_cannot_author`,
+`test_fresh_device_resolves_its_role_instead_of_asking`,
+`test_stand_down_drops_to_controller_not_read_only`. Each was verified to fail
+against a mutation of the source that reintroduces the behaviour it forbids.
+
+### Still requires a real-device test
+
+Two devices, one REAPER. §13 changes *who may do what* and *how a role is
+chosen*; neither can be proven in this repository, because `wwr_req` is injected
+by REAPER's own web server. See `docs/STAGE_TEST_MATRIX.md` §C.
+
+---
+
+## 14. Session clock: the Director owns it
+
+Reported from the stage: the phone read **6:02:21** while the Mac read **1:48**,
+same show, same REAPER.
+
+### What it had been measuring
+
+Not "how long the project has been open". Wall-clock since **the first playback
+on that device**, written to that browser's own `localStorage`, and it never
+expired — it survived reloads, quitting the browser, and changing REAPER
+projects. Three separate reasons the two numbers could not agree:
+
+1. **Per-device by construction.** Each browser wrote its own
+   `reaset_session_start`. There was no shared value, so two devices agreed only
+   by coincidence.
+2. **It started on that device's first Play**, not the show's. A phone used for
+   soundcheck at 14:00 and a Mac first played at 19:30 were measuring two
+   different things, both correctly.
+3. **Nothing ever cleared it.** The only reset was a 600ms long-press. The 6h
+   was a leftover start timestamp from an earlier session, still counting.
+
+The same value drove `#live-show-time`, so Live View inherited the discrepancy.
+
+### Why the wire carries ELAPSED and not a start timestamp
+
+The obvious synced design — publish `sessionStart` as epoch milliseconds, let
+each device compute `Date.now() - start` — **is wrong**, and wrong in exactly
+the way this codebase already went out of its way to avoid once.
+
+A phone and a Mac do not agree on `Date.now()`. Phones drift and resync against
+the carrier; a laptop that slept holds a stale clock for a while after waking.
+Publishing an absolute start renders that disagreement *directly on screen* as
+an offset — so the two devices would still differ, only now the difference would
+look like a bug in ReaSet rather than in the clocks.
+
+So the Director publishes **elapsed seconds**, on every heartbeat:
+
+```
+SET/EXTSTATE/ReaSet/sessionElapsed/<integer seconds>      // -1 = no session
+```
+
+and a follower anchors it against its **own** clock the instant it arrives:
+
+```
+displayed = publishedElapsed + (now − whenIReceivedIt)
+```
+
+Only local differences are ever taken. Foreign clock skew cancels out completely
+and cannot reach the screen. This is the same rule `_dcBeatIsProofOfLife`
+follows for the heartbeat: **judge by what changed locally, never by comparing a
+foreign clock to ours.**
+
+The anchor is refreshed **only when the value changes**. The Director publishes
+every `DIRECTOR_BEAT_MS` (4s) and the probe polls at 2s, so every value is seen
+more than once; re-anchoring on a repeat would restart the extrapolation each
+time and drag the displayed time visibly backwards.
+
+`sessionElapsed` is published as a **separate request**, not as another segment
+on the heartbeat write. `_dcWriteLease` bypasses the publish gate, and it may
+keep doing so for exactly the `ReaSet/director*` keys and nothing else —
+widening it to carry the clock would trade a real invariant for one saved HTTP
+request.
+
+### Why it expires on idle, not on age
+
+A start timestamp that never expires is how six hours accumulated. But "reset
+after N hours" is wrong too: a long rehearsal is a real session, and zeroing it
+mid-way is the failure the persistence exists to prevent.
+
+What separates two sessions is a **gap** — nobody played anything for hours — so
+that is what is measured. The stored record is `{s: start, t: lastPlayback, p:
+projectKey}`, and a gap of more than `SESSION_IDLE_RESET_MS` (4h) since the last
+observed playback discards it on load. A six-hour rehearsal with playback
+throughout keeps counting; a laptop that played at 14:00 and is reopened at
+20:00 starts over. `t` is refreshed while playing, throttled to one
+`localStorage` write a minute — the clock ticks every second and a write per
+second for the length of a show is not a thing to do on a phone.
+
+The legacy bare-integer format is read as `{s: v, t: v}` — last seen *at* the
+start — so anything old enough to be the reported bug expires on the very first
+load after this change.
+
+A different REAPER project is a different show: `_initProjectStorage` clears the
+clock when `g_projectKey` changes, alongside every other project-scoped store.
+
+### Handover does not restart the show
+
+A device that was following a Director which then went away — or that took over
+from it — already holds the show's elapsed time in its anchor, so on promotion
+it adopts that as a local start rather than counting from its own first
+playback. Without this, the Mac closing its laptop would reset everyone's clock
+to whenever the phone happened to press Play.
+
+Whichever session began **earlier** wins: a device that has been in the room
+since soundcheck knows more about when this started than a Director that joined
+an hour in. The arithmetic is entirely local — the anchor is already expressed
+as "this many seconds, at *this* instant on *my* clock".
+
+### Reset is Director-only
+
+A follower clearing its local value would watch the Director's next published
+tick overwrite it half a second later: a button that silently does nothing. The
+long-press refuses on a follower, `#tb-session-grp.is-readonly` drops the
+pointer cursor so it does not look pressable, and the `title` says which clock
+is on screen. On the Director the reset publishes the `-1` sentinel immediately
+rather than waiting for the next beat, so it reaches every device within one
+poll.
+
+### Fallback
+
+A follower shows its **own** clock whenever no Director is live —
+`_dcForeignActive()`, the same proof-of-life the lease uses. So a device that
+loses contact mid-show keeps counting instead of freezing, and a device running
+solo has a clock at all. `_sessionDisplaySec()` is the single place that decides,
+which is what stops `#tb-session` and Live View's `#live-show-time` from ever
+disagreeing.
+
+One visible consequence, accepted: a freshly-booted follower shows its own clock
+for the few seconds proof-of-life takes, then switches to the Director's. It is
+self-correcting and honest — the alternative is showing `0:00` while pretending
+to know something it has not established yet.
+
+### Locked by tests
+
+`test_session_clock_never_puts_a_timestamp_on_the_wire`,
+`test_session_clock_reanchors_only_on_change`,
+`test_session_clock_reset_is_director_only`, and
+`test_session_clock_behaviour` — the last **executes** the real restore, observe,
+display and promotion code under Node against a stubbed clock and
+`localStorage`, covering ten cases including the reported bug, a six-hour
+rehearsal that must NOT expire, the legacy format, the skew immunity property,
+and both handover directions. Each check was verified to fail against a mutation
+reintroducing what it forbids — an absolute timestamp on the wire, re-anchoring
+on duplicates, a follower that may reset, expiry on age instead of idle, a
+remote value treated as absolute, a missing local fallback, a legacy record
+given a free pass, a promotion that restarts the clock, one that clobbers an
+older session, and one that does its arithmetic against the foreign clock.
+
+### Still requires a real-device test
+
+The skew case is the one that separates this implementation from the naive one,
+and it cannot be run here. See `docs/STAGE_TEST_MATRIX.md` §S.
+
+---
+
+## 15. Controller surfaces, Slide to Stop, and the two-icons-one-symbol bug
+
+Four fixes from the owner's second pass on real hardware.
+
+### A Controller gets a banner, not a dead dropdown
+
+The setlist picker was left in place for a Controller with `pointer-events: none`
+and `opacity: 0.85`. That is a *disabled control*, and a disabled dropdown still
+promises a choice: the chevron is drawn, the tap does nothing, and on a phone
+that reads as an app that has hung — not as a permission boundary.
+
+It is now replaced outright. `body.reaset-controller` hides `.setlist-picker`
+and shows `.setlist-banner`, which states the same two facts the picker carried
+and offers nothing: the active set's name, and — since a Controller has no
+picker to open — whether the project is reachable at all, which would otherwise
+be unlearnable on that device.
+
+Same visual family as `.n-select-btn`: same height, radius, type and inset,
+minus the border, hover, chevron and pointer. The dot pulses only while REAPER
+is playing, borrowing the Director badge's living-dot language so one glance
+says both "this is the set" and "the show is running".
+
+Both surfaces are filled from `renderSetlistPicker()`, so they cannot show
+different setlists — a bug the picker already had once against the hidden
+`<select>` it shadows.
+
+`_refreshSetlistBanner()` is called from `updatePlaybackUI()`, which runs at
+**transport poll rate**. The `title` write is therefore guarded on change:
+`classList.toggle` is a no-op when the state already matches, an attribute
+assignment thirty times a second is not, and that is the exact shape of the two
+performance faults already fixed on this branch.
+
+### A Controller sees only the songs that will play
+
+Hide Skips is a *view preference* for the Director, who needs to see the songs it
+dropped in order to put them back. For a Controller it is not a preference at
+all: a skipped song is not in tonight's set, the Controller cannot un-skip it,
+and a greyed-out row it must learn to ignore is one more thing to misread on a
+dark stage between songs.
+
+`_hideSkippedEffective()` returns `hideSkippedMode || !canEditSetlist()`.
+Deliberately **derived, never assigned** into `hideSkippedMode` — that value is
+persisted, so forcing it would silently rewrite the Director's own preference on
+any device that had ever been a Controller.
+
+Both render loops and, critically, **both render checksums** use it. A checksum
+left on the raw preference is worse than no filter at all, because the list then
+keeps its old contents across a role change until something unrelated happens to
+move the checksum — a bug that only appears sometimes. `applyModeUI()` clears
+`lastRenderChecksum` and repaints, so the change lands on the role switch rather
+than on the next poll. The sidebar toggle is `authoring-only`, since where it is
+forced it could only ever be a switch that does nothing.
+
+### Slide to Stop
+
+Stop is the one transport control whose mistake is unrecoverable in front of an
+audience, and on a phone it sits between PLAY and Loop where a thumb reaching for
+either can land on it.
+
+The old guard was a three-second **hold**, and holding is the wrong gesture for
+it: it is invisible until it completes, indistinguishable from a tap that did not
+register, and a musician who presses and lets go has no way to tell whether the
+app is broken or whether they simply did not press long enough. *That is exactly
+the "I pressed Stop and it did not stop" report this replaces* — the label bug
+fixed in `8990f6f` was the same failure seen from the other side.
+
+A slide cannot be performed by accident, shows its own progress, and is abandoned
+by doing nothing. Same reasoning macOS uses for slide-to-power-off.
+
+- Commit threshold is **82%** of travel, and the stop fires on **release**, not
+  on crossing it. A finger that reaches the end and slides back has changed its
+  mind, and being abandonable is the whole point.
+- The label follows the state: `SLIDE TO STOP` → `RELEASE TO STOP` when armed.
+- **Pointer events**, not the inline `onmousedown`/`ontouchstart` pairs the markup
+  carried: those fire twice on a touchscreen that also reports mouse events, and
+  the drag has to survive the finger leaving the button — which is the *normal*
+  way this gesture ends, since the thumb is at the far edge by then. Pointer
+  capture keeps the stream coming.
+- `touch-action: none` in slide mode only. Without it the first vertical wobble
+  hands the gesture to Safari's scroller and the thumb stops following.
+- Tap mode is unchanged and still available from the sidebar.
+- Stored `'hold'` **migrates to `'slide'`** — a device that came back wanting a
+  gesture nothing implements is a Stop button that does nothing at all, again.
+
+Every rule is written against a shared `.stop-ctl` class rather than the three
+buttons' own classes, because the last time each carried its own markup, two of
+the three never updated their label. The retired `stop-holding` machinery and its
+`@keyframes stop-fill` are deleted rather than left inert.
+
+Keyboard Enter still stops immediately, deliberately: the risk this guards
+against is a fat finger on a phone, and pressing Enter is not one.
+
+### RECONNECT no longer wears the loop icon
+
+The reconnect button drew `&#8635;` — the identical codepoint `.t-btn-loop` draws,
+two buttons away on the same transport bar. Mid-show that is a coin flip between
+"repeat this song" and "restart the network connection", and those are not
+neighbouring mistakes. It is now an inline plug SVG, which says *connection* and
+cannot be read as *repeat*. The sidebar's copy of the action uses the same icon.
+
+### Locked by tests
+
+`test_every_stop_button_says_what_it_wants`,
+`test_stop_slide_fires_on_release_not_on_threshold`,
+`test_stop_mode_migrates_the_retired_hold`,
+`test_controller_gets_a_banner_not_a_dead_dropdown`,
+`test_controller_list_excludes_songs_outside_the_set`, and
+`test_reconnect_does_not_share_the_loop_glyph`.
+
+Twelve mutations were run against these. **Three of them initially passed** and
+the tests were tightened until they failed: counting `_hideSkippedEffective()`
+call sites was satisfied by the function's own declaration, so the raw preference
+is now banned from the render path outright; nothing asserted the reconnect glyph
+at all; and asserting `_libConnected` merely *appeared* in the banner function was
+satisfied by the `title` line surviving after the offline class was removed.
+
+### Still requires a real-device test
+
+**T23–T30** and **C18–C22** in `docs/STAGE_TEST_MATRIX.md`. T25 (slide back and
+release must NOT stop) and T26 (diagonal drag on a phone must not be stolen by
+the scroller) are the two that cannot be reasoned about from here.
+
+---
+
+## 16. pt-BR, and closing the gap where strings bypassed the table
+
+Issue #14. Two problems, and the second had to be fixed first or the first only
+half-lands.
+
+### The table now has three columns, and every column is still a key
+
+```js
+I18N_ROWS = [ ["English", "Español", "Português"], … ]   // 211 rows
+I18N_LANGS = ['en', 'es', 'pt']
+```
+
+`t()` and `_i18nWalk()` took `REASET_LANG === 'es' ? 1 : 0` — a **boolean**, which
+is what limited the table to two languages. Both now take `_langIndex(lang)`, and
+an unknown language reads as English rather than as `undefined`.
+
+The design property worth preserving is that **every column is a lookup key**, not
+just English. That is what lets translation work with no markup annotations at all
+and makes re-running the walk idempotent. A third column had to keep it: a Spanish
+node must still be findable when the user picks Portuguese, and a Portuguese node
+when they pick English. A per-language dictionary keyed on English would only
+translate in one direction, and switching twice would strand half the screen in
+whatever language it last landed in.
+
+`I18N_MAP` registers all three cells per row, **first writer wins** — where two
+rows would share a translation, the earlier row keeps the key rather than a later
+one silently stealing it. A test asserts no such collision exists at all, because
+a cell owned by two rows cannot be translated deterministically.
+
+Empty cells fall back to English. A row added without its translation should
+degrade to a readable string, not an invisible one.
+
+Browser detection gained `/^pt/i` and the switcher a third segment.
+
+### The strings that never reached the table
+
+Eleven dialogs held their text inline, in Spanish, so they rendered Spanish on an
+English or Portuguese device: the Director PIN prompt and its four outcomes, the
+Pull confirmation, the MIDI-mappings clear, the device rename, the reorder prompt,
+and the new-setlist prompt. All now go through `t()` with an English source string
+and a row.
+
+The mode-selector card — **the first screen a new device ever sees** — was
+Spanish-only in the markup regardless of the setting. It was already rewritten in
+English by `a03c61e`; §16 adds its rows.
+
+### The part that keeps it from decaying
+
+Nothing *fails* when a string bypasses the table. It renders, it is readable to
+whoever wrote it, and only a user in the other language sees the seam — which is
+how a phone set to English showed
+
+> ⚠ El dispositivo "Mac · Chrome" **is now the Director — this device is read-only**
+
+one sentence in two languages. A reviewer will not reliably catch that. Four tests
+do:
+
+- `test_i18n_table_is_complete_and_unambiguous` — three full columns, no empty
+  cells, and no cell owned by two rows.
+- `test_every_language_is_reachable` — both readers index by language rather than
+  branching on Spanish, every language in the table has a switcher button, and a
+  pt-BR browser is detected.
+- `test_no_dialog_bypasses_the_translation_table` — **this is the one that stops
+  the next feature from reintroducing the bug.** Any `prompt`/`confirm`/`alert`
+  whose first argument is a multi-word string literal fails the build.
+- `test_markup_prose_is_in_the_table` — pins the mode selector's prose
+  specifically, since that is the surface that actually went wrong.
+
+Eight mutations were run and all eight were caught: `t()` and the walk reverted to
+a boolean, pt dropped from browser detection, the PT button removed, a row left
+with an empty pt cell, two rows given the same translation, a dialog put back
+inline, and mode-selector prose moved out of the table.
+
+### Four rows deleted
+
+The `Stop Hold (3s)` help body, `■ STOP (Hold)`, `Mode: Hold` and `STOP (Hold)`
+went with the hold gesture in `402b84d`. Translating strings nothing renders is
+how a table grows to a size nobody wants to maintain.
+
+### The judgement call
+
+The owner chose to keep the table **inline**. ReaSet ships as a single file
+dropped into `reaper_www_root`, `Sortable.min.js` being separate is already a
+documented install step that has to be got right, and this session alone
+contained two "did you update the file?" incidents. A third file to keep in sync
+is another chance to run something old on a stage — and it fails silently, which
+is the worst property a translation can have.
+
+### Still requires a real-device test
+
+Set a phone to pt-BR and open ReaSet: every screen, every dialog, every banner,
+and no sentence mixing two languages. Switch language at runtime and confirm
+what is already on screen follows — the DOM walk does this, so anything that
+does not follow is a string still outside the table.
+
+---
+
+## 17. Instance identity: the same song, twice in one set
+
+Issue #13, first half. Membership and the `+` picker are still to come; this is
+the foundation they need, and it is the part that touches transport.
+
+### The problem is identity, not UI
+
+Two instances of a song occupy the **identical time range in REAPER**. So the
+test every scan in this file used —
+
+```js
+if (currentPos >= r.start && currentPos < r.end) { activeIdx = j; break; }
+```
+
+— matches **both** rows, and `break` takes the earlier one. Nine scans did this.
+
+The wrong row highlighting is the cosmetic half. The dangerous half is
+`findNextValidSong(activeIdx)`: playing instance #2 advanced from instance #1's
+index, so the show jumped to whatever follows the *earlier* copy. A repeat near
+the top of the set would send the band back to song 2 in the middle of the
+encore — and nothing would look broken until it happened.
+
+### Two ids, and a rule about which is which
+
+```text
+r.id    which REAPER region this is      — shared by repeats
+r.uid   which ENTRY in tonight's list    — unique per row
+```
+
+| Keyed on the **row** (uid) | Keyed on the **song** (region id) |
+|---|---|
+| every DOM id: `row-`, `bg-`, `dur-`, `chev-`, `slist-`, `loop-counter-`, `_ctx_*` | `getOverride` / `setSongOverride` |
+| `expandedSongs` | stop / wait / colour / description |
+| `chain`, `loop`, `skipped` | `g_subRegionMap` (already keyed by song *name*) |
+| `selectedRegion`, `queuedRegion`, `_playIntent`, `lastActiveID` | |
+| `data-uid`, and the order Sortable rebuilds from it | |
+
+The split is a judgement, stated once so it is not re-derived at each call site:
+*"play this one twice, and loop it the second time"* is the whole reason repeats
+exist, so `loop` is per-row — while stop/wait/colour describe the **song**, and a
+repeat is the same song, so both rows must agree. Per-instance overrides may be a
+reasonable feature one day; they should be a decision, not a side effect of an
+identity refactor, and a test asserts they have not become one by accident.
+
+DOM ids are not merely *ambiguous* if keyed on the region — two elements would
+carry the same `id` attribute, and `getElementById` returns the first. The
+progress fill, the countdown, the active highlight and the loop badge would all
+paint the earlier row while the later one played, silently, with no error
+anywhere.
+
+Sections belong to a song by **name**, so two instances share one section list.
+Their rows are scoped as `_subUid(parent, sub)` = `<parentUid>.<subId>`.
+
+### Resolving which instance is playing
+
+`currentPos` cannot answer it — not "does not currently", *cannot*, because the
+two rows are indistinguishable to the transport. So it is not asked to. This is
+the observed-vs-intent split #3/#4/#9 already built, and repeats make the
+evidence strictly weaker while leaving the decision exactly as good.
+
+`activeInstanceIdx()` consults `_activeUidHint`, set wherever playback is
+**commanded** to a specific row: Play from a selection, a cue, a queued song
+consumed at a boundary, an auto-chain, a wait-resume. It is cleared on a manual
+Stop and dropped automatically when the transport leaves the hinted row.
+
+It deliberately does **not** `break` at the first match — the hinted instance may
+be the later one, and stopping early is precisely the bug. With no hint it
+returns the first match, which is the best answer available when playback started
+from REAPER or the cursor was dragged by hand; that is documented as a fallback
+rather than left to look arbitrary.
+
+`findNextValidSong` / `findPrevValidSong` needed no change at all: they were
+already index-based, and every fragility was upstream in the nine scans.
+
+### Three places that silently collapsed duplicates
+
+- **`syncRegions()`** used `delete mainMap[id]` as the "already placed" mark.
+  That idiom cannot represent a repeat *at all*: the second saved entry finds the
+  key gone and is dropped without a trace. Consumption is tracked separately now.
+  Rows are also built by `_makeInstance()` rather than pushing the shared map
+  entry, because the same object at two indices means one row's Loop toggles the
+  other's.
+- **`Sortable.onEnd`** rebuilt the order from `data-id` with a first-match scan.
+  Both rows carry the same `data-id`, so dragging either would have collapsed the
+  pair into one entry on the next save. It reads `data-uid` now.
+- **`_syncApplyPayload`** bound two payload entries to the same local object and
+  pushed it in twice. A follower now *builds* a row per entry and adopts the
+  Director's uid verbatim, so both devices key their DOM off the same value.
+
+### The numeric reorder prompt is gone
+
+It was a second reorder path bound to the song's index number, and the only one
+that raised a native `prompt()` — a modal asking a musician to type a position,
+on a phone, during a show. Dragging by the handle is the feature and has worked
+all along.
+
+### Persistence is unchanged
+
+`setlists[name]` still stores `{id, chain, skipped, loop}`. Uids are handed out
+at build time and are stable for the life of the page only; nothing durable is
+keyed on one. An old setlist therefore loads unchanged, which is acceptance test
+7 satisfied by construction rather than by a migration.
+
+### A defect found in the test helper itself
+
+`strip_comments()` — which most static assertions in `tests/test_reaset_html.py`
+are built on — did not understand **regex literals**. ReaSet contains
+
+```js
+subOv.description.replace(/"/g, '&quot;')
+```
+
+and the `"` inside that regex opened a string literal that never closed. Every
+one of the ~210,000 characters after it came back **unstripped**, so any
+assertion of the form `"X" not in strip_comments(body)` could be satisfied — or
+defeated — by prose in a comment, anywhere past that point.
+
+It surfaced only because a new test looked for a function that had been deleted
+and found the comment explaining the deletion. It had been quietly weakening
+assertions before that. The scan now handles regex literals, and
+`test_strip_comments_survives_a_regex_containing_a_quote` guards the helper the
+other tests depend on.
+
+### Locked by tests
+
+`test_no_scan_resolves_the_active_row_positionally`,
+`test_dom_ids_key_off_the_instance`, `test_overrides_stay_keyed_on_the_song`,
+`test_the_numeric_reorder_prompt_is_gone`, `test_every_row_is_its_own_object`,
+and `test_auto_advance_follows_the_playing_instance` — the last **executes** the
+real `activeInstanceIdx()` and `findNextValidSong()` against a list holding the
+same song at index 0 and index 2, and asserts that playing the second copy
+advances to what follows the *second* copy. That is acceptance test 10, and it is
+the case that would have caught the old behaviour.
+
+Nine mutations were run and all nine caught, including two that initially passed
+and forced better tests: pushing the shared map entry instead of a constructed
+row, and a constructor that returns its source.
+
+### Still to do on #13
+
+Membership as its own concept (show mode listing only the set), the `+` picker,
+`✕` removing rather than skipping, and the roles guard on those new paths.
+
+### Still requires a real-device test
+
+Everything here. Acceptance tests 8–15 of #13 need REAPER, and 12 (playback
+started outside ReaSet must not flicker the highlight between two instances)
+cannot be reasoned about from here at all.
+
+---
+
+## 18. Membership: the setlist becomes a repertoire
+
+Issue #13, second half. §17 built the identity this needs.
+
+### Exclusion had no way to be said
+
+`displayList` held every region in the project, and exclusion was expressed as
+`skipped: true` — which means *"in the list, greyed out"*. That is a different
+statement from *"not in the list"*, and there was no way to make the second one.
+
+Now:
+
+| | means |
+|---|---|
+| **skip** | in the set, greyed out, not played tonight |
+| **remove** | not in the set at all — still in the REAPER project, reachable from the `+` picker |
+
+They live in different modes, for the same reason the drag handle does: skip is a
+*performance* decision a Director makes during a show; remove is *structural
+authoring*. Edit mode already hid `.song-actions` and revealed the drag handle,
+so the remove button belongs on that side and the ✕ in show mode still means skip.
+
+### Membership needs no new storage
+
+An entry's **presence** in `setlists[name]` is its membership — which is exactly
+the format already on disk. `displayList` is the set, in order; `g_offSetlist`
+holds everything else in the project and is read *only* by the picker. Nothing
+about playback may walk it, and a test enforces that: transport, auto-advance and
+the block grouping all iterate `displayList`, so a song nobody added being in it
+means the show can chain into it.
+
+The refresh branch of `syncRegions()` is where that matters most — it runs about
+once a second for the life of the page, so a leak there would quietly re-absorb
+the whole project.
+
+### One deliberate exception
+
+**An empty setlist absorbs the whole project on its first build.** Without it,
+opening ReaSet on a new project would show an empty list and a picker —
+technically correct and a terrible first thirty seconds. Once a set has any entry
+at all it is curated, and a region added in REAPER later appears in the picker
+rather than silently joining the show.
+
+This also makes migration a non-event: every existing setlist already contains
+everything, so it loads exactly as before. Acceptance test 7 by construction.
+
+### Known limitation, stated rather than hidden
+
+Emptying a setlist completely and then reloading brings the whole project back,
+because an empty set is indistinguishable from a new one **in this storage
+format** — and the epic's constraint is not to change that format without a fix
+requiring it. Distinguishing them needs either a per-setlist "curated" flag (a
+format change) or a device-local marker (which a second device would not see, so
+two devices would disagree about the same set).
+
+Removing every song from a set is a rare deliberate act, and the recovery — it
+comes back — is benign next to the alternative of a blank first run. If it turns
+out to matter, the fix is a format change and should be taken as one.
+
+### The picker allows repeats
+
+It lists what the project has and the set does not, then every song already in
+the set, tagged **AGAIN**. That second group is the point: a song can legitimately
+be played twice in one show, which AbleSet does not allow and #13 requires.
+
+Adding appends. Position is then a drag, which is the gesture the list already
+teaches — a second "insert at index N" affordance would be the numeric reorder
+prompt growing back under a different name.
+
+Removing one instance of a repeat leaves the song in the set, one row lighter; it
+returns to the picker only when its **last** instance goes. Removal also clears
+any selection, queue entry or active-instance hint pointing at that row, since
+intent aimed at a row that no longer exists is a cue nobody can see.
+
+### Roles
+
+`removeFromSetlist()`, `addSongToSetlist()` and `openAddSongPicker()` each check
+`canEditSetlist()` at the function, not only in CSS — #13 acceptance test 16. The
+add row is additionally rendered only for a Director and CSS-hidden outside edit
+mode, but neither of those is what stops a write.
+
+### Locked by tests
+
+`test_off_setlist_songs_never_reach_playback`, `test_remove_is_not_skip`, and
+`test_membership_actions` — the last **executes** the real `addSongToSetlist()`
+and `removeFromSetlist()` and covers the repeat in both directions: adding a song
+already in the set, and removing one instance of a repeat without the song
+leaving.
+
+Eight mutations run, eight caught. One initially passed and forced a much better
+test: re-appending off-setlist regions in the refresh branch was invisible to an
+assertion that only checked `g_offSetlist` was mentioned *somewhere* in
+`syncRegions()`. The test now asserts the refresh branch contains no
+`displayList.push` at all.
+
+### Still requires a real-device test
+
+#13's acceptance tests 1–6 and 8–15. In particular 6 (add/remove/reorder reach
+followers) and 14 (a follower renders both instances in the right order) are
+multi-device and cannot be reasoned about here.
+
+---
+
+## 19. What the identity refactor broke, and how it was found
+
+§17 moved every song DOM id onto a uid and scoped every section id by its
+parent row. An audit of the four subsystems that read those — Live View,
+Canvas, the lyrics/chords panels, and the per-section loop — found **five**
+defects. Three of them affected **every setlist**, not only repeats, and all
+three failed silently.
+
+Worth recording as a process point: the automated suite was green throughout.
+These are not the kind of defect a static assertion finds unless somebody first
+asks "what else reads this?" — the tests were locking the *new* contract, and
+these were places the old contract survived untouched.
+
+### The three that hit everyone
+
+**Auto-expand was dead.** The guard read `expandedSongs[activeRegion.uid]`
+while the call wrote `toggleExpand(activeRegion.id, ...)`. The key was
+therefore never set, so it re-fired on every song change, and `toggleExpand`
+looked up `slist-` / `chev-` / `row-` ids built from a region id — none of
+which are rendered. Unlike the other row actions, `toggleExpand` has no
+region-id fallback, so nothing rescued it.
+
+**Tapping a section painted no highlight.** A section's uid is scoped as
+`<parentUid>__<subId>`, which no `displayList` row carries, so
+`_resolveTapTarget` missed and fell through to the raw `g_subRegionMap` object
+— which has no uid at all. Two things then broke at once: `_rowElFor` looked
+for `subrow-<bareSubId>` and found nothing, and `noteActiveInstance` was handed
+a bare sub id that `activeInstanceIdx()` can never match, so the hint was
+dropped as stale on the next tick.
+
+**`flashRow` threw on every call.** `_newUid` produced `12#3`, and while
+`getElementById("row-12#3")` is fine, `querySelector("#row-12#3 .load-btn")` is
+an **invalid selector** — `#` opens a new id token — so it raised
+`SyntaxError` on every Next / Previous and every MIDI navigation.
+
+That last one is the instructive one. The uid was fine everywhere it was used
+with `getElementById`, and broken in the single place a selector was built from
+it. **The separators are now `_` and `__`**, chosen so a uid is always a valid
+CSS identifier, and a test asserts it — because fixing only `flashRow` would
+have left the next selector to rediscover the same bug.
+
+### The two that need a repeat
+
+**"▶ Play Song" dropped the row.** The expanded-controls button called
+`playRegion(start, id)` without the uid, so pressing it inside the second
+instance cued the first — and then hinted the wrong row, which is the half that
+makes the show jump.
+
+**`SONG END` / `STOP` was suppressed on an adjacent repeat.**
+`_lastSpecialTriggerPos` is keyed on an **absolute position**, and two
+instances of one song occupy identical positions. In a set containing `A, A`
+the marker fired for the first copy and was then suppressed forever for the
+second, which ran straight past it. It is now reset on a section change,
+alongside the two dedup flags that already were.
+
+### One more, tightened while there
+
+`_prevActiveSubId` held a bare sub id. A song whose sections cover it end to
+end with a **single** section re-enters the same id when playback crosses from
+one instance to the next, so `loopCount` and `_loopExhausted` never reset and
+the second copy started with the first's spent loop. It is now scoped by the
+parent row.
+
+### What was checked and is genuinely fine
+
+- **Live View's section map** writes `seg.dataset.subid` and reads it back
+  against the same bare id, inside a container it rebuilds itself. These are
+  `data-*` attributes on freshly created nodes, not global DOM ids — there is
+  no collision to have. Its `_lrmLastSongId` cache keys on the region id
+  *deliberately*: segment geometry is identical for two instances, so keying on
+  the uid would force a rebuild producing a byte-identical track.
+- **Canvas** uses only static element ids from markup and inherits `activeIdx`
+  and `activeSub` from `updatePlaybackUI`, so it names the correct instance's
+  successor for free.
+- **Lyrics and chords** build no DOM id from a region or sub id, and cache on
+  text content rather than identity. The one identity-dependent thing they do —
+  `findNextValidSong(_lyActiveIdx)` for the "next song" label — is a case the
+  refactor *fixes*.
+- **The loop counter badges** round-trip correctly: written scoped, stored
+  scoped in `_loopCounterSongId` / `_loopCounterSubId`, read back verbatim.
+
+### Two pre-existing gaps, not caused by this work
+
+`window.subStates` — where a manually toggled section loop or skip lives — is
+neither **persisted** nor **synced**. Toggling a section loop on the Director
+does not reach a Controller, and does not survive a reload.
+
+Marker-driven loop (`+LOOP`, `+LOOPFULL`, `+LOOP:N`) has neither problem,
+because every device parses the marker names out of REAPER itself. That makes
+the marker the robust path and the button a rehearsal tool, which is worth
+saying out loud in the docs rather than leaving users to discover.
+
+### Locked by tests
+
+`test_uids_are_valid_css_identifiers`, `test_no_selector_is_built_from_a_uid`,
+`test_auto_expand_reads_and_writes_the_same_key`,
+`test_section_tap_carries_both_identities`,
+`test_position_keyed_dedups_reset_on_section_change`,
+`test_every_row_control_passes_the_row`, and `test_section_tap_resolution` —
+the last **executes** the real `_resolveTapTarget` against a section of a
+repeated song and asserts both identities come back: the section row for the
+highlight, the parent row for the hint.
+
+Ten mutations run, ten caught. One initially passed and forced a scoped
+assertion: reverting the section-change key to a bare sub id was invisible to a
+file-wide search for `_subUid(activeRegion, activeSub)`, since that call also
+appears where the section DOM ids are built.
+
+### Still requires a real-device test
+
+**L01–L18** in `docs/STAGE_TEST_MATRIX.md`. L01, L02 and L03 are the three
+regressions above and are cheap to check first.
+
+---
+
+## 20. What happens when a song ends
+
+The single most important decision in this file, and until now the only one
+with **no automated coverage at all**: seven branches inlined in the middle of
+`updatePlaybackUI`, tangled with DOM reads and `wwr_req` calls, so there was no
+way to ask it a question without a running REAPER.
+
+`resolveBoundaryAction(ctx)` is that decision, lifted out **unchanged** — same
+conditions, same order, same fall-through — and made pure. It takes a context
+and returns what to do; the caller still performs every side effect, so nothing
+about the timing, the locks or the command ordering moved. This was an
+extraction, not a change.
+
+### The order is the behaviour
+
+| | Condition | Action |
+|---|---|---|
+| 1 | native loop armed for this region | nothing — Lua owns the jump |
+| 2 | `region.loop` | seek back to this song's start |
+| 3 | queued song **and** end-state is `continue` | jump to the queued song |
+| 4 | per-song **stop** | stop; queue-or-next becomes the pending cue |
+| 5 | per-song **wait N** | stop, pause N seconds, resume into queue-or-next |
+| 6 | `chain`, or Auto-Stop off | seek to the next song, still rolling |
+| 7 | Auto-Stop on and not chained | stop; queue-or-next becomes the pending cue |
+
+**Rule 3 is the one worth reading twice.** The queue used to be checked *first*
+and therefore beat everything, including a song explicitly marked "always stop
+here" — which inverts the block workflow this tool exists for. Inside a block,
+songs run on; the last song of a block stops so a human decides when the next
+one begins. Queueing during a block must not silently turn its final stop into
+a continuation.
+
+So the end-state decides **whether** playback continues, and only then does the
+queue decide **where** it continues to. Tapping a song during a block that ends
+in a stop does not make the show run on — it stops, and the song you tapped is
+what the next Play starts. That is deliberate, and it is the behaviour most
+likely to look like a bug until you have run a block on stage.
+
+Rule 5's fall-through is also load-bearing: a wait with **nowhere to go** drops
+through to rules 6 and 7 rather than swallowing the boundary. The inlined
+version did this by accident of structure; the extracted one does it on purpose
+and a test covers it.
+
+### Diagnostics
+
+Every boundary now logs one `BOUNDARY` line under `?diag=transport`, naming the
+action and its target. When a transition surprises somebody, that line says
+which of the seven branches ran — which is the question a screen recording
+cannot answer.
+
+### Locked by tests
+
+`test_what_happens_when_a_song_ends` **executes** the real function across all
+seven branches, fifteen cases, including all three the show depends on: plays
+straight on, stops at the end, and a mid-song tap replacing the natural next.
+
+`test_the_boundary_decision_has_no_side_effects` keeps it pure. A `wwr_req`
+sneaking back in would make the decision untestable again and — worse — would
+look tested.
+
+Eight mutations run, eight caught, including a direct reintroduction of the
+pre-#9 bug where the queue beat a stop.
+
+### A fixture that could not exist
+
+The first draft of the test asked what happens to a song set to **wait** and to
+**continue** at once. That state cannot occur: `getSongEnd()` derives the
+end-state *from* `stopAfter` / `delayAfter` / `chain`, and `effectiveSongEnd()`
+then resolves `'auto'` against the global toggle. The harness now derives it the
+same way, so an impossible fixture is impossible to write — the context's fields
+are not independent, and a test that pretends they are teaches nothing.
+
+### Still requires a real-device test
+
+**B01–B11** in `docs/STAGE_TEST_MATRIX.md`. These are about what is **audible**
+— a gapless chain sounds different from a chain with a 40ms hole in it, and no
+static test can hear that.
+
+---
+
+## 21. A Director that stood down alone
+
+Reported from the desktop: it was marked **Controller** having never stopped
+being Director, and the banner announced that another device had taken over —
+with no other device in the room.
+
+### The cause needed no second device
+
+`_directorClaimId` is only ever filled by the 2s diagnostic probe reply.
+`requestDirectorLease()` decided at **2.6s**:
+
+```js
+var won = (_directorClaimId === me) && !_dcForeignActive();
+```
+
+Two ways for a lone incumbent to fail that test:
+
+1. **The reply had not arrived yet.** `''` is not `me`, so `won` was false.
+   Likelier the busier REAPER is — which is exactly when a show is running.
+2. **A stale claim id from another device's earlier session.** These keys are
+   `SET/EXTSTATE`, which survives the REAPER session, not the browser's. A
+   phone that opened yesterday leaves its id sitting there; today the desktop
+   reads it, sees `!== me`, and concludes it lost.
+
+Then it got worse on its own. Standing down stops the heartbeat, so the next
+device to open found nobody beating and **legitimately** claimed the role.
+Now there really was a foreign Director, and the banner became true — which is
+why it looked like a takeover rather than a fault.
+
+### The rule differs by caller, and that is the fix
+
+| | Rule | Why |
+|---|---|---|
+| **New claim** (badge, auto-resolve) | fail **closed** — no evidence the claim landed means no lease | assuming otherwise is how two devices end up driving one REAPER |
+| **Re-verify an incumbent** | fail **open** — only a **live foreign heartbeat** takes the role away | absence of evidence is not evidence of a competitor |
+
+A live foreign heartbeat is the one signal here that silence cannot fake:
+`_dcBeatIsProofOfLife` requires the value to have *changed*, so a corpse in
+ExtState cannot produce it. It is also the same evidence `_dcWatchConflict`
+already uses, so the two agree by construction.
+
+The claim write is now followed by an immediate probe rather than waiting out
+the 2s poll. That does not change the rule — it just makes the common case land
+well inside the window.
+
+### The banner was lying
+
+`_setDisplacedBanner` said *"another device is now the Director"*
+**unconditionally**, so a stand-down that had nothing to do with another device
+sent people looking for a phone that was not there. It now checks
+`_dcForeignActive()` and otherwise says the device stepped down and how to take
+the role back. It was also still using a string no longer in the translation
+table, so it rendered untranslated.
+
+### The banner also covered what it was warning about
+
+`#reaset-banner-stack` is `position: fixed` at `top: --topbar-h`, so it sat
+**on the setlist row** — the row carrying the active setlist's name, which is
+the one thing a musician needs while a warning says something changed.
+
+`.app-topbar` now carries `margin-bottom: var(--reaset-banner-h)`, inserting
+exactly the measured banner height into the flex column after the top bar.
+`--reaset-content-top` gained the same term, so the full-screen views stop being
+covered too — that comment used to describe overlaying as deliberate, and it was
+the same defect seen from another angle.
+
+The height is **measured**, never assumed: the text wraps to one or two lines
+depending on width and language, so a hardcoded value is wrong on exactly the
+devices this matters for. `--reaset-banner-h` is `0px` whenever no banner is up,
+which is almost always, so this costs nothing the rest of the time.
+
+### RECONNECT now states the connection
+
+A button that looks identical whether or not anything is wrong asks the musician
+to remember what it is for and to guess whether now is the moment. On a dark
+stage neither happens.
+
+- **Connected** — green, **disabled**, quiet. A status light, not a control.
+  Disabled on purpose: there is nothing to repair, and a pressable button
+  invites a mid-show press that restarts polling for no reason.
+- **Lost** — red, broken-plug icon, pulsing. The only thing on that bar that
+  moves.
+
+Driven by the **same** `_lastReplyTs` test as the badge dot, so the two can
+never disagree about whether REAPER is answering. The pulse honours
+`prefers-reduced-motion`, and colour plus icon still carry the state without it.
+
+**`disabled` was not enough, and the reason is a specificity trap.** The first
+version shipped with the attribute set and still repainted under the cursor,
+because `.t-btn-sync:hover` has the **same specificity** as
+`.t-btn-sync.is-live` and sits **later** in the file — so it won. `.t-btn:active`
+did the same thing one level up, shrinking a button that deliberately does
+nothing.
+
+`disabled` stops the click; only CSS stops it *looking* pressable, and the two
+have to agree. The hover rule is now guarded with `:not(:disabled)`, the press
+transform is cancelled for any disabled transport button, and the connected
+state pins its own hover and active colours so nothing later can repaint it.
+
+Caught on a real screen, not by the suite — which is why the assertion added
+with the fix checks the *guard*, not just that a hover rule exists.
+
+### Locked by tests
+
+`test_an_incumbent_director_needs_evidence_to_be_displaced`,
+`test_the_displaced_banner_does_not_invent_a_takeover`,
+`test_a_warning_banner_does_not_cover_what_it_warns_about`, and
+`test_reconnect_button_reports_the_connection`.
+
+Nine mutations run, nine caught. One initially passed and forced a scoped
+assertion: removing the pulse was invisible to a file-wide search for
+`animation:`, which appears in dozens of other rules.
+
+### A process note
+
+The first attempt at this fix **applied only half of itself** — an anchor
+mismatch aborted the script after `_dcVerifyStoredDirector` had been given a new
+option that `requestDirectorLease` did not yet accept. Half a fix is worse than
+none, and only the test suite's own failure caught it. Every edit script in this
+work asserts its match count for exactly this reason; the lesson is that a
+multi-edit script must be all-or-nothing, and this one was not.
+
+### Still requires a real-device test
+
+**D01–D10** in `docs/STAGE_TEST_MATRIX.md`. D01 and D02 are the reported bug:
+reload the desktop repeatedly, alone, with REAPER busy, and confirm it stays
+Director every time.
+
+---
+
+## 22. One view at a time
+
+Reported from the desktop: three tabs lit at once — LYRICS, CHORDS and CANVAS —
+with only Canvas actually on screen. *"Nunca desseleciona."*
+
+### The tab row was telling the truth
+
+`updateTopTabs()` reported exactly what was open, and three views really were.
+That is the bug: **two of these views open at once is not a layout that exists.**
+
+Lyrics, Chords, Live and Canvas are all `position: fixed; inset: 0` full-screen
+overlays at z-index 200, 210 and higher. The higher one covers the lower one
+completely. They were nonetheless tracked as four independent booleans, and
+opening one never closed the others — so Lyrics → Chords → Canvas left all three
+flagged open, two of them invisible underneath, and their tabs lit forever.
+
+An earlier fix (`f8d287c`) made the tabs *show which view is open*. It was
+correct as far as it went, and it went to the wrong layer: the tab row was
+faithfully rendering a state that should never have existed.
+
+### The fix is at the four places a view opens
+
+`closeOtherViews(keep)` runs in `toggleLyricsPanel`, `toggleChordsPanel`,
+`openCanvasMode` and `openLiveView`. Not in the tab row.
+
+Teaching the tab row to pick a winner by z-index would have made the *tabs*
+honest and left the *state* wrong — and then Escape would close a view nobody
+could see, the lyrics poll would keep running behind Canvas, and the next
+feature to ask "is Lyrics open?" would get the wrong answer. The invariant
+belongs where it can actually be maintained.
+
+Toggling still works: a second press on the open view closes it and lands on
+SHOW, because each toggle keeps its own open/close branch and only the *opening*
+branch closes the others.
+
+### Locked by a test that runs the transitions
+
+`test_only_one_view_can_be_open` executes the real toggles against stubbed DOM
+elements and asserts, **after every transition**, that at most one view is open
+and exactly one tab is lit — then checks *which* tab, for the exact sequence
+from the bug report.
+
+The tests that already existed (`test_view_tab_highlight_contract`,
+`test_view_tabs_have_one_owner`) passed throughout. They checked that the tab
+markup and its single writer were correct, which they were. Nothing checked the
+*state* the writer was rendering. That is the gap worth remembering: a contract
+test on the renderer cannot catch a bad model.
+
+Six mutations run, six caught.
+
+### Still requires a real-device test
+
+**W01–W05** in `docs/STAGE_TEST_MATRIX.md`. W01 is the reported sequence.
+
+---
+
+## 23. Closing REAPER ends the session
+
+Reported on the current build: quit REAPER, come back, and the clock read six
+hours.
+
+### §14's rule was necessary and not sufficient
+
+The idle rule expires a session after four hours with **no playback**. The case
+that actually happens does not look like that:
+
+> Played at 17:00. Quit REAPER at 20:00. Came back at 23:00.
+
+The gap since the last playback is **three** hours — under the threshold — so
+the record restored and the clock displayed `now − 17:00` = six hours. Correct
+by its own rule, and wrong. §14 solved "yesterday's rehearsal" and left
+"quit and came back after dinner", which is the routine one.
+
+### The signal was already there
+
+`Reaset.lua` publishes a `tick` counter that **starts at 0 every time the
+script runs**. A tick *lower* than the highest one seen means it restarted —
+which means REAPER did. No new key, no Lua change, no extra install step, and
+every device sees the same counter, so they all reset together.
+
+The high-water mark is **persisted**, because the case that actually happens is
+quitting REAPER *and* closing the browser. Without that the page comes back
+with no memory and the restart is invisible — which is precisely the report.
+
+Written to `localStorage` at most every 30s. The tick advances about twice a
+second, and a write at that rate is the same mistake the setlist push made in
+`8dc40f9`. A stale high-water mark only ever makes the comparison *more*
+conservative, never less.
+
+`''` is not a restart. It means the script is not running — or has just quit —
+and treating it as one would zero the clock every time `Reaset.lua` is stopped.
+
+### The reset now has two paths, gated differently
+
+| | gate | why |
+|---|---|---|
+| `resetSessionClock()` — the long-press | **Director only** | a follower's would be overwritten by the next published tick half a second later |
+| `_sessionClear()` — automatic | **none** | a REAPER restart happens to every device at once; gating it would leave every Controller counting from a session that ended |
+
+`_sessionClear()` also drops the Director's last **published anchor**
+(`_sessionRemoteSec` / `_sessionRemoteAt`). Without that a follower keeps
+extrapolating from the old value until the next beat arrives, so the two devices
+disagree for a few seconds across exactly the event that was meant to zero them
+both.
+
+### The rule, complete
+
+The clock resets when **any** of these happens, and they compose:
+
+1. REAPER restarts
+2. Nobody plays anything for four hours
+3. The REAPER project changes
+4. The Director long-presses the clock
+
+### The accepted consequence
+
+**If REAPER crashes mid-show and you reopen it, the clock zeroes.** That is the
+same signal as a deliberate restart and cannot be told apart from it. A crash
+mid-show is a disaster in which the clock is the smallest problem; "quit and
+came back" happens weekly and was confusing every time. The routine case wins.
+
+### Locked by tests
+
+`test_closing_reaper_ends_the_session` **executes** the real observer across six
+cases: ticking upward keeps the clock, a restart clears it, a fresh browser
+against a still-running REAPER keeps it, a fresh browser after a restart clears
+it (**the reported case**), `''` keeps it, and the persistence is throttled.
+
+`test_an_automatic_session_reset_is_not_director_gated` keeps the two paths from
+collapsing into one.
+
+Seven mutations run, seven caught.
+
+### Still requires a real-device test
+
+Quit REAPER with the browser open and with it closed, in both orders, and
+confirm the clock is at `0:00` on **both** devices when everything comes back.
+
+---
+
+## 24. The transport bar, and the iPad that stopped updating
+
+Reported off one photograph of a phone: *"acho q ficou ruim os botoes ali.. ta
+dando foco no stop ao inves do play... o loop realmente não da pra saber q é
+loop"*, and separately *"eu tenho um iPad mini q não atualiza mais mas tenho o
+chrome... queria usar elementos ai q de pra eu executar nele essa tela de boa
+sem quebrar nada"*.
+
+Two problems that look unrelated and are not: both are about the transport bar
+being designed for the machine it was written on rather than the one it runs
+on.
+
+### 24.1 Area is hierarchy
+
+PLAY was 17% of the bar. A full-red Stop slide was 48%.
+
+That is the wrong way round in the only way that matters on a stage. The
+loudest colour and the largest target belonged to the one action nobody wants
+to trigger by accident, and the control the whole bar exists for was the
+smallest thing on it. Nobody reads a transport bar mid-song; they glance at it
+in peripheral vision from a few metres away, and at that distance size and
+colour are the entire vocabulary. Everything else — labels, icons, borders — is
+for the rehearsal room.
+
+**Stop moved to its own row, above Play.** Two things follow from that, and the
+second is the one that makes it right rather than merely tidier:
+
+- The slide gets the full width, so it has **314px of travel on a phone where
+  it had 23**. A 23px track is a tap with extra steps, which is the one thing
+  Slide to Stop exists to stop being.
+- On a device propped on a stand the bottom edge is the shortest reach, and
+  what gets reached for blind — mid-song, between fills — is PLAY. Putting Stop
+  on the near row would have made the show-ending control the easiest one to
+  hit. It is on the far row, where a mis-reach lands on nothing.
+
+The track is dark rather than red; the red lives on the thumb, which is the
+part that has to be found. Tap mode collapses back to one row, because a plain
+button needs no travel.
+
+**One button, re-parented by mode.** Two Stop buttons in the markup would need
+two of everything that keeps a Stop control honest — the label, the class, the
+gesture, the diagnostics — and §15 records what happened the last time this bar
+carried three copies of it: two never updated their label at all, so on a fresh
+device the button said STOP, wanted a three-second hold, and did nothing for a
+tap. Silently.
+
+**Loop was drawn with U+21BB, which is the reload mark.** That is why nobody
+could name it, and it sat beside a reconnect button where "refresh" is a
+plausible reading — the same two-icons-one-symbol failure §15 fixed between
+Loop and RECONNECT, resurfacing because the glyph that stayed was itself wrong.
+It is now the media repeat mark, two runs with arrowheads at opposite ends, and
+it carries the word LOOP. A symbol nobody can name is not an icon.
+
+### 24.2 A phone on its side is not a tablet
+
+Found by diffing computed geometry against the previous build, which was
+supposed to be a regression check on the compatibility sweep and instead
+surfaced a defect of my own.
+
+The bar took 65px from the setlist on a phone and 104px on a tablet. In
+landscape it was far worse: a phone on its side is **844px wide and 390px
+tall**, so a width-only media query handed it the tablet's generous bar — 181px,
+**46% of the screen**, leaving 108px of setlist. About one song.
+
+Width alone was the wrong axis for a tier that spends height. The tablet tier
+is gated on both now, and a short-viewport tier compresses the bar to what a
+finger needs: 46% of the screen down to 31%, setlist from 108px to 169px.
+
+Compressing it then took the Stop track to 32px, which is thin enough that a
+thumb landing slightly high misses the one control that has to work. 44pt is
+the floor, and the press that begins this drag is a tap like any other.
+
+### 24.3 The engine, not the browser
+
+Chrome on iOS is the system WebKit with a different icon. The engine on a
+tablet that has stopped receiving updates is whatever the last iOS for it
+shipped, and installing another browser changes nothing — which also means a
+user-agent string cannot answer any question worth asking here, since the
+failing device reports Chrome.
+
+**Nothing that breaks on that engine throws.** It drops the declaration or the
+event it cannot handle and renders something plausible-but-wrong. That is why
+none of it would surface in review, and why none of it would surface in a
+browser that is not broken:
+
+| Feature | Landed in | What the tablet renders instead |
+|---|---|---|
+| Pointer Events | Safari 13 | Stop is not ugly, it is **inert** |
+| `touch-action` | Safari 13 | the page scrolls out from under the drag |
+| flex `gap` | 14.1 | 46 containers with their children touching |
+| `inset` | 14.1 | an overlay collapsed to the top-left corner |
+| `clamp()` | 13.1 | stage-sized type rendering as body text |
+| `aspect-ratio` | 15 | a swatch grid with no height |
+| `-webkit-sticky` | pre-13 | the topbar scrolls away with the list |
+
+The gesture handlers now take `(button, x)` rather than an event, so one body
+serves pointer, touch and mouse, and every engine difference is confined to the
+binding. Touch and mouse bind **exclusively** when pointer is absent — a device
+reporting both would otherwise run the drag twice. The touch path calls
+`preventDefault` itself, since `touch-action` arrived in the same version, and
+listens on the document, since `setPointerCapture` did too and this gesture
+normally ends with the finger off the element.
+
+The flex-gap fallback is generated, one rule per container, gated on a class
+set only by a **measured** probe: two zero-width children in a 1px-gap flex row
+are 1px wide where gap works and 0 where it does not.
+
+Its first classifier asked "is this rule a flex container?" by looking for
+`display: flex` in the same rule, and five walked through it — each was
+`display: none` in its own rule and became flex from a state rule or a shared
+class elsewhere. The stylesheet is free to say `display` anywhere, so a check
+that has to *recognise* flex cannot be trusted to. The burden is inverted
+instead: a gap declaration must announce itself as grid in its own rule, or
+carry a fallback. Decidable from one rule, and it fails safe.
+
+### 24.4 Driving the engine instead of reasoning about it
+
+The no-Pointer-Events path had never run anywhere. It was written from the
+compatibility tables, reviewed, and shipped — and a static test can only check
+that it *exists*, which is not the same as it working. On the one control whose
+failure mode is "the show does not stop", that was the largest remaining
+unknown in the branch.
+
+Chromium cannot be made old, but it can be made to lack the thing the code
+branches on. Deleting `window.PointerEvent` before the page's script runs is
+exactly what makes `_HAS_POINTER` false, so the fallback binds and can be
+driven with real touch events. `Tools/legacy_engine_test.js` does that, and
+forces every gap to zero for the layout half.
+
+Four gesture cases, because each is a different way for this control to be
+wrong: a completed slide stops once, an abandoned one does not stop at all, a
+tap on a slider does nothing, and a tap in tap mode stops **once** — not twice
+when the synthetic mouse event a touchscreen sends lands 300ms after
+`touchend`.
+
+**Its spacing section shipped worthless and mutation testing is what caught
+it.** It asserted only that the two engines agree, and deleting every margin
+from the transport row left it green: that row is spaced by margins in both
+modes, so it agrees with itself at zero. A check that cannot distinguish
+"correct" from "collapsed" is a green light that means nothing, which is worse
+than no check at all. It now asserts the controls are separated *at all* before
+asserting the two agree about by how much.
+
+### 24.5 What is still unproven
+
+Real iOS 12 touch quirks — scroll momentum, the 350ms click delay, the
+proprietary gesture events — reproduce on that iPad and nowhere else.
+`V02` in the matrix (drag the Stop thumb on the tablet) is worth more than
+every other case in its section combined: if the gesture is inert there, the
+device cannot go on stage, and nothing else in the section matters.
+
+## 25. Editing is a session, and the way in has to look like a door
+
+Reported, in the owner's words, on finding the colour picker: *"porra eu vi q o
+edit ta atras do show... horrivel essa UI/UX, eu NUNCA iria imaginar q tava ali
+o botão de editar"*.
+
+### The button was answering the wrong question
+
+`#editModeBtn` displayed the **current mode**: "SHOW" when you were not
+editing, "EDIT" when you were. That is a status readout wearing the shape of a
+button. A Director looking for a way to edit the set saw a control that
+appeared to announce they were in show mode, and read it — correctly, for a
+label — as a statement rather than an offer.
+
+Everything structural lives behind it. The `⋮` row menu is `display: none`
+outside `body.reaset-editing`, and that menu is where loop, skip, end-state,
+the note and the new colour picker all live. So one badly named button made
+five features unfindable, and the colour picker shipped the week before was
+never seen at all.
+
+The fix is that a control names its **action**. The button reads EDIT, always,
+because that is what tapping it does.
+
+### Two ways out, because leaving needs to mean something
+
+A mode you can only leave by pressing the same button again has one exit and
+no way to say "undo all that". Entering now takes a snapshot; leaving is
+either **Apply** (keep) or **Discard** (put it back). While editing, EDIT
+steps aside so the bar never offers three answers to a two-answer question.
+
+### What Discard actually has to undo, and what it deliberately does not
+
+**Discard is a restore, not an un-buffer.** Every mutator still writes through
+immediately, so the other devices see edits as they are made. That was the
+existing behaviour and it is kept on purpose: buffering every edit until Apply
+would touch every mutator in the file, and — worse — would make the Director's
+screen disagree with what the room is actually following. A Director fixing
+the set between songs needs the phones to be right, not eventually right.
+
+The snapshot has to cover three stores that are genuinely different:
+
+1. **`displayList`** — the order and the per-row `chain` / `skipped` / `loop`
+   flags. Restoring `setlists[name]` instead would be a no-op that looks
+   correct: `saveCurrentState()` serialises the named setlist **from**
+   `displayList`, so the old array would be overwritten by the next save.
+2. **`g_songOverrides`** — end-state, delay, note and the local colour, keyed
+   by region id rather than by row.
+3. **The REAPER project itself.** Region colours are not in this browser. No
+   amount of restoring local state reaches them, so Discard pushes each
+   touched region back to the colour it had, one pair per region over the
+   wire format the block-colour write already used.
+
+For (3) the remembered value is the **raw** colour REAPER reported, not the
+colour the row renders. A `[red]` flag in a region *name* also produces a
+colour; pushing that back into the project would change a colour ReaSet never
+set. And it is remembered **once per region per session** — first write wins —
+so changing your mind twice still undoes to what you walked in with. That
+guard is load-bearing precisely because a REGION poll lands about once a
+second and refreshes the raw value in between two picks.
+
+### One thing removed for being untrue
+
+An earlier draft cleared `_lastSavedSig` before the restoring save, with a
+comment explaining that the skip-if-unchanged signature would otherwise
+"swallow the publish that tells the other devices to go back". Mutating that
+line away changed nothing, in the harness or in reason: the reverted state
+differs from the edited one the signature last saw, which is the entire point
+of the signature. The line was deleted rather than kept as harmless defence,
+because a comment asserting a danger that does not exist is worse than no
+comment.
+
+### Changing the setlist ends the session
+
+The snapshot describes rows in one named set. Switching sets while editing
+would leave Discard holding a list that belongs somewhere else, so
+`changeSetlist()` re-snapshots: the switch commits what came before and starts
+a fresh session. `discardEdits()` also guards on the name, so even a stale
+snapshot cannot be poured into the wrong set.
+
+### Not persisted
+
+A reload ends the session and keeps the work. There is nowhere safe to hold a
+pending undo across a browser that may not come back before the next song.
+
+### The other half of the same report
+
+The `⋮` panel it leads to was itself broken. Its four end-state buttons —
+Auto / Continue / Stop / Wait — were laid out in a 256px popup, which leaves
+each button 48px of usable width. Measured in the real page: English
+"Continue" needs exactly 48px, so it filled its box edge to edge; Portuguese
+and Spanish "Continuar" needs 52px and **overflowed**. The panel is now 288px,
+where the longest translated label has room, and it is still 16px clear of a
+320px phone. The CSS width and the `pw` placement constant in JS are the same
+measurement written twice, so a test now asserts they agree — a drift there
+renders the panel one size and positions it as another, which only shows up
+near a screen edge.
+
+`.ap-seg` also spaced its buttons with flex `gap` and had no legacy fallback,
+so on the iPad that stopped updating the four would have sat flush against
+each other. It has a `margin-left` fallback now, like every other gap in the
+file.
+
+### Verification
+
+`Tools/edit_session_test.js` drives the real page in a real browser: seed
+three REGION rows in the shape REAPER sends, let the page bootstrap its own
+setlist from them, then enter, mutate, and read the state back. 25 checks.
+Every one was verified to fail on the regression it exists for — which caught
+two of them being vacuous. The two-paint colour case could not see its bug
+until the harness modelled the REGION poll that lands between the picks, and
+the "revert is published" check passed with `saveCurrentState()` deleted,
+because `syncRegions()` at the end of Discard also saves.
+
+Source-level invariants that CI can run without a browser are in
+`tests/test_reaset_html.py`: the label is the action and never branches on the
+mode, both exits exist and only while editing, a Controller is refused in JS
+rather than only in CSS, Discard restores the live list rather than the saved
+copy, a setlist switch re-snapshots, and the panel's two width constants
+agree. All eleven mutations of those were caught.
+
+## 26. The dialogs were the operating system's
+
+Reported on hitting the new-setlist box: *"acabei de ver q a janela pra criar o
+novo setlist é um alert... tudo q for alert tem q virar modal com padrão UIUX
+do app"*.
+
+Ten live `alert` / `confirm` / `prompt` calls. The app already had
+`showAppConfirm` and `showAppAlert` — what it did not have was an **ask**, so
+every question in the file fell through to `window.prompt()`. That is one
+missing dialog shape producing four OS popups.
+
+### The cost of the change is the blocking
+
+`prompt()` and `confirm()` return a value. Every caller was written as a
+straight line — `var x = prompt(...); if (x === null) return;` — and a styled
+dialog answers through a callback, so each one had to be turned inside out.
+Cancel is expressed by simply not calling back, which is what `=== null` meant.
+
+The worst of these was `chooseMode('director')`: three sequential gates — the
+PIN, the takeover warning, then the lease — as three blocking dialogs in a
+row. They are now `_dcGatePin` and `_dcGateTakeover` taking a continuation, in
+the same order, each refusing by not calling the next. The behaviour that
+matters is unchanged and was measured: a wrong PIN leaves you a Controller, a
+cancelled PIN claims nothing, a cancelled takeover **does not request the
+lease**, and a confirmed one does.
+
+### Two things found while doing it
+
+**The dialogs would have opened behind the mode selector.** `#mode-select-overlay`
+is `z-index: 9600`; the three app modals shipped at `9000`. The PIN prompt and
+the takeover warning are raised *by* that selector, so at 9000 they would have
+rendered underneath it — invisible, while still holding the answer the whole
+chain waits on. They are at 9700 now, and a test asserts they stay above the
+selector rather than asserting a magic number.
+
+**A comment asserted the styled confirm could never appear.** The sync-pull
+confirm used `window.confirm()` deliberately, explaining that
+`#appConfirmOverlay` had no CSS rule showing it on `.open` and so would
+silently never render. Measured in a browser: `.app-modal-overlay.open`
+declares `display: flex !important`, which beats the inline `display: none`,
+and the dialog renders with its OK button correctly styled. `deleteSetlist()`
+had been relying on it the whole time. The claim was false, and the comment
+now records what was measured instead.
+
+### Small things the conversion exposed
+
+- `createSetlist()` did nothing at all on a name that was already taken: the
+  dialog closed, no setlist appeared, nothing said why. It says so now.
+- The PIN field is `type="password"`. `window.prompt()` had no way to mask
+  anything, and a PIN typed on a stand is readable over a shoulder.
+- The new-setlist dialog had the same sentence as title, body and placeholder.
+  The body now says the thing the dialog cannot show: the new set starts as a
+  copy of what is on screen.
+
+### One left, and it is dead
+
+`confirm(t('Clear every MIDI mapping?'))` sits inside the commented-out MIDI
+block — Safari has no Web MIDI, so the whole module is inside `/* */`. It was
+left alone: restructuring code that cannot be executed or tested would be
+guesswork, and converting it would prove nothing. The test that forbids native
+dialogs strips comments first, so it does not count it as live and will catch
+it the moment that block is revived.
+
+### The colour palette, in the same panel
+
+Two defects, both mine, both from the colour feature:
+
+**"Apply to the whole block" was unreadable.** The label carried
+`.song-ctx-toggle`, which is the 36×20 **switch**: it sized the whole label to
+36px and set `input { display: none }`. So the text spilled out over the
+swatches above it and there was no visible checkbox at all — nothing to see
+you could tap. It is an ordinary `.song-ctx-row` now, with the same switch
+Loop and Skip use on the right of it.
+
+**The swatches were ovals.** `width: 100%; height: 30px; aspect-ratio: 1` —
+an engine ignores `aspect-ratio` when both width and height are set, so they
+rendered 38×30. And `aspect-ratio` is iOS 15, which the iPad this has to run
+on will never see. They use `height: 0; padding-bottom: calc(100% - 4px)`
+instead, which resolves against the width on every engine there has ever been;
+the 4px is the 2px border on each side, since `box-sizing` is `border-box`
+here. Measured back at 38×38.
+
+### Verification
+
+Driven in a browser with a listener on Playwright's `dialog` event, which
+fires if any native dialog reaches the page: none did, across new-setlist
+(create, duplicate, cancel), the PIN gate (wrong, cancelled, correct), and the
+takeover gate (cancelled, confirmed).
+
+Three source invariants in `tests/test_reaset_html.py`: no bare
+`alert`/`confirm`/`prompt` survives in live code (comments stripped, so the
+dead MIDI block does not count), the three overlays sit above the mode
+selector, and the styled prompt still answers to Enter and Escape and does not
+call back on cancel. All five mutations of those were caught.
+
+## 27. Colour is staged, and the panel is usable with a thumb
+
+Two reports, one panel.
+
+### "Apliquei cor, nada mudou"
+
+Colour was the one edit in the file that was **write-through**: picking a
+swatch wrote the region and *cleared* the local override, on the reasoning
+that a local copy would let the Director's screen disagree with the room.
+
+That reasoning is sound about where the colour should finally live. It was
+wrong about when. The row showed nothing until REAPER echoed the new colour
+back on the next REGION poll — and on a machine whose `Reaset.lua` has not
+been restarted, that echo never comes. Picking a colour looked like it did
+nothing at all, which is exactly what was reported.
+
+Every other edit in that panel — loop, skip, end-state, note, order — shows the
+instant you make it, survives Apply and vanishes on Discard. Colour behaves the
+same way now:
+
+- **Picking** stages into `g_stagedColors` (regionId → hex, or `null` for a
+  staged removal) and repaints at once. `_songColor()` is the one place that
+  decides what a row is painted: staged first, then a local override, then what
+  REAPER reports. Both the song rows and the section rows read it, so neither
+  can drift.
+- **Apply** flushes every staged colour to the project in a single write.
+- **Discard** drops the staging. There is nothing in REAPER to undo, because
+  nothing was ever written — which deleted the whole "push each region back to
+  its previous colour" path that Discard needed while colour wrote through.
+- The staged value **stays on screen until REAPER agrees with it**, so Apply
+  never blinks. `_confirmStagedColors()` drops each one as the REGION poll
+  confirms it.
+
+**Silence was the failure mode**, so it is no longer silent. If nothing is
+listening for the ExtState key — the script not running, or the file replaced
+without restarting it — the write is swallowed with no error at all, and the
+screen would go on showing a colour the project never took. Six seconds after
+Apply, anything still unconfirmed says so and names the likely cause.
+
+One line was removed for being unproven: `g_stagedColors` had been added to the
+render checksum, and mutating it away changed nothing. `_stageColor()` repaints
+directly, and after a confirmation the region's own colour has changed, which
+the checksum already covers.
+
+### "Tem q ter responsividade e usabilidade de celular"
+
+Measured, before touching anything: the panel is **288×567**. It does not fit a
+320×568 iPhone SE, nor any phone held sideways, and it did not scroll — the
+Remove colour button at the bottom was simply unreachable. **27** of its
+controls were under 44px.
+
+On a phone it stops being a popup and becomes a **sheet**: full width, anchored
+to the bottom edge, scrolling inside itself, with `env(safe-area-inset-bottom)`
+under it and `-webkit-overflow-scrolling: touch` so it has momentum on the old
+iPad. The JS stops positioning it there — an inline `top` is a style the media
+query cannot beat without `!important`, and a panel anchored in two places at
+once is worse than either.
+
+The control sizing is a **separate** question from the sheet, and getting that
+wrong is what the first attempt did. The iPad is 768px wide, so no width test
+calls it a phone — and it kept 32px buttons and 20px switches, for the same
+finger. Sizing now hangs off `@media (hover: none)`: any touch device, sheet or
+popup. Switches go to 51×31, which is the size iOS ships its own at; the
+palette drops to five across, because at 320px six swatches come out 42px.
+
+Two placement bugs surfaced once the panel grew:
+
+- **`ph` was a guess.** The popup was positioned against a hard-coded 420 (or
+  300 for sections) while the real panel is now much taller. It is measured
+  from `panel.offsetHeight` now, with a final clamp for when the panel is
+  taller than the space above the button as well as below it, and a
+  `max-height: calc(100vh - 16px)` on the panel itself so no geometry can
+  produce an unreachable control.
+- **Nothing repositioned it when it grew.** The panel is placed once, on open,
+  with the palette closed. Turning colour on adds three rows of swatches and a
+  button — and on a short window the controls it had just revealed were off the
+  bottom of the screen. `_ctxReflow()` runs on both colour toggles and on the
+  end-state change that shows the wait row.
+
+### Verification
+
+Seven geometries measured in a browser — iPhone SE, iPhone 13, Pro Max, iPad
+mini, phone sideways, iPad sideways, desktop — asserting the panel is not cut
+off on any edge and counting controls under 44px. Before: cut off on the SE and
+on any phone held sideways, 27 small targets. After: nothing cut off anywhere,
+and the only controls under 44px are the four switches at 31px, which is the
+size iOS uses.
+
+`Tools/edit_session_test.js` is 33 checks now, with a colour section that
+proves the row paints on the tap, that nothing reaches REAPER before Apply,
+that Discard writes nothing because nothing was written, that Apply is one
+request carrying a colour per region, and that a block still stages every song
+in it including the one above the row you opened.
+
+Eleven new source invariants, mutation-checked. Two of those mutations exposed
+weak tests: a substring check for `.song-ctx-toggle` in the touch block
+survived deleting the rule that sizes the switch, because the `:checked` rule
+underneath still contained the string — it asserts the declaration now. And the
+harness's own block-colour case had the wrong premise about which row carries
+`chain`, which the run reported honestly as a different block.

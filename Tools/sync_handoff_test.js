@@ -1,0 +1,386 @@
+// ReaSet — Director → Controller handoff harness
+//
+// The app's whole reason to exist: the Director owns the setlist and every
+// other device follows it. Nothing about that is provable by reading one file.
+// The Director serialises to ExtState, Reaset.lua reassembles the chunks into a
+// file, and the follower fetches, decodes and REBUILDS its list from it. The
+// interesting failures live in the seam, and they are silent — the follower
+// takes the new setlist NAME, renders the old rows underneath it, and looks
+// like it is following.
+//
+// So this runs TWO real pages against one shared fake REAPER: every ExtState
+// write the Director makes is captured, reassembled the way Reaset.lua does
+// (length guard included), and handed to the follower through its own apply
+// path.
+//
+// What it caught, and what it exists to keep caught: the follower resolved
+// each payload entry against `displayList` — its CURRENT setlist — so it could
+// only ever adopt songs it already had. Selecting a different set on the
+// Director published the right payload, the follower took the name and dropped
+// every song the old set did not contain, and a leftover pass re-appended the
+// old list underneath. The follower ended up with exactly what it started
+// with, under the new name, and a reload put it back on the local default.
+//
+//   npm i playwright
+//   node Tools/sync_handoff_test.js [path/to/ReaSet.html]
+//
+// Exit code is 0 only if every check passes.
+
+const path = require('path');
+
+let chromium;
+try {
+    ({ chromium } = require('playwright'));
+} catch (e) {
+    console.error('playwright is not installed.  npm i playwright');
+    process.exit(2);
+}
+
+const FILE = 'file://' + path.resolve(process.argv[2] || path.join(__dirname, '..', 'ReaSet.html'));
+const EXE = process.env.CHROMIUM_PATH || undefined;
+
+const results = [];
+function check(name, pass, detail) {
+    results.push({ name, pass });
+    console.log(`  ${pass ? 'ok  ' : 'FAIL'}  ${name}${detail ? '   ' + detail : ''}`);
+}
+
+// Four regions and two setlists that share no songs. That is the case the
+// report came from and the one the old code could not represent: if the two
+// sets overlap, resolving against the current list accidentally works.
+const SEED = `
+    g_regions = [
+        ['REGION','ONE','1','0','100','0'],    ['REGION','TWO','2','100','200','0'],
+        ['REGION','THREE','3','200','300','0'],['REGION','FOUR','4','300','400','0']
+    ];
+    setlists = { Default: [{id:'1'},{id:'2'}], Gig: [{id:'3'},{id:'4'}] };
+    currentSetlistName = 'Default';
+    displayList = []; initialized = false; lastRenderChecksum = '';
+    syncRegions();
+    // The hidden <select> is the source changeSetlist() reads. Without this it
+    // has no option to select and the switch is refused — which would look
+    // like the bug while testing nothing.
+    updateSetlistDropdown();
+`;
+
+(async () => {
+    const browser = await chromium.launch(EXE ? { executablePath: EXE } : {});
+    const shared = { ext: {}, file: null };
+    const errors = [];
+
+    async function openDevice(role) {
+        const ctx = await browser.newContext({ viewport: { width: 1100, height: 900 } });
+        const page = await ctx.newPage();
+        page.on('pageerror', e => errors.push(role + ': ' + String(e).slice(0, 200)));
+        await page.exposeFunction('__extSet', (k, v) => { shared.ext[k] = v; });
+        await page.exposeFunction('__extAll', () => shared.ext);
+        await page.exposeFunction('__fileGet', () => shared.file);
+        await page.goto(FILE);
+        await page.waitForTimeout(600);
+        await page.evaluate((role) => {
+            // REAPER's ExtState, shared between the two pages. Splitting on ';'
+            // is what REAPER's web interface itself does with a compound
+            // request, so a value must never contain one.
+            var absorb = function (cmd) {
+                String(cmd).split(';').forEach(function (one) {
+                    var m = one.match(/^SET\/EXTSTATE\/ReaSet\/([^/]+)\/([\s\S]*)$/);
+                    if (m) window.__extSet(m[1], m[2]);
+                });
+            };
+            window.wwr_req = absorb;
+            // A bulk push does NOT go through wwr_req any more: it bypasses the
+            // stock lib's batching queue and sends one command per request,
+            // because REAPER's web server drops a URL that long. Stubbing only
+            // wwr_req therefore stopped seeing the setlist entirely — which is
+            // the harness lying about the transport, so it intercepts the real
+            // one too. Everything that is not a command (the shared file the
+            // follower fetches) passes straight through.
+            var realFetch = window.fetch.bind(window);
+            window.fetch = function (input, init) {
+                var url = typeof input === 'string' ? input : (input && input.url) || '';
+                var at = url.indexOf('/_/');
+                if (at !== -1) {
+                    absorb(decodeURIComponent(url.slice(at + 3)));
+                    return Promise.resolve(new Response('', { status: 200 }));
+                }
+                return realFetch(input, init);
+            };
+            REASET_MODE = role; applyModeUI();
+            // The fingerprint gate in _syncApplyPayload: nothing applies until
+            // the project is identified.
+            g_projectKey = 'PROJ-1';
+        }, role);
+        await page.evaluate(SEED);
+        return page;
+    }
+
+    // Reaset.lua's half of the seam, including the length guard that stops two
+    // generations of chunks being stitched into one unparseable payload.
+    const assemble = (page) => page.evaluate(async () => {
+        const ext = await window.__extAll();
+        const n = parseInt(ext.setlistChunkCount, 10);
+        let b64 = '';
+        for (let i = 0; i < n; i++) b64 += ext['setlistChunk' + i] || '';
+        if (b64.length !== parseInt(ext.setlistChunkLen, 10)) return null;
+        return { b64: b64 };
+    });
+    const pull = (page) => page.evaluate(async () => {
+        const f = await window.__fileGet();
+        if (!f) return null;
+        _syncApplyPayload(JSON.parse(_b64uDecode(f.b64)), false);
+        return { set: currentSetlistName, rows: displayList.map(r => r.name).join(',') };
+    });
+    const state = (page) => page.evaluate(() => ({
+        set: currentSetlistName, rows: displayList.map(r => r.name).join(',')
+    }));
+    // What a Controller can actually READ. It has no picker — the Director
+    // owns which set is live — so the banner is the only place the show's name
+    // appears on that device, and a name that stays on the local default while
+    // the rows change is the same bug from the other side.
+    const banner = (page) => page.evaluate(() => {
+        const nm = document.getElementById('setlistBannerName');
+        const bn = document.getElementById('setlistBanner');
+        const pk = document.getElementById('setlistPicker');
+        return {
+            text: nm ? nm.textContent : '(gone)',
+            shown: !!bn && getComputedStyle(bn).display !== 'none',
+            pickerShown: !!pk && getComputedStyle(pk).display !== 'none'
+        };
+    });
+
+    try {
+        const director = await openDevice('director');
+        let controller = await openDevice('controller');
+
+        console.log('\n1. The Director selects a different setlist');
+        check('both devices start on the same set',
+              JSON.stringify(await state(director)) === JSON.stringify(await state(controller)),
+              JSON.stringify(await state(controller)));
+
+        await director.evaluate(() => {
+            var sel = document.getElementById('setlistSelect');
+            sel.value = 'Gig';
+            if (sel.value !== 'Gig') throw new Error('the picker has no Gig option');
+            changeSetlist();
+        });
+        await director.waitForTimeout(200);
+        shared.file = await assemble(director);
+        check('the Director is on the new set', (await state(director)).rows === 'THREE,FOUR',
+              JSON.stringify(await state(director)));
+        check('the push assembled into a shared file', !!shared.file,
+              shared.file ? '' : 'chunk length did not match');
+
+        let got = await pull(controller);
+        check('the Controller follows the set change',
+              !!got && got.set === 'Gig' && got.rows === 'THREE,FOUR', JSON.stringify(got));
+
+        const bn = await banner(controller);
+        check('the Controller reads the show name, not its own default',
+              bn.text === 'Gig', JSON.stringify(bn));
+        check('and it is on screen', bn.shown === true, JSON.stringify(bn));
+        check('with no picker beside it — the Director owns the choice',
+              bn.pickerShown === false, JSON.stringify(bn));
+
+        console.log('\n2. A reload must not fall back to the local default');
+        await controller.context().close();
+        controller = await openDevice('controller');
+        check('a fresh Controller starts on its own stored set',
+              (await state(controller)).rows === 'ONE,TWO', JSON.stringify(await state(controller)));
+        got = await pull(controller);
+        check('and its first pull puts it on the shared set',
+              !!got && got.set === 'Gig' && got.rows === 'THREE,FOUR', JSON.stringify(got));
+
+        console.log('\n3. Every edit reaches the follower');
+        await director.evaluate(() => { removeFromSetlist(displayList[0].uid); _syncPushNow(); });
+        await director.waitForTimeout(200);
+        shared.file = await assemble(director);
+        check('the Director removed a song', (await state(director)).rows === 'FOUR',
+              JSON.stringify(await state(director)));
+        got = await pull(controller);
+        // The one the "keep anything the payload does not mention" rule made
+        // impossible: a follower could never lose a song.
+        check('the Controller loses it too', !!got && got.rows === 'FOUR', JSON.stringify(got));
+
+        await director.evaluate(() => { addSongToSetlist('1'); _syncPushNow(); });
+        await director.waitForTimeout(200);
+        shared.file = await assemble(director);
+        const added = (await state(director)).rows;
+        check('the Director added a song the set did not have', added.indexOf('ONE') !== -1, added);
+        got = await pull(controller);
+        check('the Controller gains it too', !!got && got.rows === added,
+              `${got && got.rows} vs ${added}`);
+
+        await director.evaluate(() => { displayList.reverse(); saveCurrentState(); _syncPushNow(); });
+        await director.waitForTimeout(200);
+        shared.file = await assemble(director);
+        const reordered = (await state(director)).rows;
+        got = await pull(controller);
+        check('the Controller follows a reorder', !!got && got.rows === reordered,
+              `${got && got.rows} vs ${reordered}`);
+
+        console.log('\n4. The follower does not talk back');
+        const pushedBefore = shared.ext.setlistRev;
+        await controller.evaluate(() => { saveCurrentState(); _syncPushNow(); });
+        await controller.waitForTimeout(100);
+        check('applying a payload does not re-broadcast it',
+              shared.ext.setlistRev === pushedBefore,
+              `rev ${pushedBefore} -> ${shared.ext.setlistRev}`);
+
+        // ── 5. Not following is a state the device has to SHOW ──────────
+        //
+        // The dangerous install: Reaset.lua is missing, old, or was replaced
+        // without restarting the script, so the shared file is never written
+        // and every fetch 404s forever. The Controller then recites its own
+        // localStorage under a setlist name that looks exactly as authoritative
+        // as a real one. From the stage that is indistinguishable from working,
+        // and it is how somebody plays the wrong song.
+        console.log('\n5. A Controller that is not following says so');
+        const unsynced = await controller.evaluate('(function(){' + `
+            _syncEverApplied = false; _syncLastOkTs = 0; _syncFailReason = 'nofile';
+            _refreshSetlistBanner();
+            var b = document.getElementById('setlistBanner');
+            var tag = document.getElementById('setlistBannerTag');
+            return { warned: b.classList.contains('is-unsynced'),
+                     tagShown: !!tag && getComputedStyle(tag).display !== 'none',
+                     title: b.title,
+                     name: document.getElementById('setlistBannerName').textContent };
+        ` + '})()');
+        check('the banner marks itself unsynced', unsynced.warned === true);
+        check('and carries a visible tag, not just a colour', unsynced.tagShown === true);
+        check('the reason names Reaset.lua', /Reaset\.lua/.test(unsynced.title), unsynced.title.slice(0, 90));
+        check('the set name is still readable beside it', !!unsynced.name, unsynced.name);
+
+        const synced = await controller.evaluate('(function(){' + `
+            _syncEverApplied = true; _syncLastOkTs = Date.now(); _syncFailReason = null;
+            _refreshSetlistBanner();
+            var b = document.getElementById('setlistBanner');
+            var tag = document.getElementById('setlistBannerTag');
+            return { warned: b.classList.contains('is-unsynced'),
+                     tagShown: !!tag && getComputedStyle(tag).display !== 'none' };
+        ` + '})()');
+        check('and drops the warning once it is reading the file',
+              synced.warned === false && synced.tagShown === false, JSON.stringify(synced));
+
+        // Staleness, not silence. A Director only pushes when something
+        // CHANGES, so a quiet show must not be reported as a lost one — but a
+        // file that stopped being readable must.
+        const stale = await controller.evaluate('(function(){' + `
+            _syncEverApplied = true; _syncLastOkTs = Date.now() - (SYNC_STALE_MS + 1000);
+            _refreshSetlistBanner();
+            return document.getElementById('setlistBanner').classList.contains('is-unsynced');
+        ` + '})()');
+        check('a read that stopped landing goes back to unsynced', stale === true);
+
+        // ── 6. The picker reports the choice it just made ───────────────
+        //
+        // changeSetlist() moved currentSetlistName and nothing repainted the
+        // label. The only other caller of renderSetlistPicker() is the picker's
+        // own toggle, so the list closed still showing the OLD name and the new
+        // one appeared when you opened it again — on the one control whose
+        // entire job is to say which set is live.
+        console.log('\n6. The picker shows what was picked');
+        const picked = await director.evaluate('(function(){' + `
+            REASET_MODE = 'director';
+            document.body.classList.remove('reaset-controller');
+            setlists = { Default: [{id:'1'}], Gig: [{id:'3'}], 'GIG B': [{id:'4'}] };
+            currentSetlistName = 'Default';
+            displayList = []; initialized = false; syncRegions(); updateSetlistDropdown();
+            var before = document.getElementById('setlistPickerLabel').textContent;
+            // Through the picker, the way a finger does it.
+            toggleSetlistPicker(null);
+            var items = document.querySelectorAll('.setlist-picker-item');
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].textContent.indexOf('GIG B') !== -1) { items[i].click(); break; }
+            }
+            return { before: before,
+                     label: document.getElementById('setlistPickerLabel').textContent,
+                     state: currentSetlistName };
+        ` + '})()');
+        check('the setlist actually changed', picked.state === 'GIG B', picked.state);
+        check('and the label says so without reopening the picker',
+              picked.label === 'GIG B', `label "${picked.label}" after picking ${picked.state}`);
+
+        // ── 7. Not synced explains itself ───────────────────────────────
+        //
+        // "It is not syncing" has three different fixes: the file is not being
+        // written, the file cannot be fetched from where the browser looks, or
+        // nothing was ever published. Guessing between them costs a rehearsal.
+        console.log('\n7. The failure names itself');
+        const diag = await controller.evaluate('(function(){' + `
+            REASET_MODE = 'controller';
+            document.body.classList.add('reaset-controller');
+            _syncEverApplied = false; _syncLastOkTs = 0; _syncFailReason = 'nofile';
+            _syncDiag = { url: 'http://x/reaset_setlist_sync.json', status: 404,
+                          err: 'HTTP 404', tries: 7, lastTry: Date.now() };
+            showSyncDiagnosis();
+            var o = document.getElementById('appAlertOverlay');
+            return { shown: getComputedStyle(o).display !== 'none',
+                     body: document.getElementById('appAlertBody').innerText };
+        ` + '})()');
+        check('tapping the banner opens a diagnosis', diag.shown === true);
+        check('it names Reaset.lua and the restart',
+              /Reaset\.lua/.test(diag.body) && /(RESTART|REINICI)/i.test(diag.body));
+        check('it shows the URL it actually fetched',
+              diag.body.indexOf('reaset_setlist_sync.json') !== -1);
+        check('and the HTTP status', /404/.test(diag.body));
+        check('and how many reads were attempted', /7/.test(diag.body));
+
+        // ── 8. An empty ExtState reply is not a published revision ──────
+        //
+        // REAPER answers a GET for a key that has never existed with an EMPTY
+        // VALUE, not with silence. _syncFileRevSeen was set by the arrival of
+        // the reply rather than by its content, so it went true on the first
+        // probe of every install — including one where Reaset.lua has never
+        // run and the key has never existed. That permanently disabled the
+        // setlistRev fallback, _syncRemoteRev stayed 0 forever, and the 750ms
+        // path could never fire: the follower fell back to the slow poll while
+        // its own diagnosis reported "revision seen: —" and the Director was
+        // publishing revisions the whole time.
+        console.log('\n8. Reaset.lua silent, Director publishing');
+        const rev = await controller.evaluate('(function(){' + `
+            _syncFileRevSeen = false; _syncRemoteRev = 0;
+            // Reaset.lua is not running -> setlistFileRev empty.
+            // The Director is pushing   -> setlistRev is 7.
+            var probe = function () {
+                wwr_onreply('EXTSTATE\\tReaSet\\tsetlistFileRev\\t\\n' +
+                            'EXTSTATE\\tReaSet\\tsetlistRev\\t7\\n');
+            };
+            probe(); probe();
+            return { remoteRev: _syncRemoteRev, fileRevSeen: _syncFileRevSeen };
+        ` + '})()');
+        check('an empty setlistFileRev is not taken as proof of Reaset.lua',
+              rev.fileRevSeen === false, JSON.stringify(rev));
+        check("so the Director's own revision is still observed",
+              rev.remoteRev === 7, `remoteRev=${rev.remoteRev}`);
+
+        const said = await controller.evaluate('(function(){' + `
+            _syncEverApplied = false; _syncLastOkTs = 0; _syncFailReason = 'nofile';
+            _syncDiag = { url: 'http://x/reaset_setlist_sync.json', status: 404,
+                          err: 'HTTP 404', tries: 4, lastTry: Date.now() };
+            _syncRemoteRev = 7;
+            showSyncDiagnosis();
+            var withRev = document.getElementById('appAlertBody').innerText;
+            closeAppAlert();
+            _syncRemoteRev = 0;
+            showSyncDiagnosis();
+            return { withRev: withRev, without: document.getElementById('appAlertBody').innerText };
+        ` + '})()');
+        check('with a revision, the diagnosis blames Reaset.lua',
+              /Reaset\.lua is the missing half|Reaset\.lua/.test(said.withRev) &&
+              /IS publishing|ESTÁ publicando|SÍ está publicando/.test(said.withRev));
+        check('with none, it says nothing has been published',
+              /nothing has been published|no se publicó nada|nada foi publicado/.test(said.without));
+
+        check('no page errors', errors.length === 0, errors[0] || '');
+    } finally {
+        await browser.close();
+    }
+
+    const failed = results.filter(r => !r.pass);
+    console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
+    if (failed.length) {
+        console.log('\nfailed:');
+        failed.forEach(f => console.log('  ' + f.name));
+    }
+    process.exit(failed.length ? 1 : 0);
+})();

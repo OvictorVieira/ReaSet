@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "reaboot/index.xml"
 RECIPE = ROOT / "reaboot.json"
-REPO_INDEX_URL = "https://raw.githubusercontent.com/djenttleman/ReaSet/main/reaboot/index.xml"
+REPO_INDEX_URL = "https://raw.githubusercontent.com/OvictorVieira/ReaSet/main/reaboot/index.xml"
 RELEASE_VERSION = "3.0"
 RELEASE_COMMIT = "dea2bbda162a16750ca65bcb82ad684f84079629"
 
@@ -76,7 +76,7 @@ def test_every_source_is_reachable_and_avoids_reaboot_1_2_hash_bug():
         assert "hash" not in source.attrib
         url = (source.text or "").strip()
         match = re.match(
-            r"^https://raw\.githubusercontent\.com/djenttleman/ReaSet/([0-9a-f]{40})/",
+            r"^https://raw\.githubusercontent\.com/OvictorVieira/ReaSet/([0-9a-f]{40})/",
             url,
         )
         assert match, f"source is not pinned to a full commit SHA: {url}"
@@ -111,7 +111,7 @@ def test_reapack_destination_contract_matches_documentation():
 def test_reaboot_recipe_requires_core_and_exposes_expected_features():
     recipe = json.loads(RECIPE.read_text())
     assert recipe["name"] == "ReaSet"
-    assert recipe["website"] == "https://github.com/djenttleman/ReaSet"
+    assert recipe["website"] == "https://github.com/OvictorVieira/ReaSet"
     assert recipe["skip_additional_packages"] is True
     assert recipe["required_packages"] == [
         f"{REPO_INDEX_URL}#p=ReaSet/ReaSet&v=latest"
@@ -134,7 +134,7 @@ def test_readme_header_contains_brand_assets_and_graphical_reaboot_button():
     spanish_readme = (ROOT / "README.es.md").read_text()
     install_url = (
         "https://www.reaboot.com/install/"
-        "https%3A%2F%2Fraw.githubusercontent.com%2Fdjenttleman%2FReaSet%2F"
+        "https%3A%2F%2Fraw.githubusercontent.com%2FOvictorVieira%2FReaSet%2F"
         "main%2Freaboot.json"
     )
 
@@ -255,7 +255,7 @@ def test_local_markdown_links_resolve():
 def test_readme_contains_reaboot_recipe_install_link():
     readme = (ROOT / "README.md").read_text()
     encoded_recipe_url = urllib.parse.quote(
-        "https://raw.githubusercontent.com/djenttleman/ReaSet/main/reaboot.json",
+        "https://raw.githubusercontent.com/OvictorVieira/ReaSet/main/reaboot.json",
         safe="",
     )
     expected = f"https://www.reaboot.com/install/{encoded_recipe_url}"

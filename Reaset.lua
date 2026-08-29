@@ -264,13 +264,16 @@ local function bridge_new(track_name, ext_name, status_key, context)
         prev_pos   = nil,
         next_pos   = nil,
         status     = nil,
+        miss_tick  = nil,         -- when the last fruitless scan ran
     }
 end
 
 -- Publishes what this bridge is actually doing, so the web UI can tell apart
 -- the failure modes that otherwise all look like "no lyrics showing":
 --   ""          → key absent/cleared: this script is not running at all
---   "!NOTRACK"  → script alive, but no track matched the keyword
+--   "!NOTRACK"  → script alive, but no track is called exactly "Lyrics"/"Chords"
+--   "!WRONGNAME:<name>" → a track is nearly right ("lyrics", "01 - Lyrics"):
+--                 named so the panel can say what to rename it to
 --   "!NOSWS"    → track found, but SWS/ULT_GetMediaItemNote is unavailable
 --   "<name>"    → track found and readable (shows the real REAPER track name)
 -- Written as non-persistent global ExtState so it dies with REAPER and is
@@ -282,14 +285,23 @@ local function bridge_publish_status(b, value)
     end
 end
 
--- Normalises a track name for matching. The track must still BE the keyword —
--- we only strip decoration around it, so detection stays predictable:
---   • case is ignored            → "LYRICS", "Lyrics", "lyrics"
---   • leading symbols are ignored → "*Lyrics", "##Chords", "-- lyrics", "[Chords]"
---   • leading numbering ignored   → "01 Lyrics", "3 - Chords"
---   • trailing symbols ignored    → "Lyrics*", "Chords --", "[Lyrics]"
--- Anything that leaves extra WORDS behind does NOT match, on purpose:
--- "Backing Lyrics" or "Lyrics Bus" stay ordinary audio tracks.
+-- THE NAME IS THE COMMAND, AND IT IS EXACT.
+--
+-- A track is the lyrics track when it is called exactly "Lyrics". Not
+-- "lyrics", not "LYRICS", not "*Lyrics" or "01 - Lyrics". One spelling,
+-- capitalised, the way every other command in this app is written.
+--
+-- This used to accept all of those: case folded, leading symbols and numbering
+-- stripped, trailing symbols stripped. It was meant to be forgiving and it was
+-- the wrong trade. A convention that accepts eight spellings is not a
+-- convention — nobody converges on one, every project ends up spelled
+-- differently, and the rule that decides what is a lyrics track becomes
+-- something you have to read the source to know.
+--
+-- Being strict is only usable if being wrong is LOUD. So the loose form is
+-- still computed, and used for exactly one thing: recognising a near miss and
+-- saying so. A track called "lyrics" now reports "!WRONGNAME:lyrics" instead
+-- of silently working, and the panel tells you what to rename it to.
 --
 -- This is the canonical implementation. Tools/Lyrics_Tapper.lua has its own
 -- copy (normalize_track_name there too, ported to match this one exactly) —
@@ -297,6 +309,7 @@ end
 -- relative dofile(), so the two are kept as intentionally duplicated,
 -- byte-identical algorithms rather than one unverified cross-file include.
 -- If you change the rules here, port the same change there.
+-- Loose form, used ONLY to recognise a near miss and report it.
 local function normalize_track_name(name)
     local s = name:lower()
     -- Strip leading decoration repeatedly so mixed prefixes like "* 01 - " unwind
@@ -318,21 +331,28 @@ end
 -- "*LYRICS*" or "=== LYRICS ===" sitting above the real lyrics track silently
 -- shadows it: it matches the keyword, has no items, and the panel stays empty
 -- forever. Falls back to the first match when none of them have items.
+-- Returns (track, exact_match_count, near_miss_name_or_nil).
 local function bridge_find_track(b)
     local n = reaper.CountTracks(0)
     local first, with_items, count = nil, nil, 0
+    local near = nil
+    local loose = b.track_name:lower()
     for i = 0, n - 1 do
         local tr = reaper.GetTrack(0, i)
         local _, name = reaper.GetTrackName(tr)
-        if normalize_track_name(name) == b.track_name then
+        if name == b.track_name then
             count = count + 1
             if not first then first = tr end
             if not with_items and reaper.GetTrackNumMediaItems(tr) > 0 then
                 with_items = tr
             end
+        elseif not near and normalize_track_name(name) == loose then
+            -- Would have matched under the old permissive rule. Remembered so
+            -- the panel can name it rather than leaving the user guessing.
+            near = name
         end
     end
-    return (with_items or first), count
+    return (with_items or first), count, near
 end
 
 local function item_at_pos(track, pos)
@@ -439,25 +459,50 @@ local function bridge_tick(b, cur_pos, tick)
     -- A latched pointer stays valid after the user renames the track, so
     -- without this a rename never takes effect and the script keeps reading
     -- the wrong (or a now-misnamed) track until REAPER restarts.
-    local needs_scan = not reaper.ValidatePtr(b.track, 'MediaTrack*')
-    if not needs_scan and (tick % RESCAN_TICKS == 0) then
-        local _, cur_name = reaper.GetTrackName(b.track)
-        if normalize_track_name(cur_name) ~= b.track_name then
-            needs_scan = true               -- renamed away from the keyword
-        elseif reaper.GetTrackNumMediaItems(b.track) == 0 then
-            needs_scan = true               -- empty: a better candidate may exist now
+    local needs_scan
+    if not reaper.ValidatePtr(b.track, 'MediaTrack*') then
+        -- NOTHING LATCHED. Back off instead of retrying every tick.
+        --
+        -- bridge_find_track walks every track in the project. With no lyrics
+        -- or chords track this branch ran on every defer tick, for both
+        -- bridges — roughly 120 full project walks a second, forever, looking
+        -- for something that is not there. And a project with no lyrics and no
+        -- chords is the NORMAL case, not a fault: the panels are optional and
+        -- most shows never use them, so the default configuration paid the
+        -- highest price. It is a large part of why REAPER felt heavy with
+        -- ReaSet open.
+        --
+        -- Retried on the same cadence used to re-validate a track we DO have,
+        -- so a track created mid-session is still picked up within ~2 s.
+        needs_scan = (b.miss_tick == nil) or ((tick - b.miss_tick) >= RESCAN_TICKS)
+        if needs_scan then b.miss_tick = tick end
+    else
+        needs_scan = false
+        if tick % RESCAN_TICKS == 0 then
+            local _, cur_name = reaper.GetTrackName(b.track)
+            if normalize_track_name(cur_name) ~= b.track_name then
+                needs_scan = true           -- renamed away from the keyword
+            elseif reaper.GetTrackNumMediaItems(b.track) == 0 then
+                needs_scan = true           -- empty: a better candidate may exist now
+            end
         end
     end
 
     if needs_scan then
-        local tr, count = bridge_find_track(b)
+        local tr, count, near = bridge_find_track(b)
         b.track = tr
         bridge_publish_matches(b, count)
         if not tr then
-            bridge_publish_status(b, "!NOTRACK")
+            bridge_publish_status(b, near and ("!WRONGNAME:" .. near) or "!NOTRACK")
             return
         end
+        b.miss_tick = nil                   -- found one: no backoff to carry
     end
+    -- During the no-track backoff above, needs_scan is false and b.track is
+    -- still nil. Do not fall through into GetTrackName/items_around: REAPER's
+    -- API rejects nil instead of returning an empty name, and that exception
+    -- aborts the rest of tick_body (including the shared-setlist write).
+    if not reaper.ValidatePtr(b.track, 'MediaTrack*') then return end
     if not HAS_ULT then
         -- Track exists but item notes cannot be read without SWS.
         bridge_publish_status(b, "!NOSWS")
@@ -485,8 +530,10 @@ end
 
 -- Both panels show their neighbours: lyrics stacks them vertically, chords
 -- places them left/right of the current one.
-local lyrics = bridge_new("lyrics", "XR_Lyrics", "lyricsTrack", true)
-local chords = bridge_new("chords", "XR_Chords", "chordsTrack", true)
+-- Capitalised, exactly. See normalize_track_name above for why this stopped
+-- being forgiving.
+local lyrics = bridge_new("Lyrics", "XR_Lyrics", "lyricsTrack", true)
+local chords = bridge_new("Chords", "XR_Chords", "chordsTrack", true)
 
 ----------------------------------------------------------------------------
 -- 4) SETLIST SYNC  — Director's browser → Reaset.lua → shared file → Players
@@ -574,13 +621,47 @@ local function sync_tick()
         parts[#parts + 1] = chunk
     end
 
+    local payload = table.concat(parts)
+
+    -- INTEGRITY: refuse an assembly stitched from two generations.
+    --
+    -- The empty-chunk retry above catches a chunk that has not ARRIVED yet.
+    -- It cannot catch a chunk that arrived for the PREVIOUS push and was never
+    -- overwritten by this one — a shorter payload leaves the old tail in
+    -- place, and a dropped request in the middle of a longer one leaves an old
+    -- chunk between two new ones. Both assemble into a non-empty base64 string
+    -- that decodes to garbage, so every follower fails at JSON.parse at once,
+    -- with nothing in the failure to say why.
+    --
+    -- The browser publishes the payload's total length with the count. If what
+    -- was reassembled is not that length, it is not that payload: leave
+    -- s_syncLastCount alone so the next tick retries once the missing writes
+    -- land, and leave the previous good file on disk in the meantime. An older
+    -- ReaSet.html that sends no length still works — there is simply nothing to
+    -- check against.
+    local want_len = tonumber(reaper.GetExtState(SEC, "setlistChunkLen"))
+    if want_len and #payload ~= want_len then return end
+
     -- Base64url's alphabet ([A-Za-z0-9_-]) can never contain a quote or
     -- backslash, so it drops straight into this JSON string with zero
     -- escaping needed.
     local f = io.open(sync_file_path(), "wb")
     if f then
-        f:write('{"v":1,"b64":"' .. table.concat(parts) .. '"}')
+        f:write('{"v":1,"b64":"' .. payload .. '"}')
         f:close()
+        -- Publish the revision that is now ON DISK, as opposed to the one the
+        -- Director merely announced.
+        --
+        -- Remote devices poll a revision number to decide whether the shared
+        -- file is worth fetching. Polling the Director's own setlistRev makes
+        -- them fetch during the window between the push and this write — the
+        -- fetch returns the PREVIOUS payload, which is correctly rejected as
+        -- old, and the poll then retries, every cycle, until the write lands.
+        -- Worse, if this script is not running at all, that retry never ends.
+        --
+        -- This key only ever changes after a successful write, so "the file you
+        -- would fetch is at revision N" is exactly what it says.
+        reaper.SetExtState(SEC, "setlistFileRev", rev_str, false)
     end
     s_syncLastCount = rev_str     -- mark handled either way — a permissions
                                    -- error won't be retried every tick
@@ -798,6 +879,69 @@ end
 
 local _hb_tick = 0
 
+----------------------------------------------------------------------------
+-- REGION COLOUR — set from the web interface
+----------------------------------------------------------------------------
+-- The browser can already reach this script: it writes a project ExtState key
+-- and the tick reads it, which is how NativeLoop and Auto-Stop are armed. This
+-- is the same channel carrying one more instruction, and the id it names is
+-- REAPER's own markrgnindexnumber — the third field of the REGION reply the
+-- web interface already reads, and exactly what SetProjectMarker3 takes. No
+-- lookup table has to exist on either side.
+--
+-- CONSUMED BEFORE ACTING, not after. Colouring a region dirties the project,
+-- so a key left in place would re-apply and re-dirty it on every tick forever,
+-- ~30 times a second. If the write below fails the instruction is simply lost,
+-- which is the right trade: the user can pick the colour again, and a project
+-- that will not stop asking to be saved is a support call.
+local function color_tick()
+    local cmd = reaper.GetExtState(SEC, "regionColor")
+    if cmd == "" then return end
+    reaper.SetExtState(SEC, "regionColor", "", false)
+
+    -- Index the regions ONCE. A whole block arrives as one comma-separated
+    -- write, and re-enumerating per entry is O(regions x entries) on the defer
+    -- thread of a machine that is also playing audio.
+    --
+    -- COMMA, not semicolon: `;` separates COMMANDS in REAPER's web interface,
+    -- so a semicolon-joined value was split into five commands before it ever
+    -- reached this key.
+    local byidx, i = {}, 0
+    while true do
+        local ok, isrgn, pos, rgnend, name, midx = reaper.EnumProjectMarkers(i)
+        if ok == 0 then break end
+        if isrgn then byidx[midx] = { pos = pos, e = rgnend, name = name } end
+        i = i + 1
+    end
+
+    local touched = false
+    for one in cmd:gmatch("[^,]+") do
+        local sidx, hex = one:match("^(%d+):(%w+)$")
+        local reg = sidx and byidx[tonumber(sidx)]
+        if reg then
+            local col
+            if hex == "x" then
+                col = 0                     -- back to REAPER's own default
+            else
+                local r = tonumber(hex:sub(1, 2), 16)
+                local g = tonumber(hex:sub(3, 4), 16)
+                local b = tonumber(hex:sub(5, 6), 16)
+                if r and g and b then
+                    -- 0x1000000 is REAPER's "this colour is set" flag; without
+                    -- it the value reads as unset and the region stays default.
+                    col = reaper.ColorToNative(r, g, b) | 0x1000000
+                end
+            end
+            if col then
+                reaper.SetProjectMarker3(0, tonumber(sidx), true,
+                                         reg.pos, reg.e, reg.name, col)
+                touched = true
+            end
+        end
+    end
+    if touched then reaper.UpdateArrange() end
+end
+
 local function tick_body()
     -- Presence flag (never expires — only proves the script ran at least once).
     if _hb_tick % 150 == 0 then
@@ -828,6 +972,9 @@ local function tick_body()
     -- 5) Setlist library: serves the project's /reaset/setlists folder and
     --    writes back whatever the browser saves.
     library_tick()
+
+    -- 6) Region colours the Director picked in the web interface.
+    color_tick()
 end
 
 local function main()
