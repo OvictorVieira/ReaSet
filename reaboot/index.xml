@@ -50,6 +50,21 @@ enqueues deletes for the names it drops and upserts for every incoming name,
 and arms the disk-refresh guard so writes still in flight are not undone.
         ]]></changelog>
       </version>
+      <version name="3.3" author="Victor Vieira (OvictorVieira)" time="2026-08-29T17:21:41Z">
+        <source file="Reaset.lua" type="script" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/faa2dc9f9b0c7235915909da299cd9366a0ca07e/Reaset.lua</source>
+        <source file="ReaSet.html">https://raw.githubusercontent.com/OvictorVieira/ReaSet/faa2dc9f9b0c7235915909da299cd9366a0ca07e/ReaSet.html</source>
+        <source file="Sortable.min.js">https://raw.githubusercontent.com/OvictorVieira/ReaSet/faa2dc9f9b0c7235915909da299cd9366a0ca07e/Sortable.min.js</source>
+        <changelog><![CDATA[
+ReaSet v3.3: edit mode reworked around the whole project on one screen.
+The row button toggles a song's active state in place (x deactivates, +
+reactivates, nothing ever vanishes); actives always group above the grey
+rows; an explicit add arrives active. LOOP is performance control now:
+the Controller arms and disarms it directly, and it works on a stopped
+transport via the selected song. Mobile: the transport bar tracks the
+visual viewport (no more floating above Chrome's collapsed toolbar) and
+the pt-BR "AO VIVO" tab stays on one line.
+        ]]></changelog>
+      </version>
       <metadata>
         <link rel="website">https://github.com/OvictorVieira/ReaSet</link>
         <link rel="donation">https://www.paypal.com/donate/?hosted_button_id=JNX7Q2G8S6YT8</link>
@@ -82,6 +97,12 @@ setlists, controls transport and displays real-time lyrics and chords.
         <source file="ReaSet_Diagnose.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/0a90f845349b5b22b0d3d5a19f57b6bdc3fbeb04/Tools/ReaSet_Diagnose.lua</source>
         <source file="ReaSet_LibraryDoctor.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/0a90f845349b5b22b0d3d5a19f57b6bdc3fbeb04/Tools/ReaSet_LibraryDoctor.lua</source>
         <source file="Text to MIDI Bitmap.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/0a90f845349b5b22b0d3d5a19f57b6bdc3fbeb04/Tools/Text%20to%20MIDI%20Bitmap.lua</source>
+      </version>
+      <version name="3.3" author="Victor Vieira (OvictorVieira)" time="2026-08-29T17:21:41Z">
+        <source file="Lyrics_Tapper.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/faa2dc9f9b0c7235915909da299cd9366a0ca07e/Tools/Lyrics_Tapper.lua</source>
+        <source file="ReaSet_Diagnose.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/faa2dc9f9b0c7235915909da299cd9366a0ca07e/Tools/ReaSet_Diagnose.lua</source>
+        <source file="ReaSet_LibraryDoctor.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/faa2dc9f9b0c7235915909da299cd9366a0ca07e/Tools/ReaSet_LibraryDoctor.lua</source>
+        <source file="Text to MIDI Bitmap.lua" main="main">https://raw.githubusercontent.com/OvictorVieira/ReaSet/faa2dc9f9b0c7235915909da299cd9366a0ca07e/Tools/Text%20to%20MIDI%20Bitmap.lua</source>
       </version>
       <metadata>
         <link rel="website">https://github.com/OvictorVieira/ReaSet#5-tools</link>
