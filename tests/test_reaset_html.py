@@ -4339,6 +4339,90 @@ def test_a_big_push_travels_one_command_per_request(script_body: str) -> None:
     )
 
 
+@requires_node
+def test_importing_setlists_writes_them_into_the_project_library(script_body: str) -> None:
+    """Import has to write the incoming setlists to disk.
+
+    The project library file is the source of truth: `_librarySyncWithProject`
+    reloads `setlists` from it on every dropdown open, changeSetlist and boot.
+    Import used to overwrite only the in-memory copy plus localStorage, so
+    every imported name was absent from disk — the next reload silently swapped
+    them for the old disk contents and `currentSetlistName` fell back to
+    "Default". The import appeared for a heartbeat and vanished.
+
+    An Import is an OVERWRITE, not a merge, so removed names must be enqueued
+    as deletes as well, and the drain reads `setlists[name]` at send time —
+    the swap has to happen before the enqueue or the delete would carry the
+    payload it was meant to remove.
+    """
+    body = strip_comments(script_body)
+    handler = re.search(
+        r"function importSetlists\(input\)\s*\{[\s\S]*?\breader\.readAsText\(file\);",
+        body,
+    )
+    assert handler, "importSetlists() body not found"
+    src = handler.group(0)
+    assert "_libraryEnqueue(" in src, (
+        "importSetlists no longer writes the incoming setlists to the "
+        "project library — the next disk reload will erase them"
+    )
+    assert "_libRefreshedAt" in src, (
+        "importSetlists does not suppress the pending disk refresh; a "
+        "dropdown open before the writes land will still restore the old set"
+    )
+    swap_idx = src.index("setlists = data")
+    enqueue_idx = src.index("_libraryEnqueue(")
+    assert swap_idx < enqueue_idx, (
+        "setlists is enqueued before being replaced; _libraryDrain reads "
+        "setlists[name] at send time and would push the old payload"
+    )
+
+    harness = """
+        var setlists = { Default: [], Old: [], Shared: [] };
+        var currentSetlistName = 'Default';
+        var STORAGE_KEY = 'k1', CURRENT_KEY = 'k2';
+        var displayList = [], initialized = true, _libRefreshedAt = 0;
+        var localStorage = { setItem: function () {} };
+        function updateSetlistDropdown() {}
+        function syncRegions() {}
+        function _syncPushNow() {}
+        function showAppAlert() {}
+        function showAppConfirm(_t, _m, cb) { cb(); }
+        function canEditSetlist() { return true; }
+        function t(s) { return s; }
+        var RSDiag = { blocked: function () {} };
+        var pushed = [];
+        function _libraryEnqueue(name) {
+            pushed.push({ name: name, entries: setlists[name] });
+        }
+        var IMPORT = { Default: [], Shared: [], Fresh: [{ id: 1 }] };
+        var input = { files: [{}], value: 'k' };
+        var origFR = typeof FileReader === 'function' ? FileReader : null;
+        FileReader = function () {
+            this.readAsText = function () {
+                var self = this;
+                setTimeout(function () {
+                    self.onload({ target: { result: JSON.stringify(IMPORT) } });
+                    var names = pushed.map(function (p) { return p.name + ':' +
+                        (p.entries === undefined ? 'delete' : 'upsert'); }).join('|');
+                    console.log(names + '#refreshed=' + (_libRefreshedAt > 0));
+                }, 0);
+            };
+        };
+    """ + extract_function(body, "importSetlists") + """
+        importSetlists(input);
+    """
+    out = run_node(harness).strip()
+    ops = out.split("#")[0].split("|")
+    assert "Old:delete" in ops, "the setlist that was dropped by the import was not removed"
+    assert "Default:upsert" in ops and "Shared:upsert" in ops and "Fresh:upsert" in ops, (
+        "the imported setlists were not written to the project library"
+    )
+    assert out.endswith("refreshed=true"), (
+        "the disk-refresh guard was not armed; the writes above can be undone"
+    )
+
+
 # ── EDIT-mode search ────────────────────────────────────────────────────────
 
 
