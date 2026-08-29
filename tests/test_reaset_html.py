@@ -556,6 +556,7 @@ def test_loop_works_while_stopped_on_the_selected_song(script_body: str) -> None
     harness = """
         var RSDiag = { log: function () {}, blocked: function () {} };
         function canEditSetlist() { return true; }
+        function canControlTransport() { return true; }
         function saveCurrentState() {}
         function syncRegions() {}
         function toggleSubLoop() {}
@@ -3034,22 +3035,20 @@ def test_a_looping_section_is_marked_where_it_happens(script_body: str) -> None:
 def test_loop_cannot_look_pressable_to_a_role_that_cannot_press_it(script_body: str) -> None:
     """A control that lights itself and then refuses is worse than a missing one.
 
-    Loop is an EDIT — it changes what REAPER plays, and it is published — so
-    toggleCurrentLoop() refuses on a Controller. The footer button did not know
-    that: it lit from the Director's song, did nothing when tapped, and could
-    never be turned off. From a phone that is indistinguishable from "the loop
-    button is stuck on", which is exactly how it was reported.
-
-    Same rule the RECONNECT button had to learn. `disabled` stops the click;
-    only CSS stops it LOOKING pressable, and the two have to agree.
+    Both roles hold LOOP now (see test_loop_is_transport_and_both_roles_hold_it),
+    but the rule this test carries outlives that change: whatever role gate the
+    handler asks, the BUTTON must ask the same one, be re-applied on the
+    transport tick that redraws the bar, and look disabled whenever it is —
+    `disabled` stops the click, only CSS stops it LOOKING pressable, and the
+    two have to agree. An unrecognised mode still fails closed.
     """
     html = REASET_HTML.read_text(encoding="utf-8")
     body = strip_comments(script_body)
 
     toggle = strip_comments(extract_function(body, "toggleCurrentLoop"))
-    assert "canEditSetlist()" in toggle, (
-        "toggleCurrentLoop no longer refuses on a Controller — if that is "
-        "deliberate, this whole test is the wrong shape"
+    assert "canControlTransport()" in toggle, (
+        "toggleCurrentLoop lost its role gate — an unrecognised mode must "
+        "still fail closed"
     )
 
     # It used to disable the button inline here. It is one function now,
@@ -3066,7 +3065,7 @@ def test_loop_cannot_look_pressable_to_a_role_that_cannot_press_it(script_body: 
     assert re.search(r"\.disabled\s*=\s*!", perm), (
         "nothing disables the LOOP button any more"
     )
-    assert "canEditSetlist()" in perm, "the button's enabled state is not the role's"
+    assert "canControlTransport()" in perm, "the button's enabled state is not the role's"
 
     # Disabled must also LOOK it, and .active must still read through — "does
     # this song loop" is worth knowing on every device in the room.
@@ -3895,71 +3894,77 @@ def test_the_palettes_offer_fixed_colours_only() -> None:
         )
 
 
-def test_every_loop_button_knows_a_controller_cannot_press_it() -> None:
-    """Loop is an edit: it changes what REAPER plays and it is published, so
-    toggleCurrentLoop() refuses on a Controller.
+def test_loop_is_transport_and_both_roles_hold_it() -> None:
+    """Loop is performance control: the Controller runs the show.
 
-    The footer's LOOP was taught that. The Live view's was not — so on the one
-    screen a phone is most likely to be showing during a song, the button
-    looked exactly as pressable as PLAY beside it, lit itself from the
-    Director's song, and did nothing at all when pressed.
-
-    A rule that holds for a ROLE cannot be applied per button and stay
-    applied. Every button wired to toggleCurrentLoop has to be governed from
-    the one place, and that place has to run when the role changes — not on
-    whatever transport tick happens to arrive next.
+    It was Director-only on the argument that the loop flags are published
+    state. The owner\'s ruling is the opposite: the Director BUILDS the show,
+    the Controller RUNS it, and looping the section being rehearsed is running
+    it. What must not wait on anyone is the AUDIO path — the native-loop keys
+    Reaset.lua consumes — so those, and only those, are transport-class:
+    a Controller arms the loop directly, with no relay and no relay\'s
+    latency. Authoring (the shared setlist) keeps its one writer: the
+    publish gate and canEditSetlist stay Director-only elsewhere.
     """
     html = REASET_HTML.read_text(encoding="utf-8")
-    body = strip_comments(html)
+    body = strip_comments(inline_scripts(html)[0])
 
+    # Both wired buttons stay governed from one place, and that place asks
+    # the TRANSPORT question now.
     wired = set(
         re.findall(r'<button[^>]*\bid="([^"]+)"[^>]*onclick="toggleCurrentLoop', html)
     ) | set(
         re.findall(r'<button[^>]*onclick="toggleCurrentLoop[^>]*\bid="([^"]+)"', html)
     )
     assert len(wired) >= 2, f"expected the footer and the Live view, found {wired}"
-
     gov = strip_comments(extract_function(html, "_applyLoopPermission"))
-    assert "canEditSetlist()" in gov, (
-        "the loop buttons no longer ask whether this device may edit"
-    )
-    assert ".disabled = " in gov, (
-        "nothing disables the loop buttons, so a Controller's press is refused "
-        "silently"
-    )
-    assert "Only the Director can change the loop" in gov, (
-        "a disabled loop button says nothing about why"
+    assert "canControlTransport()" in gov, (
+        "the loop buttons no longer ask the transport question — a Controller "
+        "is locked out of a control the owner says it holds"
     )
     for bid in wired:
         assert f"'{bid}'" in gov, (
             f"{bid} is wired to toggleCurrentLoop but is not governed by "
-            f"_applyLoopPermission — it will look pressable and refuse"
+            f"_applyLoopPermission"
         )
-
-    # And it has to be applied when the role changes, when the Live view
-    # opens, and on the transport tick that redraws the footer.
     for fn in ("applyModeUI", "openLiveView", "updateLiveView"):
         assert "_applyLoopPermission()" in strip_comments(extract_function(html, fn)), (
-            f"{fn}() does not re-apply the loop permission, so a button can be "
-            f"left offering a control this device cannot use"
+            f"{fn}() does not re-apply the loop permission on a role change"
         )
 
-    # `disabled` stops the click; only CSS stops it LOOKING pressable, and the
-    # two have to agree.
-    css = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
-    for sel in (r"\.t-btn-loop:disabled", r"\.lt-btn:disabled"):
-        assert re.search(r"(?m)^ {8}" + sel + r"\s*\{", css), (
-            f"{sel} has no rule, so a disabled loop button looks exactly as "
-            f"pressable as PLAY beside it"
+    # The handlers a press reaches ask transport, not edit.
+    for fn in ("toggleCurrentLoop", "toggleSubLoop", "_reaperNativeLoopOn"):
+        gate = strip_comments(extract_function(body, fn))
+        assert "canControlTransport()" in gate, (
+            f"{fn}() no longer asks canControlTransport — either it is locked "
+            f"to the Director again or it lost its role gate entirely"
+        )
+        assert "canEditSetlist()" not in gate and "canPublishSetlist()" not in gate, (
+            f"{fn}() asks the edit/publish question again — a Controller\'s "
+            f"LOOP press dies at this gate"
         )
 
-    # The guard in the handler is the thing that actually refuses. Both of
-    # them: the song-level toggle and the section-level one.
-    for fn in ("toggleCurrentLoop", "toggleSubLoop", "toggleLoop"):
-        assert "canEditSetlist()" in strip_comments(extract_function(body, fn)), (
-            f"{fn}() no longer checks the role, so a Controller can publish an "
-            f"edit to every device in the room"
+    # Row-level loop AUTHORING stays the Director\'s.
+    assert "canEditSetlist()" in strip_comments(extract_function(body, "toggleLoop")), (
+        "toggleLoop() lost its Director gate — setlist authoring has one writer"
+    )
+
+    # The audio path is transport-class for exactly the loop keys, so the
+    # wwr_req gate passes a Controller\'s arm/disarm through.
+    cls = strip_comments(extract_function(body, "_commandClass"))
+    for key in ("loopStart", "loopEnd", "loopMax", "nativeLoop"):
+        assert f"SET/EXTSTATEPERSIST/ReaSet/{key}/" in cls, (
+            f"the {key} key is publish-class again — a Controller\'s loop "
+            f"press is silently dropped by the wwr_req gate"
         )
+    assert "SET/REPEAT/0" in cls, (
+        "the Repeat cancel is publish-class — a Controller can arm a native "
+        "loop it can never disarm"
+    )
+    assert "SET/EXTSTATE/ReaSet/" not in cls.replace("SET/EXTSTATEPERSIST/ReaSet/", ""), (
+        "plain SET/EXTSTATE is transport-class — that hands a Controller the "
+        "whole shared-state namespace, not just the loop"
+    )
 
 
 def test_the_live_view_keeps_its_geometry_in_the_stylesheet() -> None:

@@ -6498,6 +6498,19 @@
                 sawWrite = true;
                 if (TRANSPORT_ACTION_IDS[seg] === 1) continue;
                 if (seg.indexOf('SET/POS/') === 0) continue;
+                // The native-loop keys are TRANSPORT, not publish. Looping a
+                // section mid-song is performance control — the musician
+                // holding the Controller reaches for LOOP exactly like PLAY,
+                // and routing it through the Director would add a relay's
+                // latency to a button that has to answer the beat. The
+                // whitelist names the four keys Reaset.lua's loop consumes
+                // plus the Repeat cancel; the Director remains the only
+                // writer of everything else, the setlist included.
+                if (seg.indexOf('SET/EXTSTATEPERSIST/ReaSet/loopStart/') === 0) continue;
+                if (seg.indexOf('SET/EXTSTATEPERSIST/ReaSet/loopEnd/') === 0) continue;
+                if (seg.indexOf('SET/EXTSTATEPERSIST/ReaSet/loopMax/') === 0) continue;
+                if (seg.indexOf('SET/EXTSTATEPERSIST/ReaSet/nativeLoop/') === 0) continue;
+                if (seg === 'SET/REPEAT/0') continue;
                 allTransport = false;
             }
             if (!sawWrite) return 'read';
@@ -10795,10 +10808,12 @@
         // loopMax = 0 means infinite (cancelled via "off" or stop).
         function _reaperNativeLoopOn(start, end, loopMax, subId) {
             if (!window.REASET_NATIVE_LOOP) return;
-            // Same reasoning as auto-stop arming: these are publish writes and
-            // the Director owns them. A Controller that armed a native loop
-            // would be handing REAPER's Repeat a second opinion.
-            if (!canPublishSetlist()) return;
+            // Transport permission: the loop keys are transport-class in
+            // _commandClass for exactly this call. The device that arms the
+            // loop is the one that counts crossings and disarms it — that
+            // contract is per-device state (_nativeLoopSubId) and holds for a
+            // Controller the same way it holds for the Director.
+            if (!canControlTransport()) return;
             wwr_req("SET/EXTSTATEPERSIST/ReaSet/loopStart/" + start.toFixed(5));
             wwr_req("SET/EXTSTATEPERSIST/ReaSet/loopEnd/"   + end.toFixed(5));
             // Always send 0 (infinite) — JS counts crossings and sends 'off' when done.
@@ -10816,7 +10831,7 @@
         function _reaperNativeLoopOff() {
             if (!window.REASET_NATIVE_LOOP) return;
             if (!window._nativeLoopSubId) return;
-            if (!canPublishSetlist()) { window._nativeLoopSubId = null; return; }
+            if (!canControlTransport()) { window._nativeLoopSubId = null; return; }
             wwr_req("SET/REPEAT/0");                               // synchronous: same HTTP batch as next SET/POS
             wwr_req("SET/EXTSTATEPERSIST/ReaSet/nativeLoop/off");  // async: Lua cleans up region + loop points
             window._nativeLoopSubId = null;
@@ -12442,10 +12457,8 @@
         // screen a phone is most likely to be showing during a song. A rule
         // that holds for a role cannot be applied per button and stay applied.
         function _applyLoopPermission() {
-            var can = canEditSetlist();
-            var title = can
-                ? t('Loop this song or section')
-                : t('Only the Director can change the loop');
+            var can = canControlTransport();
+            var title = t('Loop this song or section');
             var ids = ['footer-loop-btn', 'live-loop-btn'];
             for (var i = 0; i < ids.length; i++) {
                 var b = document.getElementById(ids[i]);
@@ -12455,9 +12468,20 @@
             }
         }
 
+        // LOOP IS PERFORMANCE CONTROL, and both roles hold the transport.
+        // The Director builds the show; the Controller runs it — and looping
+        // the section being rehearsed is running it. This used to be
+        // Director-only on the argument that the loop flags are published
+        // state; the part of a loop that must not wait on anyone is the AUDIO,
+        // and that path (the native-loop keys Reaset.lua consumes) is now
+        // transport-class in _commandClass, so a Controller arms it directly,
+        // with no relay and no relay's latency. What stays Director-only is
+        // authoring: saveCurrentState's publish side is already a no-op on a
+        // Controller, so its flag lives locally and the shared setlist still
+        // has one writer.
         function toggleCurrentLoop(e) {
             if (e) e.stopPropagation();
-            if (!canEditSetlist()) { RSDiag.blocked('toggleCurrentLoop', 'role-cannot-edit-setlist'); return; }
+            if (!canControlTransport()) { RSDiag.blocked('toggleCurrentLoop', 'role-cannot-control-transport'); return; }
             var activeIdx = -1;
             // Starts at the resolved instance rather than at 0, so a repeat's
             // second row gets its own loop toggled instead of the first row's.
@@ -12491,7 +12515,9 @@
             }
         }
         function toggleSubLoop(id) {
-            if (!canEditSetlist()) { RSDiag.blocked('toggleSubLoop', 'role-cannot-edit-setlist'); return; }
+            // Transport permission, not edit: looping the section under the
+            // cursor is running the show, and the Controller runs the show.
+            if (!canControlTransport()) { RSDiag.blocked('toggleSubLoop', 'role-cannot-control-transport'); return; }
             if (window.subStates[id]) {
                 window.subStates[id].loop = !window.subStates[id].loop;
                 var isNowOn = window.subStates[id].loop;
