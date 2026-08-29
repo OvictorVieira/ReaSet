@@ -15551,8 +15551,43 @@
                             "Import Setlists",
                             "Overwrite all local setlists with the imported file?",
                             function () {
+                                // WRITE THE IMPORT INTO THE PROJECT LIBRARY.
+                                //
+                                // The disk (reaset_setlists.json) is the source
+                                // of truth: _librarySyncWithProject() reloads
+                                // setlists FROM it on every dropdown open, on
+                                // every changeSetlist() and on boot. Overwriting
+                                // only the in-memory copy left every imported
+                                // name absent from disk, so the next reload
+                                // silently replaced them with the old disk
+                                // contents — the import appeared, then vanished,
+                                // and currentSetlistName fell back to whatever
+                                // was on disk (usually "Default").
+                                //
+                                // Enqueue a delete for every name that used to be
+                                // there and is no longer in the import (Import is
+                                // an overwrite, not a merge), then an upsert for
+                                // every incoming name. _libraryEnqueue treats a
+                                // missing setlists[name] as a delete, so the
+                                // order matters: swap setlists FIRST, then
+                                // enqueue — the drain reads setlists[name] at
+                                // send time.
+                                var _oldNames = Object.keys(setlists || {});
                                 setlists = data; if (!setlists[currentSetlistName]) currentSetlistName = "Default";
                                 localStorage.setItem(STORAGE_KEY, JSON.stringify(setlists)); localStorage.setItem(CURRENT_KEY, currentSetlistName);
+                                for (var _i = 0; _i < _oldNames.length; _i++) {
+                                    if (!(_oldNames[_i] in setlists)) _libraryEnqueue(_oldNames[_i]);
+                                }
+                                var _newNames = Object.keys(setlists);
+                                for (var _j = 0; _j < _newNames.length; _j++) _libraryEnqueue(_newNames[_j]);
+                                // Suppress the next disk re-read: the writes
+                                // above are sequential HTTP requests spaced by
+                                // LIB_SEND_GAP, so a refresh triggered by the
+                                // dropdown open the user does next would fetch a
+                                // stale disk and undo the import for a second
+                                // time. Bumping _libRefreshedAt uses the same
+                                // 3s window _libraryRefreshOnOpen already honours.
+                                _libRefreshedAt = Date.now();
                                 updateSetlistDropdown(); displayList = []; initialized = false; syncRegions();
                                 // Same omission as changeSetlist had: an import
                                 // can change the active set, and other devices
