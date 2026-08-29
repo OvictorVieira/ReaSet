@@ -4430,6 +4430,54 @@ def test_importing_setlists_writes_them_into_the_project_library(script_body: st
     )
 
 
+def test_the_edit_row_button_toggles_active_in_place(script_body: str) -> None:
+    """✕ deactivates where the row stands; + reactivates it. Nothing moves.
+
+    The row button used to call removeFromSetlist, which tore the row out of
+    the list into the add-picker overlay nobody had open — on stage that read
+    as DELETE. The Director's report from the M1: grey rows carried ✕ instead
+    of +, and pressing ✕ made the song vanish from the screen.
+
+    Three parts, each reported as its own symptom:
+    - the row button calls toggleSkip for BOTH states — ✕ on an active row,
+      + on a grey one, same slot, row stays put;
+    - a deliberate add arrives ACTIVE: it used to inherit the region's +SKIP
+      default, so the song the Director just added appeared greyed out — or,
+      with Hide Skips on, appeared NOWHERE ("adiciono e ela não aparece");
+    - edit mode always shows skipped rows, whatever Hide Skips says: the +
+      that brings a song back lives ON the row it would hide.
+    """
+    body = strip_comments(script_body)
+
+    row = re.search(r"rowDiv\.innerHTML =(.*?);\n", body, re.S)
+    assert row, "list-mode row template not found"
+    template = row.group(1)
+    assert "removeFromSetlist" not in template, (
+        "the row button removes again — a ✕ that makes the row vanish"
+    )
+    toggles = re.findall(r"toggleSkip\(", template)
+    assert len(toggles) >= 2, (
+        "the row button does not toggle the active state in both directions"
+    )
+    assert "song-add-btn" in template and "song-remove-btn" in template, (
+        "the two states of the row button lost their two looks"
+    )
+    skipped_branch = re.search(r"r\.skipped\s*\?\s*'<button class=\"song-add-btn\"", template)
+    assert skipped_branch, "a grey (skipped) row does not show the + button"
+
+    add = strip_comments(extract_function(body, "addSongToSetlist"))
+    assert "skipped: false" in add and "defaultSkip" not in add, (
+        "an explicit add inherits the +SKIP default again — the song the "
+        "Director just chose arrives greyed out or hidden"
+    )
+
+    hide = strip_comments(extract_function(body, "_hideSkippedEffective"))
+    assert "REASET_EDITING" in hide and "return false" in hide, (
+        "edit mode can hide skipped rows — the + that reactivates a song "
+        "would be unreachable"
+    )
+
+
 def test_edit_mode_keeps_removed_songs_on_screen_with_an_add_button(script_body: str) -> None:
     """The ✕ must never look like DELETE.
 

@@ -2807,6 +2807,7 @@
         .song-row .drag-handle,
         .song-row .song-dotmenu-btn,
         .song-row .song-remove-btn,
+        .song-row .song-add-btn,
         .section-row .sub-dotmenu-btn { display: none; }
 
         /* Removing is destructive-ish and structural, so it reads as the one
@@ -2841,7 +2842,6 @@
         .song-container-off .song-row { opacity: 0.55; }
         .song-container-off .song-row:hover { opacity: 0.8; }
         .song-row .song-add-btn {
-            display: flex;
             align-items: center; justify-content: center;
             width: 26px; height: 26px; flex: 0 0 auto;
             margin-right: 2px;
@@ -2992,6 +2992,7 @@
         body.reaset-editing .song-row .drag-handle,
         body.reaset-editing .song-row .song-dotmenu-btn,
         body.reaset-editing .song-row .song-remove-btn,
+        body.reaset-editing .song-row .song-add-btn,
         body.reaset-editing .section-row .sub-dotmenu-btn { display: flex; }
 
         /* Reordering a FILTERED list would write the filtered order back as
@@ -9661,6 +9662,11 @@
         // value is persisted, and forcing it would silently rewrite the
         // Director's own preference on any device that was ever a Controller.
         function _hideSkippedEffective() {
+            // Edit mode always shows every row: the + that reactivates a
+            // greyed-out song lives ON that row, so hiding it would make the
+            // song impossible to bring back — the exact dead end the edit
+            // screen exists to prevent. Hide Skips is a SHOW preference.
+            if (REASET_EDITING) return false;
             return hideSkippedMode || !canEditSetlist();
         }
         var isGridView = false;
@@ -11867,7 +11873,17 @@
                         '<div class="card-bg-fill" id="bg-' + r.uid + '"></div>'
                         + (loopMarks ? '<div class="loop-marks">' + loopMarks + '</div>' : '')
                         + '<div class="drag-handle">⋮⋮</div>'
-                        + '<button class="song-remove-btn" title="' + t('Remove from setlist') + '" onclick="event.stopPropagation(); removeFromSetlist(\'' + r.uid + '\')">&#10005;</button>'
+                        // The edit-mode button TOGGLES THE ROW'S ACTIVE STATE
+                        // in place — it does not remove the row. It used to
+                        // call removeFromSetlist, and on stage that read as
+                        // DELETE: the row vanished from the screen into the
+                        // add-picker overlay nobody had open. The Director
+                        // edits by looking at the whole show at once: ✕ on an
+                        // active row greys it out where it stands; + on a grey
+                        // row lights it back up. Nothing ever leaves the list.
+                        + (r.skipped
+                            ? '<button class="song-add-btn" title="' + t('Add to setlist') + '" onclick="event.stopPropagation(); toggleSkip(\'' + r.uid + '\')">&#43;</button>'
+                            : '<button class="song-remove-btn" title="' + t('Remove from setlist') + '" onclick="event.stopPropagation(); toggleSkip(\'' + r.uid + '\')">&#10005;</button>')
                         + '<button class="song-dotmenu-btn" onclick="event.stopPropagation(); openSongMenu(event,\'' + r.uid + '\')"><svg width="4" height="18" viewBox="0 0 4 18" fill="currentColor"><circle cx="2" cy="2" r="2"/><circle cx="2" cy="9" r="2"/><circle cx="2" cy="16" r="2"/></svg></button>'
                         + '<button class="' + chevClass + '" id="chev-' + r.uid + '" onclick="event.stopPropagation();toggleExpand(\'' + r.uid + '\',' + hasSubs + ')">' + chevIcon + '</button>'
                         + '<div class="song-title-area" onclick="playRegion(' + r.start + ',\'' + r.id + '\',\'' + r.uid + '\')">'
@@ -12565,7 +12581,13 @@
             if (!src) { for (var j = 0; j < displayList.length; j++) { if (displayList[j].id == regionId) { src = displayList[j]; break; } } }
             if (!src) { RSDiag.log('ADD_MISS', { song: String(regionId) }); return; }
 
-            displayList.push(_makeInstance(src, _newUid(src.id), { skipped: !!src.defaultSkip }));
+            // Explicitly added means ACTIVE. This used to inherit the region's
+            // +SKIP default, so a song the Director just chose to put in the
+            // show arrived greyed out — and with Hide Skips on it arrived
+            // INVISIBLE: pressed +, saw nothing change, pressed Add again.
+            // The +SKIP default is for the bootstrap absorb, where nobody
+            // chose anything; a deliberate add IS the choice.
+            displayList.push(_makeInstance(src, _newUid(src.id), { skipped: false }));
             for (var g = g_offSetlist.length - 1; g >= 0; g--) {
                 if (g_offSetlist[g].id == regionId) g_offSetlist.splice(g, 1);
             }
