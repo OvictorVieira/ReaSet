@@ -1757,6 +1757,17 @@ def test_membership_actions(script_body: str) -> None:
         function clearQueuedRegion() { queuedRegion = null; }
         function noteActiveInstance(u) { _activeUidHint = u || null; }
         function closeAddSongPicker() {}
+        // The membership actions now repair the cue after a structural edit.
+        // That repair has its own tests; this one is about what lands in the
+        // list, so the two helpers are stubbed rather than driven.
+        function _recueAfterEdit() {}
+        function _recueTo() {}
+        function _successorAfter() { return null; }
+        function _dropIntentNaming(inst) {
+            if (selectedRegion && selectedRegion.uid === inst.uid) clearSelectedRegion();
+            if (queuedRegion && queuedRegion.uid === inst.uid) clearQueuedRegion();
+            if (_activeUidHint === inst.uid) noteActiveInstance(null);
+        }
         var lastRenderChecksum = '', selectedRegion = null, queuedRegion = null, _activeUidHint = null;
 
         var A = { id: 'A', name: 'Song A', start: 0,  end: 10, duration: 10 };
@@ -5015,6 +5026,32 @@ def _transport_expr(script_body: str, name: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _transport_prelude(script_body: str) -> str:
+    """Any `var nowX = ...;` the derivations lean on, in source order.
+
+    The reply is parsed in steps — the raw playstate first, then what it means
+    — so an expression pulled out on its own may reference the step before it.
+    """
+    out = []
+    for name in ("nowState",):
+        expr = _transport_expr(script_body, name)
+        if expr:
+            out.append("var %s = %s;" % (name, expr))
+    return "\n".join(out)
+
+
+def _read_playstate(script_body: str, name: str, playstate: str) -> bool:
+    """Run one of the TRANSPORT derivations against one playstate."""
+    expr = _transport_expr(script_body, name)
+    assert expr, f"the TRANSPORT reply no longer derives {name}"
+    out = run_node(
+        "var tok = ['TRANSPORT', %r, '12.5'];\n" % playstate
+        + _transport_prelude(script_body)
+        + "\nconsole.log((%s) ? 1 : 0);" % expr
+    ).strip()
+    return out == "1"
+
+
 @requires_node
 @pytest.mark.parametrize(
     "state,playstate,playing",
@@ -5030,15 +5067,10 @@ def test_transport_reply_reads_the_playing_states(
     the day someone rewrites that expression this says whether the five states
     still land where they should.
     """
-    expr = _transport_expr(script_body, "nowPlaying")
-    assert expr, "the TRANSPORT reply no longer derives nowPlaying"
-    out = run_node(
-        "var tok = ['TRANSPORT', %r, '12.5'];\n" % playstate
-        + "console.log((%s) ? 1 : 0);" % expr
-    ).strip()
-    assert (out == "1") == playing, (
+    got = _read_playstate(script_body, "nowPlaying", playstate)
+    assert got == playing, (
         f"playstate {playstate} ({state}) read back as "
-        f"{'playing' if out == '1' else 'not playing'}"
+        f"{'playing' if got else 'not playing'}"
     )
 
 
@@ -5065,13 +5097,10 @@ def test_transport_reply_tells_paused_apart_from_stopped(script_body: str) -> No
         "wrong state"
     )
     for state, playstate, _playing, paused in TRANSPORT_PLAYSTATES:
-        out = run_node(
-            "var tok = ['TRANSPORT', %r, '12.5'];\n" % playstate
-            + "console.log((%s) ? 1 : 0);" % expr
-        ).strip()
-        assert (out == "1") == paused, (
+        got = _read_playstate(script_body, "nowPaused", playstate)
+        assert got == paused, (
             f"playstate {playstate} ({state}) read back as "
-            f"{'paused' if out == '1' else 'not paused'}"
+            f"{'paused' if got else 'not paused'}"
         )
 
 
@@ -5114,7 +5143,7 @@ def test_play_after_a_pause_taken_in_reaper_resumes_where_it_stopped(
         // What the app is holding when the pause lands. isPlaying went false on
         // the reply, and the row the user last tapped is still selected:
         // togglePlay() is the only thing that clears it, and it has not run.
-        var isPlaying = false;
+        var isPlaying = false, isPaused = true;
         var selectedRegion = displayList[1];
 
         var queuedRegion = null;
@@ -5195,12 +5224,13 @@ BUG2_STATE = """
     var g_offSetlist = [], setlists = {}, currentSetlistName = 'Default';
     var lastRenderChecksum = '';
     var selectedRegion = null, queuedRegion = null, _activeUidHint = null;
-    var isPlaying = false, currentPos = 0;
+    var isPlaying = false, isPaused = false, currentPos = 0;
+    var MANUAL_GUARD_MS = 900, _manualIntent = null, _manualGuardUntil = 0;
 
     function _paintIntent() {}
     function renderSetlist() {}
+    function flashRow() {}
     function syncRegions() {}
-    function _fmtPos(p) { return String(p); }
     // The real one re-partitions and republishes; the partition is the part
     // that matters here, so it is the part that is kept.
     function saveCurrentState() { displayList = _partitionActiveFirst(displayList); }
@@ -5222,6 +5252,14 @@ BUG2_FUNCS = [
     "_partitionActiveFirst",
     "findNextValidSong",
     "findPrevValidSong",
+    "_successorAfter",
+    "_dropIntentNaming",
+    "_recueTo",
+    "_recueAfterEdit",
+    "isManualTransportGuardActive",
+    "clearManualTransportGuard",
+    "selectRegionForCue",
+    "_fmtPos",
     "resolvePlayTarget",
     "toggleSkip",
     "removeFromSetlist",
@@ -5382,6 +5420,50 @@ def test_play_after_a_mid_show_edit_does_not_fire_the_old_next_song(
         f"Play resolved to the song that was just taken out of the set "
         f"(via {via}). The cursor still sits at its start because no edit path "
         "revises it, and resolvePlayTarget() reads the cursor"
+    )
+
+
+@requires_node
+def test_reordering_the_set_moves_the_cue_with_it(script_body: str) -> None:
+    """Drag a song above the cued one and the downbeat must start it.
+
+    Song A has ended and the auto-stop boundary has cued B. The director then
+    drags C above B, which is the whole gesture for "play this next". The cue
+    was decided from an ordering that no longer exists, so it has to be asked
+    again against the list as it stands.
+
+    Anchored on the song that FINISHED rather than on the cued one: a reorder
+    can move what comes next, but it cannot move the fact that the show got to
+    the end of A.
+    """
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            // Where the boundary leaves the show: A finished, B cued.
+            window._cueAnchorUid  = 'uA';
+            window._pendingCuePos = displayList[1].start;
+            selectedRegion = _selectionOf(displayList[1]);
+            currentPos = displayList[1].start;
+
+            // The drag: C above B. Sortable rebuilds displayList from the rows
+            // on screen, which is this same move.
+            displayList = [displayList[0], displayList[2], displayList[1]];
+
+            _recueAfterEdit('reorder');
+            console.log((selectedRegion ? selectedRegion.uid : '-') + ',' + sent.join('|'));
+            """,
+        )
+    ).strip()
+    cued, sent = (out.split(",", 1) + [""])[:2]
+
+    assert cued == "uC", (
+        f"the cue still names {cued} after the song above it changed — Play "
+        "starts the song that was next before the drag"
+    )
+    assert "SET/POS/200" in sent, (
+        f"the cue moved on screen but REAPER's cursor did not ({sent}). Play "
+        "resolves from that cursor, so the two have to agree"
     )
 
 

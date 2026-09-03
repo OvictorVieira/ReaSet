@@ -225,10 +225,17 @@ local function loop_tick()
     if s_active then
         if ctrl == "off" then loop_cleanup(); return end
 
-        local ps = reaper.GetPlayState()  -- 0=stop 1=play 2=pause 4=rec 5=rec+play
+        -- GetPlayState is a BITFIELD: &1 playing, &2 paused, &4 recording. So
+        -- "paused" is 2 stopped, 6 record-armed, and 3 on a build that keeps
+        -- the playing bit through a pause. Testing `ps ~= 2` read one of those
+        -- three and let the other two through, and a paused transport returns
+        -- the SAME GetPlayPosition() on every tick — so the crossing detector
+        -- below counted loop passes that never happened, and a +LOOP section
+        -- with a repeat count ended early on stage with nothing to show why.
+        local ps = reaper.GetPlayState()
         if ps == 0 then loop_cleanup(); return end
 
-        if ps ~= 2 then
+        if (ps & 2) == 0 then
             local pos = reaper.GetPlayPosition()
             if not s_near_end then
                 if pos >= (s_end - NEAR_END) then s_near_end = true end

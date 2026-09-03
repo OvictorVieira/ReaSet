@@ -7368,6 +7368,10 @@
         var displayList = [];
         var g_subRegionMap = {};   // { "Song Name": [{id,name,sectionName,start,end},...] }
         var isPlaying = false;
+        // PAUSED is its own state, not a quiet kind of stopped. Play has to
+        // resume from where the transport is standing; a stop has to start the
+        // cued song from its top. One boolean could not express both.
+        var isPaused  = false;
         var currentPos = 0.0;
         var queuedRegion = null;
         // Holds a UID, not a region id — its only job is to find the element
@@ -10453,7 +10457,18 @@
                 if (!tok.length) continue;
                 switch (tok[0]) {
                     case "TRANSPORT":
-                        var nowPlaying = (parseInt(tok[1]) & 1) === 1;
+                        // REAPER's playstate is a BITFIELD, not an enum:
+                        // &1 playing, &2 paused, &4 recording. Reducing it to
+                        // the playing bit threw PAUSED away, so a transport
+                        // paused at REAPER's own keyboard arrived here as
+                        // STOPPED — indistinguishable from a show sitting at a
+                        // cue. Every decision downstream was then taken on a
+                        // state the app could not actually tell apart: whether
+                        // a tap cues or seeks, whether Play resumes or restarts,
+                        // and whether a pending cue is allowed to fire.
+                        var nowState   = parseInt(tok[1]);
+                        var nowPlaying = (nowState & 1) === 1;
+                        var nowPaused  = (nowState & 2) === 2;
                         currentPos = parseFloat(tok[2]);
                         // Cancel the MIDI-init pre-roll artefact in ONE place. The
                         // pre-roll leaves the cursor a few ms before the song start,
@@ -10499,16 +10514,32 @@
                         // command's confirmation arrives this holds exactly what
                         // that command intended — never a leftover from the
                         // auto-stop the user just overruled.
-                        if (!nowPlaying && window._pendingCuePos != null) {
+                        //
+                        // STOPPED, not merely "not playing": a pause is the one
+                        // command whose whole meaning is stay exactly here, and
+                        // firing the cue on it drags the cursor off the paused
+                        // position. pauseTransport() clears the cue for its own
+                        // pause; a pause taken at REAPER's keyboard never
+                        // reached that code, so the state has to carry it.
+                        if (nowState === 0 && window._pendingCuePos != null) {
                             var _cue = window._pendingCuePos;
                             window._pendingCuePos = null;
                             wwr_req("SET/POS/" + _cue, "pending-cue");
+                        }
+                        // Playback ReaSet did not ask for — a spacebar in
+                        // REAPER — means the cued song was NOT consumed by the
+                        // cue's own Play, which is the only thing that clears
+                        // it. Left standing, the next Play seeks back to that
+                        // row and restarts a song that is already sounding.
+                        if (nowPlaying && !wasPlayingLast && selectedRegion) {
+                            clearSelectedRegion('transport-started-elsewhere');
                         }
                         // First playback of the session starts the session clock,
                         // which then runs through every later stop and pause.
                         if (nowPlaying && !wasPlayingLast) _sessionBegin();
                         wasPlayingLast = nowPlaying;
                         isPlaying = nowPlaying;
+                        isPaused  = nowPaused;
                         updatePlaybackUI();
                         break;
                     case "REGION_LIST":
@@ -12647,9 +12678,8 @@
 
             // Intent pointing at a row that is about to stop existing would
             // otherwise survive as a cue or a queue target nobody can see.
-            if (selectedRegion && selectedRegion.uid === inst.uid) clearSelectedRegion('row-removed');
-            if (queuedRegion && _uidOf(queuedRegion) === inst.uid) clearQueuedRegion('row-removed');
-            if (_activeUidHint === inst.uid) noteActiveInstance(null, 'row-removed');
+            var successor = _successorAfter(inst);
+            _dropIntentNaming(inst, 'row-removed');
 
             displayList.splice(idx, 1);
             // Back to the picker only if this was its LAST instance: with a
@@ -12666,6 +12696,7 @@
             }
             RSDiag.log('SETLIST_REMOVE', { song: inst.id, uid: inst.uid, stillIn: stillIn });
             saveCurrentState(); lastRenderChecksum = ""; renderSetlist();
+            _recueTo(successor, inst, 'row-removed');
         }
 
         // Appends. Position is then a drag, which is the gesture the list
@@ -12692,15 +12723,29 @@
             }
             RSDiag.log('SETLIST_ADD', { song: String(regionId) });
             saveCurrentState(); lastRenderChecksum = ""; renderSetlist();
+            _recueAfterEdit('song-added');
             closeAddSongPicker();
         }
 
+        // Deactivating a row is a REMOVAL from the show, and the row ✕ calls
+        // this rather than removeFromSetlist() so the song can be brought back
+        // in place. The two paths have to agree about everything except the
+        // splice: intent that names a row must not outlive that row leaving the
+        // set. It used to, and a song taken out mid-show stayed the cued song —
+        // so the next Play started the song the director had just removed.
         function toggleSkip(uid) {
             if (!canEditSetlist()) { RSDiag.blocked('toggleSkip', 'role-cannot-edit-setlist'); return; }
             var inst = _instanceForAction(uid, 'toggleSkip');
             if (!inst) return;
             inst.skipped = !inst.skipped;
+            // Both reads happen while the list is still in SHOW order.
+            // saveCurrentState() below re-sorts it actives-first, which moves
+            // this row to the tail and destroys the neighbourhood the answer
+            // has to come from.
+            var successor = inst.skipped ? _successorAfter(inst) : null;
+            if (inst.skipped) _dropIntentNaming(inst, 'row-deactivated');
             saveCurrentState(); lastRenderChecksum = ""; syncRegions();
+            if (inst.skipped) _recueTo(successor, inst, 'row-deactivated');
         }
         function findNextValidSong(startIdx) {
             for (var i = startIdx + 1; i < displayList.length; i++) { if (!displayList[i].skipped) return displayList[i]; }
@@ -12709,6 +12754,80 @@
         function findPrevValidSong(startIdx) {
             for (var i = startIdx - 1; i >= 0; i--) { if (!displayList[i].skipped) return displayList[i]; }
             return null;
+        }
+
+        // ── Editing the set while the show is standing on it ────────────────
+        //
+        // There are two records of "what plays next" and they are not the same
+        // kind of thing. displayList is the set, and every mutation rebuilds it
+        // correctly. REAPER's edit cursor is a POSITION, parked on the next
+        // song's start by the auto-stop boundary, and no edit path ever revised
+        // it — so after a reorder or a removal the cursor still pointed into
+        // the song that used to be next, and Play, which resolves its target
+        // from the cursor, started that one. Reported from a stage.
+        //
+        // These three keep the two in step: drop intent that names a row
+        // leaving the set, work out where the show goes instead, and move the
+        // cursor there.
+
+        // The row after this one in SHOW order, falling back to the row before
+        // it. Call it BEFORE saveCurrentState() re-sorts actives-first, or the
+        // forward scan starts at the tail and answers null for everything.
+        function _successorAfter(inst) {
+            var idx = displayList.indexOf(inst);
+            if (idx === -1) return null;
+            return findNextValidSong(idx) || findPrevValidSong(idx);
+        }
+
+        // Intent is three separate pointers and all three can name a row: the
+        // cued selection, the queued song and the active-row hint. A row that
+        // is leaving the show has to be cleared out of every one of them, or it
+        // stays reachable — and selectedRegion outranks everything else in
+        // resolvePlayTarget(), so it comes back as the thing Play starts.
+        function _dropIntentNaming(inst, reason) {
+            if (selectedRegion && selectedRegion.uid === inst.uid) clearSelectedRegion(reason);
+            if (queuedRegion && _uidOf(queuedRegion) === inst.uid) clearQueuedRegion(reason);
+            if (_activeUidHint === inst.uid) noteActiveInstance(null, reason);
+        }
+
+        // Move the show to `target`, but only when the transport is standing
+        // still AND the cursor is inside the row that just left. A rolling or
+        // paused transport is never seeked from here: the song that is sounding
+        // outranks the edit, and the skipped-row rescue in updatePlaybackUI
+        // owns the playing case.
+        function _recueTo(target, leaving, reason) {
+            if (isPlaying || isPaused) return;
+            if (!leaving || currentPos < leaving.start || currentPos >= leaving.end) return;
+            if (!target) {
+                // Nothing active left to go to. Drop the cue rather than leave
+                // it pointing into a song that is out of the show.
+                window._pendingCuePos = null;
+                RSDiag.log('RECUE', { to: '-', reason: reason || '?' });
+                return;
+            }
+            selectRegionForCue(target, reason || 'recue-after-edit');
+        }
+
+        // After a structural edit that did not remove the cued row: adding a
+        // song, or dragging one up or down. The cue was decided when the last
+        // song ended, from an ordering the operator has since changed, so it
+        // has to be asked again — "what comes after the song that just
+        // finished" — against the list as it stands now.
+        //
+        // Anchored on the FINISHED song rather than on the cued one because
+        // that is the fact the edit cannot move: the show got to the end of it,
+        // and no reorder changes that. Only ever while the transport is
+        // standing still, and only when the answer actually changed.
+        function _recueAfterEdit(reason) {
+            if (isPlaying || isPaused) return;
+            if (!window._cueAnchorUid) return;
+            var anchor = _findInstanceByUid(window._cueAnchorUid);
+            if (!anchor || anchor.skipped) return;
+            var next = findNextValidSong(displayList.indexOf(anchor));
+            if (!next) return;
+            if (selectedRegion && selectedRegion.uid === _uidOf(next)) return;
+            RSDiag.log('RECUE', { to: next.id, after: anchor.id, reason: reason || '?' });
+            selectRegionForCue(next, reason || 'recue-after-edit');
         }
         // Resolved by id and THEN searched, rather than by one selector built
         // from a uid. Even with selector-safe uids, interpolating an id into a
@@ -12776,7 +12895,13 @@
             if (activeRegion) {
                 // Skip logic
                 if (activeRegion.skipped) {
-                    var nxt = findNextValidSong(activeIdx);
+                    // Forward first, then backward. saveCurrentState() sorts
+                    // the list actives-first, so a row deactivated under the
+                    // playhead has just been moved to the TAIL — and a
+                    // forward-only scan from the last index answers null, so
+                    // no seek was issued and the transport was left parked
+                    // inside a song that is no longer in the show.
+                    var nxt = findNextValidSong(activeIdx) || findPrevValidSong(activeIdx);
                     // Reconnect guard: don't auto-seek off a skipped region on a
                     // stale post-outage tick; adopt REAPER's position for now and
                     // let it fire on the next proven-fresh tick.
@@ -13238,7 +13363,22 @@
                         // The reposition waits for TRANSPORT to confirm it stopped
                         // — Main_OnCommand stops on the next audio block, so a
                         // SET/POS in that gap seeks a transport still rolling.
-                        if (_bnd.cue) window._pendingCuePos = _bnd.cue.start;
+                        // WHICH song, not just WHERE it starts. A bare
+                        // coordinate cannot follow a reorder: drag another song
+                        // above the cued one and the number still points into
+                        // the old one, so Play — which resolves from the cursor
+                        // — fires the song that used to be next. Recording the
+                        // row as well gives the cue an identity the edit paths
+                        // can find, and paints it so the operator can see what
+                        // the downbeat will start.
+                        if (_bnd.cue) {
+                            window._pendingCuePos = _bnd.cue.start;
+                            selectedRegion = _selectionOf(_bnd.cue);
+                            // The song the show actually reached. An edit can
+                            // move what comes after it; it cannot move this.
+                            window._cueAnchorUid = _uidOf(activeRegion);
+                            _paintIntent();
+                        }
                         return;
                     }
                     if (_bnd.action === 'wait') {
@@ -13285,7 +13425,22 @@
                         // it stops in its own audio engine at the exact sample.
                         // While that is armed we send nothing here.
                         if (!window._autoStopArmed) wwr_req(1016, "auto-stop-fallback");
-                        if (_bnd.cue) window._pendingCuePos = _bnd.cue.start;
+                        // WHICH song, not just WHERE it starts. A bare
+                        // coordinate cannot follow a reorder: drag another song
+                        // above the cued one and the number still points into
+                        // the old one, so Play — which resolves from the cursor
+                        // — fires the song that used to be next. Recording the
+                        // row as well gives the cue an identity the edit paths
+                        // can find, and paints it so the operator can see what
+                        // the downbeat will start.
+                        if (_bnd.cue) {
+                            window._pendingCuePos = _bnd.cue.start;
+                            selectedRegion = _selectionOf(_bnd.cue);
+                            // The song the show actually reached. An edit can
+                            // move what comes after it; it cannot move this.
+                            window._cueAnchorUid = _uidOf(activeRegion);
+                            _paintIntent();
+                        }
                         return;
                     }
                     return;
@@ -14040,6 +14195,27 @@
             // Stop followed 200ms later by Play must start, not be swallowed by
             // the guard its own predecessor set.
             clearManualTransportGuard('user-play');
+
+            // RESUME IS NOT A START.
+            //
+            // A paused transport is already standing in the right place, and
+            // the only honest answer to Play is "carry on from here". Resolving
+            // a target would find a row selection — the cue the operator left
+            // behind, or the one the auto-stop boundary parked — and seek to its
+            // top, so a pause taken at REAPER's own keyboard restarted the song
+            // instead of resuming it. That was the fault reported from the
+            // stage, and this is the branch that answers it.
+            //
+            // 1007 rather than a pause toggle on purpose: the command coming
+            // from ReaSet is mandatory, so it names the state it wants instead
+            // of asking REAPER to flip whatever it currently has.
+            if (isPaused) {
+                RSDiag.log('USER_PLAY', { via: 'resume-from-pause' });
+                window._playRegionLocked = Date.now() + 500;
+                window._pendingCuePos    = null;
+                wwr_req(1007, 'user-play-resume');
+                return;
+            }
 
             var target = resolvePlayTarget();
             RSDiag.log('USER_PLAY', {
@@ -15852,6 +16028,10 @@
                 }
                 setlists[currentSetlistName] = newOrder; saveCurrentState(); displayList = sortedDisplay;
                 lastRenderChecksum = JSON.stringify(displayList.map(function (r) { return { id: r.id, uid: r.uid, chain: r.chain, skipped: r.skipped, loop: r.loop, name: r.name, color: r.color }; }));
+                // Dragging a song above the cued one IS the instruction that it
+                // should play next. Without this the cue keeps naming the old
+                // row and the downbeat starts the song that used to be next.
+                _recueAfterEdit('reorder');
             }
         });
 
