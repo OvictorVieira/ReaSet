@@ -4988,3 +4988,426 @@ def test_playing_beats_the_song_colour() -> None:
         "the progress bar on a coloured playing row is not green — a green row "
         "with an amber bar reads as two songs at once"
     )
+# ── Live-show regressions ────────────────────────────────────────────────────
+#
+# Faults that reached a stage on 2026-08-29, written to FAIL on v3.3: a
+# regression test that passes before the fix proves nothing about the fix.
+
+
+# REAPER's Web Remote TRANSPORT reply carries a playstate, and paused is its
+# own value — not a flavour of stopped and not a flavour of playing:
+#
+#   0 stopped   1 playing   2 paused   5 recording   6 record-paused
+#
+# (id, playstate, playing?, paused?)
+TRANSPORT_PLAYSTATES = [
+    ("stopped", "0", False, False),
+    ("playing", "1", True, False),
+    ("paused", "2", False, True),
+    ("recording", "5", True, False),
+    ("record-paused", "6", False, True),
+]
+
+
+def _transport_expr(script_body: str, name: str) -> str | None:
+    """The right-hand side of `var NAME = ...;` in the TRANSPORT reply."""
+    match = re.search(r"var\s+" + re.escape(name) + r"\s*=\s*(.+?);", script_body)
+    return match.group(1) if match else None
+
+
+@requires_node
+@pytest.mark.parametrize(
+    "state,playstate,playing",
+    [(c[0], c[1], c[2]) for c in TRANSPORT_PLAYSTATES],
+    ids=[c[0] for c in TRANSPORT_PLAYSTATES],
+)
+def test_transport_reply_reads_the_playing_states(
+    script_body: str, state: str, playstate: str, playing: bool
+) -> None:
+    """Every playstate REAPER can send must be read as playing or not playing.
+
+    Runs the real derivation out of ReaSet.html rather than a copy of it, so
+    the day someone rewrites that expression this says whether the five states
+    still land where they should.
+    """
+    expr = _transport_expr(script_body, "nowPlaying")
+    assert expr, "the TRANSPORT reply no longer derives nowPlaying"
+    out = run_node(
+        "var tok = ['TRANSPORT', %r, '12.5'];\n" % playstate
+        + "console.log((%s) ? 1 : 0);" % expr
+    ).strip()
+    assert (out == "1") == playing, (
+        f"playstate {playstate} ({state}) read back as "
+        f"{'playing' if out == '1' else 'not playing'}"
+    )
+
+
+@requires_node
+def test_transport_reply_tells_paused_apart_from_stopped(script_body: str) -> None:
+    """A paused REAPER must not arrive at the app as a stopped one.
+
+    Reported from a show: pause inside REAPER, or hit the spacebar there, and
+    afterwards Play from ReaSet misbehaves. The transport moved out of band, so
+    the reply is the only thing that can tell ReaSet what happened — and the
+    reply is reduced to `(parseInt(tok[1]) & 1) === 1` and nothing else.
+
+    Paused (2) and stopped (0) therefore reach the app as the same state, and
+    every decision taken afterwards is taken on a state the app cannot
+    distinguish: whether a tap cues or seeks, whether Play resumes or restarts,
+    what the button says. Playstate 2 has to survive the parse for any of those
+    to be decidable.
+    """
+    expr = _transport_expr(script_body, "nowPaused")
+    assert expr, (
+        "the TRANSPORT reply still derives only nowPlaying, so playstate 2 "
+        "(paused) and playstate 0 (stopped) are indistinguishable to the whole "
+        "app. A Play sent after a pause taken in REAPER is then decided on the "
+        "wrong state"
+    )
+    for state, playstate, _playing, paused in TRANSPORT_PLAYSTATES:
+        out = run_node(
+            "var tok = ['TRANSPORT', %r, '12.5'];\n" % playstate
+            + "console.log((%s) ? 1 : 0);" % expr
+        ).strip()
+        assert (out == "1") == paused, (
+            f"playstate {playstate} ({state}) read back as "
+            f"{'paused' if out == '1' else 'not paused'}"
+        )
+
+
+@requires_node
+def test_play_after_a_pause_taken_in_reaper_resumes_where_it_stopped(
+    script_body: str,
+) -> None:
+    """A Play from ReaSet is mandatory, and after a REAPER-side pause it resumes.
+
+    The show sequence: a song is playing, the user pauses in REAPER itself, and
+    then reaches for Play in ReaSet. Two things have to hold, and neither
+    depends on what the transport happened to be doing at that instant:
+
+      1. Play issues a PLAY. Not a pause, and not nothing.
+      2. Play resumes from the paused position. It must not seek back to the
+         top of the song — which is what a leftover row selection makes it do,
+         and a leftover row selection is exactly what the user has, because
+         while the app believes the transport is idle a tap on a row is a cue.
+
+    Drives the real togglePlay() with the state the app is left holding after a
+    pause it did not issue.
+    """
+    harness = (
+        """
+        var sent = [];
+        var window = { _playIntent: null, _playRegionLocked: 0, _pendingCuePos: null };
+        function wwr_req(cmd) { sent.push(String(cmd)); }
+        var REASET_MODE = 'director';
+        var RSDiag = { log: function () {}, blocked: function () {} };
+
+        // Song TWO, paused 40s in by a hand on REAPER's own keyboard.
+        var displayList = [
+            { id: '1', uid: 'u1', start: 0,   end: 100 },
+            { id: '2', uid: 'u2', start: 100, end: 200 },
+            { id: '3', uid: 'u3', start: 200, end: 300 }
+        ];
+        var currentPos = 140;
+        var _activeUidHint = 'u2';
+
+        // What the app is holding when the pause lands. isPlaying went false on
+        // the reply, and the row the user last tapped is still selected:
+        // togglePlay() is the only thing that clears it, and it has not run.
+        var isPlaying = false;
+        var selectedRegion = displayList[1];
+
+        var queuedRegion = null;
+        var MANUAL_GUARD_MS = 900, _manualIntent = null, _manualGuardUntil = 0;
+        function midiInitPreroll(s) { return s; }
+        function cancelPendingAutomaticTransport() {}
+        function renderList() {}
+        function updatePlaybackUI() {}
+        function _paintIntent() {}
+        """
+        + extract_function(script_body, "canControlTransport")
+        + extract_function(script_body, "_uidOf")
+        + extract_function(script_body, "_ownerUidOf")
+        + extract_function(script_body, "noteActiveInstance")
+        + extract_function(script_body, "activeInstanceIdx")
+        + extract_function(script_body, "clearSelectedRegion")
+        + extract_function(script_body, "beginManualTransportIntent")
+        + extract_function(script_body, "isManualTransportGuardActive")
+        + extract_function(script_body, "clearManualTransportGuard")
+        + extract_function(script_body, "resolvePlayTarget")
+        + extract_function(script_body, "pauseTransport")
+        + extract_function(script_body, "togglePlay")
+        + """
+        togglePlay();
+        console.log(sent.join('|'));
+        """
+    )
+    sent = run_node(harness).strip()
+    commands = sent.split("|") if sent else []
+
+    assert commands, "Play sent nothing at all — the transport never restarts"
+    assert not any(c.startswith("1008") for c in commands), (
+        f"Play sent a PAUSE ({sent}). The user asked for playback and got the "
+        "opposite, which is the reported 'it gets buggy' exactly"
+    )
+    assert any("1007" in c for c in commands), (
+        f"Play sent {sent} — no play action reached REAPER"
+    )
+    assert not any("SET/POS/" in c for c in commands), (
+        f"Play sent {sent}. It seeked before playing, so a pause taken in "
+        "REAPER restarts the song from the top instead of resuming at 140s"
+    )
+
+
+# ── Editing the set while the show runs ──────────────────────────────────────
+#
+# Second fault from the same night: add a song, drag one up or down, or take
+# one out while the show is running, and the next Play fires the song that was
+# next BEFORE the edit.
+#
+# The cause is that there are two pointers at "what plays next" and only one of
+# them is rebuilt by an edit. displayList is rebuilt correctly every time. The
+# other is REAPER's own edit cursor, parked on the next song's start by the
+# auto-stop boundary as a bare coordinate (`window._pendingCuePos = _bnd.cue.start`)
+# — and a coordinate cannot follow a reorder. resolvePlayTarget() then answers
+# "what does Play start" from that cursor, so Play starts the old next song.
+
+
+BUG2_STATE = """
+    var sent = [];
+    var window = { _playIntent: null, _playRegionLocked: 0, _pendingCuePos: null };
+    function wwr_req(cmd) {
+        sent.push(String(cmd));
+        // A seek moves REAPER's cursor, and the cursor is what Play reads.
+        // Modelled here so a fix that re-cues by seeking is judged by its
+        // effect rather than by the shape of the call.
+        var m = String(cmd).match(/SET\\/POS\\/([0-9.]+)/);
+        if (m) currentPos = parseFloat(m[1]);
+    }
+    var REASET_MODE = 'director';
+    var RSDiag = { log: function () {}, logChange: function () {}, blocked: function () {} };
+
+    var displayList = [
+        { id: 'A', uid: 'uA', name: 'A', start: 0,   end: 100, skipped: false },
+        { id: 'B', uid: 'uB', name: 'B', start: 100, end: 200, skipped: false },
+        { id: 'C', uid: 'uC', name: 'C', start: 200, end: 300, skipped: false }
+    ];
+    var g_offSetlist = [], setlists = {}, currentSetlistName = 'Default';
+    var lastRenderChecksum = '';
+    var selectedRegion = null, queuedRegion = null, _activeUidHint = null;
+    var isPlaying = false, currentPos = 0;
+
+    function _paintIntent() {}
+    function renderSetlist() {}
+    function syncRegions() {}
+    function _fmtPos(p) { return String(p); }
+    // The real one re-partitions and republishes; the partition is the part
+    // that matters here, so it is the part that is kept.
+    function saveCurrentState() { displayList = _partitionActiveFirst(displayList); }
+"""
+
+BUG2_FUNCS = [
+    "canControlTransport",
+    "canEditSetlist",
+    "_uidOf",
+    "_ownerUidOf",
+    "noteActiveInstance",
+    "activeInstanceIdx",
+    "_findInstanceByUid",
+    "_instanceForAction",
+    "_selectionOf",
+    "clearSelectedRegion",
+    "clearQueuedRegion",
+    "_setQueuedRegion",
+    "_partitionActiveFirst",
+    "findNextValidSong",
+    "findPrevValidSong",
+    "resolvePlayTarget",
+    "toggleSkip",
+    "removeFromSetlist",
+]
+
+
+def _bug2_harness(script_body: str, body: str) -> str:
+    return (
+        BUG2_STATE
+        + "".join(extract_function(script_body, f) for f in BUG2_FUNCS)
+        + body
+    )
+
+
+@requires_node
+def test_deactivating_a_song_drops_the_intent_that_points_at_it(
+    script_body: str,
+) -> None:
+    """Taking a song out of the set must take it out of every pointer too.
+
+    The row ✕ used to call removeFromSetlist(), which clears the three pieces
+    of intent that can name a row — the cued selection, the queued song and the
+    active-row hint — precisely so none of them survives pointing at a song
+    that is no longer in the show. The ✕ now calls toggleSkip() instead, and
+    toggleSkip does none of that.
+
+    So a song deactivated mid-show stays the cued song, and resolvePlayTarget()
+    puts the selection above everything else. Play then starts the song the
+    director just took out.
+    """
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            // B is where the show is parked: cued, queued and hinted.
+            selectedRegion  = _selectionOf(displayList[1]);
+            _setQueuedRegion(displayList[1], 'test');
+            noteActiveInstance('uB', 'test');
+
+            toggleSkip('uB');
+
+            console.log(
+                (selectedRegion ? selectedRegion.uid : '-') + ',' +
+                (queuedRegion ? _uidOf(queuedRegion) : '-') + ',' +
+                (_activeUidHint || '-')
+            );
+            """,
+        )
+    ).strip()
+    selected, queued, hint = out.split(",")
+
+    assert selected != "uB", (
+        "the deactivated song is still the cued song, and a selection outranks "
+        "everything in resolvePlayTarget() — Play starts the song that was just "
+        "taken out of the set"
+    )
+    assert queued != "uB", "the deactivated song is still queued as what plays next"
+    assert hint != "uB", (
+        "the active-row hint still names the deactivated row, so activeInstanceIdx() "
+        "keeps steering back to it"
+    )
+
+
+@requires_node
+def test_the_skipped_row_rescue_survives_the_actives_first_sort(
+    script_body: str,
+) -> None:
+    """Deactivating the parked song must still resolve somewhere to go.
+
+    Two changes meet here. saveCurrentState() re-sorts the list actives-first,
+    so a row that has just been deactivated moves to the TAIL of displayList.
+    findNextValidSong() only scans forward. Deactivate the song the transport is
+    parked on and the scan starts at the last index, finds nothing, returns
+    null — and the rescue seek that would have moved the show on never fires.
+
+    The transport is then left sitting inside a song that is no longer in the
+    set, which is the state Play reads.
+    """
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            currentPos = 140;              // parked inside B
+            noteActiveInstance('uB', 'test');
+            toggleSkip('uB');              // the row ✕, on the parked song
+
+            // What updatePlaybackUI() reaches for next: where does the show go?
+            var idx = displayList.map(function (r) { return r.uid; }).indexOf('uB');
+            console.log(idx + ',' + (findNextValidSong(idx) ? 'found' : 'null'));
+            """,
+        )
+    ).strip()
+    idx, forward = out.split(",")
+
+    assert idx == "2", (
+        f"the deactivated row landed at index {idx}, not the tail — this test "
+        "assumes the actives-first sort in saveCurrentState() moves it there"
+    )
+
+    # The forward scan stranding is the mechanism, not the fault: a fix may
+    # legitimately keep findNextValidSong() forward-only and give the rescue a
+    # fallback instead. So the mechanism is recorded, and the contract is
+    # asserted against the rescue itself.
+    assert forward == "null", (
+        "findNextValidSong() now resolves a target from the tail — if that is "
+        "deliberate, this test has been overtaken and should be rewritten "
+        "rather than deleted"
+    )
+
+    body = strip_comments(script_body)
+    match = re.search(r"if\s*\(\s*activeRegion\.skipped\s*\)\s*\{", body)
+    assert match, (
+        "the skipped-row rescue is gone from updatePlaybackUI() — nothing moves "
+        "the show off a song that was deactivated under the playhead"
+    )
+    rescue, _ = _brace_block(body, body.index("{", match.end() - 1))
+    assert "findPrevValidSong" in rescue or "displayList[0]" in rescue, (
+        "the rescue resolves its target with findNextValidSong() alone. The "
+        "actives-first sort has just moved the deactivated row to the tail, so "
+        "the forward scan returns null, no seek is issued, and the transport is "
+        "left parked inside a song that is no longer in the set"
+    )
+
+
+@requires_node
+def test_play_after_a_mid_show_edit_does_not_fire_the_old_next_song(
+    script_body: str,
+) -> None:
+    """The end-to-end symptom: edit the set, press Play, hear the old song.
+
+    Song A has ended, the auto-stop boundary has parked REAPER's cursor on the
+    start of B, and the transport is stopped. The director then takes B out of
+    the set. Play must not start B.
+
+    Nothing in the edit path revises the cursor, so this is decided entirely by
+    a coordinate recorded before the edit existed.
+    """
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            // Where the auto-stop boundary leaves the show: cursor on B.start,
+            // stopped, waiting for the downbeat.
+            currentPos = 100;
+            window._pendingCuePos = null;
+            noteActiveInstance('uB', 'auto-stop-cue');
+
+            toggleSkip('uB');              // director takes B out, mid-show
+
+            var target = resolvePlayTarget();
+            console.log((target.region ? target.region.uid : '-') + ',' + target.via);
+            """,
+        )
+    ).strip()
+    uid, via = out.split(",")
+
+    assert uid != "uB", (
+        f"Play resolved to the song that was just taken out of the set "
+        f"(via {via}). The cursor still sits at its start because no edit path "
+        "revises it, and resolvePlayTarget() reads the cursor"
+    )
+
+
+def test_the_boundary_cue_records_which_song_not_just_where(
+    script_body: str,
+) -> None:
+    """The cue at a stopping boundary has to name a row, not only a position.
+
+    `window._pendingCuePos = _bnd.cue.start` is the whole record of what plays
+    next after an auto-stop. A number cannot follow a reorder: drag another song
+    above the cued one and the number still points into the old one, so Play
+    fires it. Reordering is the reported gesture that has no repair path at all
+    — unlike removal, it leaves nothing stale to notice.
+
+    Pinned as source rather than behaviour because the failure is an ABSENCE:
+    there is no second write to assert on until the cue also carries identity.
+    """
+    body = strip_comments(script_body)
+    match = re.search(r"_pendingCuePos\s*=\s*_bnd\.cue\.start\s*;", body)
+    assert match, (
+        "the auto-stop boundary no longer records a cue position — this test is "
+        "reading the wrong file"
+    )
+    window = body[max(0, match.start() - 400) : match.end() + 400]
+    assert re.search(r"_selectionOf\s*\(\s*_bnd\.cue\s*\)|_setQueuedRegion\s*\(\s*_bnd\.cue", window), (
+        "the boundary records only WHERE the next song starts, never WHICH song "
+        "it is. A reorder moves the song and leaves the coordinate behind, so "
+        "Play starts whatever now occupies that position on REAPER's timeline"
+    )
