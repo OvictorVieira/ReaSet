@@ -1757,6 +1757,17 @@ def test_membership_actions(script_body: str) -> None:
         function clearQueuedRegion() { queuedRegion = null; }
         function noteActiveInstance(u) { _activeUidHint = u || null; }
         function closeAddSongPicker() {}
+        // The membership actions now repair the cue after a structural edit.
+        // That repair has its own tests; this one is about what lands in the
+        // list, so the two helpers are stubbed rather than driven.
+        function _recueAfterEdit() {}
+        function _recueTo() {}
+        function _successorAfter() { return null; }
+        function _dropIntentNaming(inst) {
+            if (selectedRegion && selectedRegion.uid === inst.uid) clearSelectedRegion();
+            if (queuedRegion && queuedRegion.uid === inst.uid) clearQueuedRegion();
+            if (_activeUidHint === inst.uid) noteActiveInstance(null);
+        }
         var lastRenderChecksum = '', selectedRegion = null, queuedRegion = null, _activeUidHint = null;
 
         var A = { id: 'A', name: 'Song A', start: 0,  end: 10, duration: 10 };
@@ -4987,4 +4998,869 @@ def test_playing_beats_the_song_colour() -> None:
     assert "30, 215, 96" in fill, (
         "the progress bar on a coloured playing row is not green — a green row "
         "with an amber bar reads as two songs at once"
+    )
+# ── Live-show regressions ────────────────────────────────────────────────────
+#
+# Faults that reached a stage on 2026-08-29, written to FAIL on v3.3: a
+# regression test that passes before the fix proves nothing about the fix.
+
+
+# REAPER's Web Remote TRANSPORT reply carries a playstate, and paused is its
+# own value — not a flavour of stopped and not a flavour of playing:
+#
+#   0 stopped   1 playing   2 paused   5 recording   6 record-paused
+#
+# (id, playstate, playing?, paused?)
+TRANSPORT_PLAYSTATES = [
+    ("stopped", "0", False, False),
+    ("playing", "1", True, False),
+    ("paused", "2", False, True),
+    ("recording", "5", True, False),
+    ("record-paused", "6", False, True),
+]
+
+
+def _transport_expr(script_body: str, name: str) -> str | None:
+    """The right-hand side of `var NAME = ...;` in the TRANSPORT reply."""
+    match = re.search(r"var\s+" + re.escape(name) + r"\s*=\s*(.+?);", script_body)
+    return match.group(1) if match else None
+
+
+def _transport_prelude(script_body: str) -> str:
+    """Any `var nowX = ...;` the derivations lean on, in source order.
+
+    The reply is parsed in steps — the raw playstate first, then what it means
+    — so an expression pulled out on its own may reference the step before it.
+    """
+    out = []
+    for name in ("nowState",):
+        expr = _transport_expr(script_body, name)
+        if expr:
+            out.append("var %s = %s;" % (name, expr))
+    return "\n".join(out)
+
+
+def _read_playstate(script_body: str, name: str, playstate: str) -> bool:
+    """Run one of the TRANSPORT derivations against one playstate."""
+    expr = _transport_expr(script_body, name)
+    assert expr, f"the TRANSPORT reply no longer derives {name}"
+    out = run_node(
+        "var tok = ['TRANSPORT', %r, '12.5'];\n" % playstate
+        + _transport_prelude(script_body)
+        + "\nconsole.log((%s) ? 1 : 0);" % expr
+    ).strip()
+    return out == "1"
+
+
+@requires_node
+@pytest.mark.parametrize(
+    "state,playstate,playing",
+    [(c[0], c[1], c[2]) for c in TRANSPORT_PLAYSTATES],
+    ids=[c[0] for c in TRANSPORT_PLAYSTATES],
+)
+def test_transport_reply_reads_the_playing_states(
+    script_body: str, state: str, playstate: str, playing: bool
+) -> None:
+    """Every playstate REAPER can send must be read as playing or not playing.
+
+    Runs the real derivation out of ReaSet.html rather than a copy of it, so
+    the day someone rewrites that expression this says whether the five states
+    still land where they should.
+    """
+    got = _read_playstate(script_body, "nowPlaying", playstate)
+    assert got == playing, (
+        f"playstate {playstate} ({state}) read back as "
+        f"{'playing' if got else 'not playing'}"
+    )
+
+
+@requires_node
+def test_transport_reply_tells_paused_apart_from_stopped(script_body: str) -> None:
+    """A paused REAPER must not arrive at the app as a stopped one.
+
+    Reported from a show: pause inside REAPER, or hit the spacebar there, and
+    afterwards Play from ReaSet misbehaves. The transport moved out of band, so
+    the reply is the only thing that can tell ReaSet what happened — and the
+    reply is reduced to `(parseInt(tok[1]) & 1) === 1` and nothing else.
+
+    Paused (2) and stopped (0) therefore reach the app as the same state, and
+    every decision taken afterwards is taken on a state the app cannot
+    distinguish: whether a tap cues or seeks, whether Play resumes or restarts,
+    what the button says. Playstate 2 has to survive the parse for any of those
+    to be decidable.
+    """
+    expr = _transport_expr(script_body, "nowPaused")
+    assert expr, (
+        "the TRANSPORT reply still derives only nowPlaying, so playstate 2 "
+        "(paused) and playstate 0 (stopped) are indistinguishable to the whole "
+        "app. A Play sent after a pause taken in REAPER is then decided on the "
+        "wrong state"
+    )
+    for state, playstate, _playing, paused in TRANSPORT_PLAYSTATES:
+        got = _read_playstate(script_body, "nowPaused", playstate)
+        assert got == paused, (
+            f"playstate {playstate} ({state}) read back as "
+            f"{'paused' if got else 'not paused'}"
+        )
+
+
+@requires_node
+def test_play_after_a_pause_taken_in_reaper_resumes_where_it_stopped(
+    script_body: str,
+) -> None:
+    """A Play from ReaSet is mandatory, and after a REAPER-side pause it resumes.
+
+    The show sequence: a song is playing, the user pauses in REAPER itself, and
+    then reaches for Play in ReaSet. Two things have to hold, and neither
+    depends on what the transport happened to be doing at that instant:
+
+      1. Play issues a PLAY. Not a pause, and not nothing.
+      2. Play resumes from the paused position. It must not seek back to the
+         top of the song — which is what a leftover row selection makes it do,
+         and a leftover row selection is exactly what the user has, because
+         while the app believes the transport is idle a tap on a row is a cue.
+
+    Drives the real togglePlay() with the state the app is left holding after a
+    pause it did not issue.
+    """
+    harness = (
+        """
+        var sent = [];
+        var window = { _playIntent: null, _playRegionLocked: 0, _pendingCuePos: null };
+        function wwr_req(cmd) { sent.push(String(cmd)); }
+        var REASET_MODE = 'director';
+        var RSDiag = { log: function () {}, blocked: function () {} };
+
+        // Song TWO, paused 40s in by a hand on REAPER's own keyboard.
+        var displayList = [
+            { id: '1', uid: 'u1', start: 0,   end: 100 },
+            { id: '2', uid: 'u2', start: 100, end: 200 },
+            { id: '3', uid: 'u3', start: 200, end: 300 }
+        ];
+        var currentPos = 140;
+        var _activeUidHint = 'u2';
+
+        // What the app is holding when the pause lands. isPlaying went false on
+        // the reply, and the row the user last tapped is still selected:
+        // togglePlay() is the only thing that clears it, and it has not run.
+        var isPlaying = false, isPaused = true;
+        var selectedRegion = displayList[1];
+
+        var queuedRegion = null;
+        var MANUAL_GUARD_MS = 900, _manualIntent = null, _manualGuardUntil = 0;
+        function midiInitPreroll(s) { return s; }
+        function cancelPendingAutomaticTransport() {}
+        function renderList() {}
+        function updatePlaybackUI() {}
+        function _paintIntent() {}
+        """
+        + extract_function(script_body, "canControlTransport")
+        + extract_function(script_body, "_uidOf")
+        + extract_function(script_body, "_ownerUidOf")
+        + extract_function(script_body, "noteActiveInstance")
+        + extract_function(script_body, "activeInstanceIdx")
+        + extract_function(script_body, "clearSelectedRegion")
+        + extract_function(script_body, "beginManualTransportIntent")
+        + extract_function(script_body, "isManualTransportGuardActive")
+        + extract_function(script_body, "clearManualTransportGuard")
+        + extract_function(script_body, "resolvePlayTarget")
+        + extract_function(script_body, "pauseTransport")
+        + extract_function(script_body, "togglePlay")
+        + """
+        togglePlay();
+        console.log(sent.join('|'));
+        """
+    )
+    sent = run_node(harness).strip()
+    commands = sent.split("|") if sent else []
+
+    assert commands, "Play sent nothing at all — the transport never restarts"
+    assert not any(c.startswith("1008") for c in commands), (
+        f"Play sent a PAUSE ({sent}). The user asked for playback and got the "
+        "opposite, which is the reported 'it gets buggy' exactly"
+    )
+    assert any("1007" in c for c in commands), (
+        f"Play sent {sent} — no play action reached REAPER"
+    )
+    assert not any("SET/POS/" in c for c in commands), (
+        f"Play sent {sent}. It seeked before playing, so a pause taken in "
+        "REAPER restarts the song from the top instead of resuming at 140s"
+    )
+
+
+# ── Editing the set while the show runs ──────────────────────────────────────
+#
+# Second fault from the same night: add a song, drag one up or down, or take
+# one out while the show is running, and the next Play fires the song that was
+# next BEFORE the edit.
+#
+# The cause is that there are two pointers at "what plays next" and only one of
+# them is rebuilt by an edit. displayList is rebuilt correctly every time. The
+# other is REAPER's own edit cursor, parked on the next song's start by the
+# auto-stop boundary as a bare coordinate (`window._pendingCuePos = _bnd.cue.start`)
+# — and a coordinate cannot follow a reorder. resolvePlayTarget() then answers
+# "what does Play start" from that cursor, so Play starts the old next song.
+
+
+BUG2_STATE = """
+    var sent = [];
+    var window = { _playIntent: null, _playRegionLocked: 0, _pendingCuePos: null };
+    function wwr_req(cmd) {
+        sent.push(String(cmd));
+        // A seek moves REAPER's cursor, and the cursor is what Play reads.
+        // Modelled here so a fix that re-cues by seeking is judged by its
+        // effect rather than by the shape of the call.
+        var m = String(cmd).match(/SET\\/POS\\/([0-9.]+)/);
+        if (m) currentPos = parseFloat(m[1]);
+    }
+    var REASET_MODE = 'director';
+    var RSDiag = { log: function () {}, logChange: function () {}, blocked: function () {} };
+
+    var displayList = [
+        { id: 'A', uid: 'uA', name: 'A', start: 0,   end: 100, skipped: false },
+        { id: 'B', uid: 'uB', name: 'B', start: 100, end: 200, skipped: false },
+        { id: 'C', uid: 'uC', name: 'C', start: 200, end: 300, skipped: false }
+    ];
+    var g_offSetlist = [], setlists = {}, currentSetlistName = 'Default';
+    var lastRenderChecksum = '';
+    var selectedRegion = null, queuedRegion = null, _activeUidHint = null;
+    var isPlaying = false, isPaused = false, currentPos = 0;
+    var MANUAL_GUARD_MS = 900, _manualIntent = null, _manualGuardUntil = 0;
+
+    function _paintIntent() {}
+    function renderSetlist() {}
+    function flashRow() {}
+    function syncRegions() {}
+    // The real one re-partitions and republishes; the partition is the part
+    // that matters here, so it is the part that is kept.
+    function saveCurrentState() { displayList = _partitionActiveFirst(displayList); }
+"""
+
+BUG2_FUNCS = [
+    "canControlTransport",
+    "canEditSetlist",
+    "_uidOf",
+    "_ownerUidOf",
+    "noteActiveInstance",
+    "activeInstanceIdx",
+    "_findInstanceByUid",
+    "_instanceForAction",
+    "_selectionOf",
+    "_clearCueAnchor",
+    "clearSelectedRegion",
+    "cueRegion",
+    "promoteQueuedToSelected",
+    "_resolveTapTarget",
+    "clearQueuedRegion",
+    "_setQueuedRegion",
+    "_partitionActiveFirst",
+    "findNextValidSong",
+    "findPrevValidSong",
+    "_successorAfter",
+    "_dropIntentNaming",
+    "_recueTo",
+    "_recueAfterEdit",
+    "isManualTransportGuardActive",
+    "clearManualTransportGuard",
+    "selectRegionForCue",
+    "_fmtPos",
+    "resolvePlayTarget",
+    "toggleSkip",
+    "removeFromSetlist",
+]
+
+
+def _bug2_harness(script_body: str, body: str) -> str:
+    return (
+        BUG2_STATE
+        + "".join(extract_function(script_body, f) for f in BUG2_FUNCS)
+        + body
+    )
+
+
+@requires_node
+def test_deactivating_a_song_drops_the_intent_that_points_at_it(
+    script_body: str,
+) -> None:
+    """Taking a song out of the set must take it out of every pointer too.
+
+    The row ✕ used to call removeFromSetlist(), which clears the three pieces
+    of intent that can name a row — the cued selection, the queued song and the
+    active-row hint — precisely so none of them survives pointing at a song
+    that is no longer in the show. The ✕ now calls toggleSkip() instead, and
+    toggleSkip does none of that.
+
+    So a song deactivated mid-show stays the cued song, and resolvePlayTarget()
+    puts the selection above everything else. Play then starts the song the
+    director just took out.
+    """
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            // B is where the show is parked: cued, queued and hinted.
+            selectedRegion  = _selectionOf(displayList[1]);
+            _setQueuedRegion(displayList[1], 'test');
+            noteActiveInstance('uB', 'test');
+
+            toggleSkip('uB');
+
+            console.log(
+                (selectedRegion ? selectedRegion.uid : '-') + ',' +
+                (queuedRegion ? _uidOf(queuedRegion) : '-') + ',' +
+                (_activeUidHint || '-')
+            );
+            """,
+        )
+    ).strip()
+    selected, queued, hint = out.split(",")
+
+    assert selected != "uB", (
+        "the deactivated song is still the cued song, and a selection outranks "
+        "everything in resolvePlayTarget() — Play starts the song that was just "
+        "taken out of the set"
+    )
+    assert queued != "uB", "the deactivated song is still queued as what plays next"
+    assert hint != "uB", (
+        "the active-row hint still names the deactivated row, so activeInstanceIdx() "
+        "keeps steering back to it"
+    )
+
+
+@requires_node
+def test_the_skipped_row_rescue_survives_the_actives_first_sort(
+    script_body: str,
+) -> None:
+    """Deactivating the parked song must still resolve somewhere to go.
+
+    Two changes meet here. saveCurrentState() re-sorts the list actives-first,
+    so a row that has just been deactivated moves to the TAIL of displayList.
+    findNextValidSong() only scans forward. Deactivate the song the transport is
+    parked on and the scan starts at the last index, finds nothing, returns
+    null — and the rescue seek that would have moved the show on never fires.
+
+    The transport is then left sitting inside a song that is no longer in the
+    set, which is the state Play reads.
+    """
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            currentPos = 140;              // parked inside B
+            noteActiveInstance('uB', 'test');
+            toggleSkip('uB');              // the row ✕, on the parked song
+
+            // What updatePlaybackUI() reaches for next: where does the show go?
+            var idx = displayList.map(function (r) { return r.uid; }).indexOf('uB');
+            console.log(idx + ',' + (findNextValidSong(idx) ? 'found' : 'null'));
+            """,
+        )
+    ).strip()
+    idx, forward = out.split(",")
+
+    assert idx == "2", (
+        f"the deactivated row landed at index {idx}, not the tail — this test "
+        "assumes the actives-first sort in saveCurrentState() moves it there"
+    )
+
+    # The forward scan stranding is the mechanism, not the fault: a fix may
+    # legitimately keep findNextValidSong() forward-only and give the rescue a
+    # fallback instead. So the mechanism is recorded, and the contract is
+    # asserted against the rescue itself.
+    assert forward == "null", (
+        "findNextValidSong() now resolves a target from the tail — if that is "
+        "deliberate, this test has been overtaken and should be rewritten "
+        "rather than deleted"
+    )
+
+    body = strip_comments(script_body)
+    match = re.search(r"if\s*\(\s*activeRegion\.skipped\s*\)\s*\{", body)
+    assert match, (
+        "the skipped-row rescue is gone from updatePlaybackUI() — nothing moves "
+        "the show off a song that was deactivated under the playhead"
+    )
+    rescue, _ = _brace_block(body, body.index("{", match.end() - 1))
+    assert "findPrevValidSong" in rescue or "displayList[0]" in rescue, (
+        "the rescue resolves its target with findNextValidSong() alone. The "
+        "actives-first sort has just moved the deactivated row to the tail, so "
+        "the forward scan returns null, no seek is issued, and the transport is "
+        "left parked inside a song that is no longer in the set"
+    )
+
+
+@requires_node
+def test_play_after_a_mid_show_edit_does_not_fire_the_old_next_song(
+    script_body: str,
+) -> None:
+    """The end-to-end symptom: edit the set, press Play, hear the old song.
+
+    Song A has ended, the auto-stop boundary has parked REAPER's cursor on the
+    start of B, and the transport is stopped. The director then takes B out of
+    the set. Play must not start B.
+
+    Nothing in the edit path revises the cursor, so this is decided entirely by
+    a coordinate recorded before the edit existed.
+    """
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            // Where the auto-stop boundary leaves the show: cursor on B.start,
+            // stopped, waiting for the downbeat.
+            currentPos = 100;
+            window._pendingCuePos = null;
+            noteActiveInstance('uB', 'auto-stop-cue');
+
+            toggleSkip('uB');              // director takes B out, mid-show
+
+            var target = resolvePlayTarget();
+            console.log((target.region ? target.region.uid : '-') + ',' + target.via);
+            """,
+        )
+    ).strip()
+    uid, via = out.split(",")
+
+    assert uid != "uB", (
+        f"Play resolved to the song that was just taken out of the set "
+        f"(via {via}). The cursor still sits at its start because no edit path "
+        "revises it, and resolvePlayTarget() reads the cursor"
+    )
+
+
+@requires_node
+def test_reordering_the_set_moves_the_cue_with_it(script_body: str) -> None:
+    """Drag a song above the cued one and the downbeat must start it.
+
+    Song A has ended and the auto-stop boundary has cued B. The director then
+    drags C above B, which is the whole gesture for "play this next". The cue
+    was decided from an ordering that no longer exists, so it has to be asked
+    again against the list as it stands.
+
+    Anchored on the song that FINISHED rather than on the cued one: a reorder
+    can move what comes next, but it cannot move the fact that the show got to
+    the end of A.
+    """
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            // Where the boundary leaves the show: A finished, B cued.
+            window._cueAnchorUid  = 'uA';
+            window._pendingCuePos = displayList[1].start;
+            selectedRegion = _selectionOf(displayList[1]);
+            currentPos = displayList[1].start;
+
+            // The drag: C above B. Sortable rebuilds displayList from the rows
+            // on screen, which is this same move.
+            displayList = [displayList[0], displayList[2], displayList[1]];
+
+            _recueAfterEdit('reorder');
+            console.log((selectedRegion ? selectedRegion.uid : '-') + ',' + sent.join('|'));
+            """,
+        )
+    ).strip()
+    cued, sent = (out.split(",", 1) + [""])[:2]
+
+    assert cued == "uC", (
+        f"the cue still names {cued} after the song above it changed — Play "
+        "starts the song that was next before the drag"
+    )
+    assert "SET/POS/200" in sent, (
+        f"the cue moved on screen but REAPER's cursor did not ({sent}). Play "
+        "resolves from that cursor, so the two have to agree"
+    )
+
+
+def test_the_boundary_cue_records_which_song_not_just_where(
+    script_body: str,
+) -> None:
+    """The cue at a stopping boundary has to name a row, not only a position.
+
+    `window._pendingCuePos = _bnd.cue.start` is the whole record of what plays
+    next after an auto-stop. A number cannot follow a reorder: drag another song
+    above the cued one and the number still points into the old one, so Play
+    fires it. Reordering is the reported gesture that has no repair path at all
+    — unlike removal, it leaves nothing stale to notice.
+
+    Pinned as source rather than behaviour because the failure is an ABSENCE:
+    there is no second write to assert on until the cue also carries identity.
+    """
+    body = strip_comments(script_body)
+    match = re.search(r"_pendingCuePos\s*=\s*_bnd\.cue\.start\s*;", body)
+    assert match, (
+        "the auto-stop boundary no longer records a cue position — this test is "
+        "reading the wrong file"
+    )
+    window = body[max(0, match.start() - 400) : match.end() + 400]
+    assert re.search(r"_selectionOf\s*\(\s*_bnd\.cue\s*\)|_setQueuedRegion\s*\(\s*_bnd\.cue", window), (
+        "the boundary records only WHERE the next song starts, never WHICH song "
+        "it is. A reorder moves the song and leaves the coordinate behind, so "
+        "Play starts whatever now occupies that position on REAPER's timeline"
+    )
+
+
+# ── Review follow-up: the two P1s raised on the pull request ─────────────────
+#
+# Both are the same shape as the faults above — a decision recorded once and
+# still believed after the thing it described moved on.
+
+
+@requires_node
+def test_the_cue_anchor_dies_with_the_cue_it_belongs_to(script_body: str) -> None:
+    """A consumed cue must not leave an anchor that hijacks the next edit.
+
+    `window._cueAnchorUid` records the song the show REACHED, so that a later
+    add or reorder can ask again what follows it. It is only ever an answer for
+    the cue that boundary parked. Once the operator has pressed Play — which
+    consumes the cue — or has tapped a different row, that anchor names a song
+    the show is already past.
+
+    Left standing, the next add or drag re-enters `_recueAfterEdit()` off the
+    finished song and overwrites the operator's current selection, so the
+    downbeat starts a song they did not choose.
+    """
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            // Where the auto-stop boundary leaves the show: A finished, B cued.
+            window._cueAnchorUid  = 'uA';
+            window._pendingCuePos = displayList[1].start;
+            selectedRegion = _selectionOf(displayList[1]);
+            currentPos = displayList[1].start;
+
+            // Later in the show the operator taps C by hand, then drags it.
+            selectRegionForCue(displayList[2], 'tap-while-idle');
+            var afterTap = window._cueAnchorUid;
+            var tapped   = selectedRegion ? selectedRegion.uid : '-';
+
+            displayList = [displayList[0], displayList[2], displayList[1]];
+            _recueAfterEdit('reorder');
+
+            console.log(JSON.stringify([
+                afterTap, tapped, selectedRegion ? selectedRegion.uid : '-'
+            ]));
+            """,
+        )
+    )
+    after_tap, tapped, final = json.loads(out)
+
+    # Play consumes the cue in userPlay(), which is too entangled with the
+    # transport to run here — so that half is pinned where it lives: the
+    # retirement has to sit beside the clear it belongs to.
+    body = strip_comments(script_body)
+    match = re.search(r"clearSelectedRegion\s*\(\s*['\"]consumed-by-play['\"]\s*\)\s*;", body)
+    assert match, "Play no longer clears the selection it acted on"
+    assert "_clearCueAnchor" in body[match.end() : match.end() + 200], (
+        "Play consumes the cue but leaves the anchor behind it standing, so "
+        "the next add or reorder re-cues off a song the show is already past"
+    )
+
+    assert tapped == "uC", "the harness did not cue the row it tapped"
+    assert not after_tap, (
+        f"a manual cue left the boundary's anchor ({after_tap}) standing. The "
+        "operator chose a row; the anchor is a leftover from a cue that choice "
+        "replaced"
+    )
+    assert final == "uC", (
+        f"the reorder moved the cue to {final} — the operator's own selection "
+        "was overwritten by a re-cue off a stale anchor"
+    )
+
+
+@requires_node
+def test_the_anchor_still_survives_its_own_recue(script_body: str) -> None:
+    """Retiring the anchor must not break the repair it exists for.
+
+    Two drags in a row is one gesture repeated, not two different decisions:
+    the anchor is the song that finished, and that fact does not change between
+    them. The recue paths re-ask the same anchor's question, so they keep it —
+    only a new decision (Play, or a tap) retires it.
+    """
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            window._cueAnchorUid  = 'uA';
+            window._pendingCuePos = displayList[1].start;
+            selectedRegion = _selectionOf(displayList[1]);
+            currentPos = displayList[1].start;
+
+            displayList = [displayList[0], displayList[2], displayList[1]];
+            _recueAfterEdit('reorder');
+            var first = selectedRegion ? selectedRegion.uid : '-';
+
+            // Dragged back. The anchor has to still be there to answer again.
+            displayList = [displayList[0], displayList[2], displayList[1]];
+            _recueAfterEdit('reorder');
+
+            console.log(JSON.stringify([
+                first, selectedRegion ? selectedRegion.uid : '-', window._cueAnchorUid || null
+            ]));
+            """,
+        )
+    )
+    first, second, anchor = json.loads(out)
+
+    assert first == "uC", f"the first drag cued {first}, not C"
+    assert second == "uB", (
+        f"the second drag left the cue on {second} — the anchor was retired by "
+        "its own recue, so the repair only works once"
+    )
+    assert anchor == "uA", (
+        f"the anchor is {anchor} after two recues — it names the song that "
+        "finished, which no reorder can change"
+    )
+
+
+@requires_node
+def test_deactivating_the_paused_song_does_not_move_the_playhead(
+    script_body: str,
+) -> None:
+    """A paused transport is the operator's position and no edit may seek it.
+
+    Pause inside a song, then take that song out of the set. `saveCurrentState()`
+    sorts it to the tail, and the skipped-row rescue's new backward fallback
+    now finds a predecessor — so the rescue seeks REAPER's PAUSED cursor into
+    another song. Play then resumes somewhere the operator never paused, which
+    is the exact fault the pause fix in this branch exists to close.
+
+    The rescue owns the stopped and rolling cases; `_recueTo()` already says so
+    about the boundary it shares with it.
+    """
+    body = strip_comments(script_body)
+    match = re.search(r"if\s*\(\s*activeRegion\.skipped\s*\)\s*\{", body)
+    assert match, "the skipped-row rescue is gone from updatePlaybackUI()"
+    rescue, _ = _brace_block(body, body.index("{", match.end() - 1))
+    assert "isPaused" in rescue, (
+        "the skipped-row rescue issues its SET/POS without consulting isPaused, "
+        "so deactivating the paused song drags REAPER's paused cursor into "
+        "another one and Play resumes the wrong song"
+    )
+
+    # And behaviourally: paused issues no seek, stopped still does.
+    harness = _bug2_harness(
+        script_body,
+        """
+        function _suppressAutoTransport() { return false; }
+        function rescue() {
+            var activeIdx = displayList.map(function (r) { return r.uid; }).indexOf('uB');
+            var activeRegion = displayList[activeIdx];
+            if (activeRegion.skipped) {
+                __RESCUE__
+            }
+            return 'not-skipped';
+        }
+        currentPos = 140;
+        noteActiveInstance('uB', 'test');
+        toggleSkip('uB');
+
+        isPaused = true;  isPlaying = false; sent = []; rescue();
+        var whilePaused = sent.slice();
+        isPaused = false; isPlaying = false; sent = []; rescue();
+        console.log(JSON.stringify([whilePaused, sent]));
+        """.replace("__RESCUE__", rescue[1:-1]),
+    )
+    while_paused, while_stopped = json.loads(run_node(harness))
+
+    assert while_paused == [], (
+        f"the rescue sent {while_paused} while paused. REAPER's paused cursor "
+        "moved, so Play resumes a song the operator never paused inside"
+    )
+    assert any("SET/POS/" in c for c in while_stopped), (
+        f"the rescue sent {while_stopped} while stopped — the guard was written "
+        "wide enough to disable the rescue it was meant to narrow"
+    )
+
+
+@requires_node
+def test_losing_the_cued_row_does_not_lose_the_anchor(script_body: str) -> None:
+    """Retiring the anchor must not fire on the one path that needs it.
+
+    Taking the CUED song out of the set is not the operator deciding something
+    new about it — it is the edit `_recueTo()` exists to repair, and the repair
+    is "ask the anchor again". `_dropIntentNaming()` clears the selection on the
+    way, so retiring the anchor from inside `clearSelectedRegion()` took the
+    answer away from the very path that was about to ask for it.
+
+    The show then had no anchor at all, and the next add or drag could not move
+    the cue where it belonged.
+    """
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            // A finished; the boundary cued B.
+            window._cueAnchorUid  = 'uA';
+            selectedRegion = _selectionOf(displayList[1]);
+            currentPos = displayList[1].start;
+
+            // The director takes the CUED song out of the set.
+            toggleSkip('uB');
+            var afterDrop = window._cueAnchorUid;
+
+            // Then adds a song that lands right after A.
+            displayList = [
+                displayList[0],
+                { id: 'D', uid: 'uD', name: 'D', start: 300, end: 400, skipped: false }
+            ].concat(displayList.slice(1));
+            _recueAfterEdit('song-added');
+
+            console.log(JSON.stringify([
+                afterDrop, selectedRegion ? selectedRegion.uid : '-'
+            ]));
+            """,
+        )
+    )
+    after_drop, cued = json.loads(out)
+
+    assert after_drop == "uA", (
+        f"deactivating the cued row left the anchor at {after_drop}. The row "
+        "leaving is the edit the anchor is FOR, not a decision that retires it"
+    )
+    assert cued == "uD", (
+        f"the added song did not take the cue ({cued}) — the anchor was gone by "
+        "the time _recueAfterEdit() asked it what follows A"
+    )
+
+
+@requires_node
+def test_a_queued_pick_is_never_re_derived_by_a_later_edit(
+    script_body: str,
+) -> None:
+    """The operator queued a song. No edit may reason its way to another one.
+
+    At a stopping boundary a cue is either DERIVED — "whatever follows this
+    song" — or promoted out of the queue, which is the operator naming a song
+    outright. An anchor is the record of a derivation, so recording one behind a
+    promoted queue lets the next add or drag re-derive a different song and
+    throw their choice away.
+    """
+    body = strip_comments(script_body)
+    hits = re.findall(r"_cueAnchorUid\s*=\s*_uidOf\s*\(\s*activeRegion\s*\)", body)
+    assert hits, "the boundary no longer records a cue anchor"
+    for match in re.finditer(r"_cueAnchorUid\s*=\s*_uidOf\s*\(\s*activeRegion\s*\)", body):
+        window = body[max(0, match.start() - 300) : match.start()]
+        assert "fromQueue" in window, (
+            "a stopping boundary records the anchor without asking whether the "
+            "cue came from the queue. resolveBoundaryAction() returns "
+            "`cue: ctx.queued || ctx.next`, so a promoted queue gets an anchor "
+            "and the next edit re-derives over the operator's own pick"
+        )
+
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            // The boundary promoted the operator's queued pick, C, and the
+            // gating above must have left no anchor behind it.
+            queuedRegion = displayList[2];
+            promoteQueuedToSelected('auto-stop-boundary');
+            var afterPromote = window._cueAnchorUid;
+
+            // An edit lands a song right after A. C must keep the cue.
+            displayList = [
+                displayList[0],
+                { id: 'D', uid: 'uD', name: 'D', start: 300, end: 400, skipped: false }
+            ].concat(displayList.slice(1));
+            _recueAfterEdit('song-added');
+
+            console.log(JSON.stringify([
+                afterPromote || null, selectedRegion ? selectedRegion.uid : '-'
+            ]));
+            """,
+        )
+    )
+    after_promote, cued = json.loads(out)
+
+    assert after_promote is None, (
+        f"promoting the queue left an anchor at {after_promote}"
+    )
+    assert cued == "uC", (
+        f"the edit moved the cue to {cued}. The operator queued C by hand; "
+        "nothing derived from the finished song may overrule that"
+    )
+
+
+@requires_node
+def test_next_and_previous_retire_the_anchor_like_a_tap(script_body: str) -> None:
+    """Next/Previous is the operator choosing a row, and choosing retires it.
+
+    `cueRegion()` is where Next, Previous and the MIDI navigation actions land.
+    It sets `selectedRegion` directly rather than going through
+    `selectRegionForCue()`, so it was the one operator decision that left the
+    boundary's anchor standing — and the next add or drag re-cued off a song the
+    show was already past, discarding the row they had just stepped to.
+    """
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            var g_subRegionMap = {};
+            function _resolveTapTarget(id, uid, start) { return _findRegionById(id); }
+            function _findRegionById(id) {
+                for (var i = 0; i < displayList.length; i++) {
+                    if (displayList[i].id == id) return displayList[i];
+                }
+                return null;
+            }
+
+            // A finished; the boundary cued B.
+            window._cueAnchorUid  = 'uA';
+            selectedRegion = _selectionOf(displayList[1]);
+            currentPos = displayList[1].start;
+
+            // The operator presses Next and steps to C.
+            cueRegion(displayList[2].start, 'C');
+            var afterNav = window._cueAnchorUid;
+            var stepped  = selectedRegion ? selectedRegion.uid : '-';
+
+            // Then drags D in above C.
+            displayList = [
+                displayList[0],
+                { id: 'D', uid: 'uD', name: 'D', start: 300, end: 400, skipped: false }
+            ].concat(displayList.slice(1));
+            _recueAfterEdit('reorder');
+
+            console.log(JSON.stringify([
+                afterNav || null, stepped, selectedRegion ? selectedRegion.uid : '-'
+            ]));
+            """,
+        )
+    )
+    after_nav, stepped, final = json.loads(out)
+
+    assert stepped == "uC", "the harness did not step Next to C"
+    assert after_nav is None, (
+        f"Next left the boundary's anchor at {after_nav} — a tap retires it and "
+        "stepping to a row is the same decision"
+    )
+    assert final == "uC", (
+        f"the drag re-cued to {final}, discarding the row the operator had just "
+        "stepped to with Next"
+    )
+
+
+def test_the_paused_rescue_returns_instead_of_falling_through(
+    script_body: str,
+) -> None:
+    """Declining to seek must not leave the rest of the block running.
+
+    Everything after the rescue belongs to the ACTIVE song: it arms Reaset.lua's
+    auto-stop on that region's bounds and paints the row live. A paused
+    transport parked in a deactivated row has no active song in the show, so
+    falling through published a stop point for a region that is out of the set.
+    """
+    body = strip_comments(script_body)
+    match = re.search(r"if\s*\(\s*activeRegion\.skipped\s*\)\s*\{", body)
+    assert match, "the skipped-row rescue is gone from updatePlaybackUI()"
+    rescue, _ = _brace_block(body, body.index("{", match.end() - 1))
+    paused = re.search(r"if\s*\(\s*isPaused\s*\)\s*\{[^}]*\}", rescue)
+    assert paused, (
+        "the paused case is no longer a guard clause of its own — this test "
+        "cannot tell whether it returns"
+    )
+    assert "return" in paused.group(0), (
+        "the paused branch declines the seek and then falls through, so "
+        "auto-stop is armed on the bounds of a song that is out of the show"
     )

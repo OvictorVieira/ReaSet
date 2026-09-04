@@ -420,3 +420,98 @@ def test_the_track_template_round_trips_its_notes() -> None:
     assert parsed == [] and skipped == 1
     parsed, _ = gen.parse_lines("outro\n", keep_sections=True)
     assert parsed == ["outro"], "--keep-sections must be the escape hatch"
+
+
+# GetPlayState is a BITFIELD, not an enum: &1 playing, &2 paused, &4 recording.
+# Paused is therefore any state with bit 2 set — 2 while stopped, 6 while
+# record-armed, and 3 on builds that keep the playing bit through a pause.
+#
+# (id, playstate, paused?)
+LUA_PLAYSTATES = [
+    ("playing", 1, False),
+    ("paused", 2, True),
+    ("paused-keeping-the-play-bit", 3, True),
+    ("recording", 5, False),
+    ("record-paused", 6, True),
+]
+
+
+@pytest.mark.parametrize(
+    "state,playstate,paused",
+    LUA_PLAYSTATES,
+    ids=[c[0] for c in LUA_PLAYSTATES],
+)
+def test_loop_engine_reads_the_pause_bit_not_the_number(
+    state: str, playstate: int, paused: bool
+) -> None:
+    """The loop's crossing detector must not run while the transport is paused.
+
+    A paused transport returns the same GetPlayPosition() on every tick. The
+    detector compares that position against the loop boundaries, so running it
+    while paused counts crossings that never happened — and a `+LOOP` section
+    with a repeat count then ends early, on stage, with no way to tell why.
+
+    loop_tick guards this with `if ps ~= 2`, an equality test against one value
+    of a bitfield. Record-paused (6) walks straight past it, and so does 3.
+
+    Executes the real loop_tick against a stubbed reaper API and counts how
+    many times the paused position was read.
+    """
+    src = REASET_LUA.read_text(encoding="utf-8")
+    chunk = extract_lua_chunk(src, "local s_active", "local function bridge_new")
+    chunk += "\n_loop_tick = loop_tick\n_arm = loop_arm\n"
+
+    lua = lupa.LuaRuntime(unpack_returned_tuples=True)
+    lua.execute(
+        """
+        reads = 0
+        -- Declared above the extracted chunk, so they are not part of it.
+        SEC = 'ReaSet'
+        REGION_NAME  = 'ReaSet Loop'
+        REGION_COLOR = 0
+        IDX_KEY      = 'reasetLoopRegionIdx'
+        NEAR_END     = 0.08
+        NEAR_START   = 0.30
+        function delete_region() end
+        ext = { nativeLoop = 'on', loopStart = '10', loopEnd = '20', loopMax = '2' }
+        reaper = {
+          GetExtState    = function(_, k) return ext[k] or '' end,
+          SetExtState    = function(_, k, v) ext[k] = v end,
+          DeleteExtState = function(_, k) ext[k] = nil end,
+          GetPlayState   = function() return PS end,
+          -- Frozen, exactly as a paused transport reports it.
+          GetPlayPosition = function() reads = reads + 1; return 19.95 end,
+          GetSetRepeat   = function() return 0 end,
+          GetSet_LoopTimeRange = function() return 0, 0 end,
+          SNM_SetIntConfigVar  = function() end,
+          SNM_GetIntConfigVar  = function(_, d) return d end,
+          AddProjectMarker2 = function() return 1 end,
+          DeleteProjectMarker = function() return true end,
+          EnumProjectMarkers3 = function() return 0 end,
+          CountProjectMarkers = function() return 0, 0, 0 end,
+          UpdateArrange  = function() end,
+          UpdateTimeline = function() end,
+        }
+        """
+    )
+    lua.execute(chunk)
+
+    # Arm the loop with the transport rolling, then hand it the state under
+    # test — the same order a pause arrives in during a show.
+    lua.globals().PS = 1
+    lua.execute("_loop_tick()")
+    lua.globals().PS = playstate
+    lua.execute("reads = 0; for _ = 1, 20 do _loop_tick() end")
+
+    reads = lua.globals().reads
+    if paused:
+        assert reads == 0, (
+            f"playstate {playstate} ({state}) is paused, and the crossing "
+            f"detector still read the frozen play position {reads} times. It is "
+            "counting loop passes that are not happening"
+        )
+    else:
+        assert reads > 0, (
+            f"playstate {playstate} ({state}) is rolling and the crossing "
+            "detector never ran — the loop would never repeat"
+        )
