@@ -5248,6 +5248,9 @@ BUG2_FUNCS = [
     "_selectionOf",
     "_clearCueAnchor",
     "clearSelectedRegion",
+    "cueRegion",
+    "promoteQueuedToSelected",
+    "_resolveTapTarget",
     "clearQueuedRegion",
     "_setQueuedRegion",
     "_partitionActiveFirst",
@@ -5526,11 +5529,6 @@ def test_the_cue_anchor_dies_with_the_cue_it_belongs_to(script_body: str) -> Non
             selectedRegion = _selectionOf(displayList[1]);
             currentPos = displayList[1].start;
 
-            // The downbeat. Play consumes the cue, so the anchor behind it has
-            // nothing left to answer for.
-            clearSelectedRegion('consumed-by-play');
-            var afterPlay = window._cueAnchorUid;
-
             // Later in the show the operator taps C by hand, then drags it.
             selectRegionForCue(displayList[2], 'tap-while-idle');
             var afterTap = window._cueAnchorUid;
@@ -5540,18 +5538,24 @@ def test_the_cue_anchor_dies_with_the_cue_it_belongs_to(script_body: str) -> Non
             _recueAfterEdit('reorder');
 
             console.log(JSON.stringify([
-                afterPlay, afterTap, tapped,
-                selectedRegion ? selectedRegion.uid : '-'
+                afterTap, tapped, selectedRegion ? selectedRegion.uid : '-'
             ]));
             """,
         )
     )
-    after_play, after_tap, tapped, final = json.loads(out)
+    after_tap, tapped, final = json.loads(out)
 
-    assert not after_play, (
-        f"the cue anchor still names {after_play} after Play consumed the cue. "
-        "The next add or reorder will re-cue off a song the show is past"
+    # Play consumes the cue in userPlay(), which is too entangled with the
+    # transport to run here — so that half is pinned where it lives: the
+    # retirement has to sit beside the clear it belongs to.
+    body = strip_comments(script_body)
+    match = re.search(r"clearSelectedRegion\s*\(\s*['\"]consumed-by-play['\"]\s*\)\s*;", body)
+    assert match, "Play no longer clears the selection it acted on"
+    assert "_clearCueAnchor" in body[match.end() : match.end() + 200], (
+        "Play consumes the cue but leaves the anchor behind it standing, so "
+        "the next add or reorder re-cues off a song the show is already past"
     )
+
     assert tapped == "uC", "the harness did not cue the row it tapped"
     assert not after_tap, (
         f"a manual cue left the boundary's anchor ({after_tap}) standing. The "
@@ -5666,4 +5670,197 @@ def test_deactivating_the_paused_song_does_not_move_the_playhead(
     assert any("SET/POS/" in c for c in while_stopped), (
         f"the rescue sent {while_stopped} while stopped — the guard was written "
         "wide enough to disable the rescue it was meant to narrow"
+    )
+
+
+@requires_node
+def test_losing_the_cued_row_does_not_lose_the_anchor(script_body: str) -> None:
+    """Retiring the anchor must not fire on the one path that needs it.
+
+    Taking the CUED song out of the set is not the operator deciding something
+    new about it — it is the edit `_recueTo()` exists to repair, and the repair
+    is "ask the anchor again". `_dropIntentNaming()` clears the selection on the
+    way, so retiring the anchor from inside `clearSelectedRegion()` took the
+    answer away from the very path that was about to ask for it.
+
+    The show then had no anchor at all, and the next add or drag could not move
+    the cue where it belonged.
+    """
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            // A finished; the boundary cued B.
+            window._cueAnchorUid  = 'uA';
+            selectedRegion = _selectionOf(displayList[1]);
+            currentPos = displayList[1].start;
+
+            // The director takes the CUED song out of the set.
+            toggleSkip('uB');
+            var afterDrop = window._cueAnchorUid;
+
+            // Then adds a song that lands right after A.
+            displayList = [
+                displayList[0],
+                { id: 'D', uid: 'uD', name: 'D', start: 300, end: 400, skipped: false }
+            ].concat(displayList.slice(1));
+            _recueAfterEdit('song-added');
+
+            console.log(JSON.stringify([
+                afterDrop, selectedRegion ? selectedRegion.uid : '-'
+            ]));
+            """,
+        )
+    )
+    after_drop, cued = json.loads(out)
+
+    assert after_drop == "uA", (
+        f"deactivating the cued row left the anchor at {after_drop}. The row "
+        "leaving is the edit the anchor is FOR, not a decision that retires it"
+    )
+    assert cued == "uD", (
+        f"the added song did not take the cue ({cued}) — the anchor was gone by "
+        "the time _recueAfterEdit() asked it what follows A"
+    )
+
+
+@requires_node
+def test_a_queued_pick_is_never_re_derived_by_a_later_edit(
+    script_body: str,
+) -> None:
+    """The operator queued a song. No edit may reason its way to another one.
+
+    At a stopping boundary a cue is either DERIVED — "whatever follows this
+    song" — or promoted out of the queue, which is the operator naming a song
+    outright. An anchor is the record of a derivation, so recording one behind a
+    promoted queue lets the next add or drag re-derive a different song and
+    throw their choice away.
+    """
+    body = strip_comments(script_body)
+    hits = re.findall(r"_cueAnchorUid\s*=\s*_uidOf\s*\(\s*activeRegion\s*\)", body)
+    assert hits, "the boundary no longer records a cue anchor"
+    for match in re.finditer(r"_cueAnchorUid\s*=\s*_uidOf\s*\(\s*activeRegion\s*\)", body):
+        window = body[max(0, match.start() - 300) : match.start()]
+        assert "fromQueue" in window, (
+            "a stopping boundary records the anchor without asking whether the "
+            "cue came from the queue. resolveBoundaryAction() returns "
+            "`cue: ctx.queued || ctx.next`, so a promoted queue gets an anchor "
+            "and the next edit re-derives over the operator's own pick"
+        )
+
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            // The boundary promoted the operator's queued pick, C, and the
+            // gating above must have left no anchor behind it.
+            queuedRegion = displayList[2];
+            promoteQueuedToSelected('auto-stop-boundary');
+            var afterPromote = window._cueAnchorUid;
+
+            // An edit lands a song right after A. C must keep the cue.
+            displayList = [
+                displayList[0],
+                { id: 'D', uid: 'uD', name: 'D', start: 300, end: 400, skipped: false }
+            ].concat(displayList.slice(1));
+            _recueAfterEdit('song-added');
+
+            console.log(JSON.stringify([
+                afterPromote || null, selectedRegion ? selectedRegion.uid : '-'
+            ]));
+            """,
+        )
+    )
+    after_promote, cued = json.loads(out)
+
+    assert after_promote is None, (
+        f"promoting the queue left an anchor at {after_promote}"
+    )
+    assert cued == "uC", (
+        f"the edit moved the cue to {cued}. The operator queued C by hand; "
+        "nothing derived from the finished song may overrule that"
+    )
+
+
+@requires_node
+def test_next_and_previous_retire_the_anchor_like_a_tap(script_body: str) -> None:
+    """Next/Previous is the operator choosing a row, and choosing retires it.
+
+    `cueRegion()` is where Next, Previous and the MIDI navigation actions land.
+    It sets `selectedRegion` directly rather than going through
+    `selectRegionForCue()`, so it was the one operator decision that left the
+    boundary's anchor standing — and the next add or drag re-cued off a song the
+    show was already past, discarding the row they had just stepped to.
+    """
+    out = run_node(
+        _bug2_harness(
+            script_body,
+            """
+            var g_subRegionMap = {};
+            function _resolveTapTarget(id, uid, start) { return _findRegionById(id); }
+            function _findRegionById(id) {
+                for (var i = 0; i < displayList.length; i++) {
+                    if (displayList[i].id == id) return displayList[i];
+                }
+                return null;
+            }
+
+            // A finished; the boundary cued B.
+            window._cueAnchorUid  = 'uA';
+            selectedRegion = _selectionOf(displayList[1]);
+            currentPos = displayList[1].start;
+
+            // The operator presses Next and steps to C.
+            cueRegion(displayList[2].start, 'C');
+            var afterNav = window._cueAnchorUid;
+            var stepped  = selectedRegion ? selectedRegion.uid : '-';
+
+            // Then drags D in above C.
+            displayList = [
+                displayList[0],
+                { id: 'D', uid: 'uD', name: 'D', start: 300, end: 400, skipped: false }
+            ].concat(displayList.slice(1));
+            _recueAfterEdit('reorder');
+
+            console.log(JSON.stringify([
+                afterNav || null, stepped, selectedRegion ? selectedRegion.uid : '-'
+            ]));
+            """,
+        )
+    )
+    after_nav, stepped, final = json.loads(out)
+
+    assert stepped == "uC", "the harness did not step Next to C"
+    assert after_nav is None, (
+        f"Next left the boundary's anchor at {after_nav} — a tap retires it and "
+        "stepping to a row is the same decision"
+    )
+    assert final == "uC", (
+        f"the drag re-cued to {final}, discarding the row the operator had just "
+        "stepped to with Next"
+    )
+
+
+def test_the_paused_rescue_returns_instead_of_falling_through(
+    script_body: str,
+) -> None:
+    """Declining to seek must not leave the rest of the block running.
+
+    Everything after the rescue belongs to the ACTIVE song: it arms Reaset.lua's
+    auto-stop on that region's bounds and paints the row live. A paused
+    transport parked in a deactivated row has no active song in the show, so
+    falling through published a stop point for a region that is out of the set.
+    """
+    body = strip_comments(script_body)
+    match = re.search(r"if\s*\(\s*activeRegion\.skipped\s*\)\s*\{", body)
+    assert match, "the skipped-row rescue is gone from updatePlaybackUI()"
+    rescue, _ = _brace_block(body, body.index("{", match.end() - 1))
+    paused = re.search(r"if\s*\(\s*isPaused\s*\)\s*\{[^}]*\}", rescue)
+    assert paused, (
+        "the paused case is no longer a guard clause of its own — this test "
+        "cannot tell whether it returns"
+    )
+    assert "return" in paused.group(0), (
+        "the paused branch declines the seek and then falls through, so "
+        "auto-stop is armed on the bounds of a song that is out of the show"
     )

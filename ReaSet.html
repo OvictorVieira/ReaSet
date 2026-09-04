@@ -10533,6 +10533,9 @@
                         // row and restarts a song that is already sounding.
                         if (nowPlaying && !wasPlayingLast && selectedRegion) {
                             clearSelectedRegion('transport-started-elsewhere');
+                            // The show moved out of band. Whatever the last
+                            // boundary cued, it is not what is sounding now.
+                            _clearCueAnchor('transport-started-elsewhere');
                         }
                         // First playback of the session starts the session clock,
                         // which then runs through every later stop and pause.
@@ -12912,9 +12915,11 @@
                     // edit to the SET, not a command to move the playhead; the
                     // rescue owns the stopped and rolling cases only, which is
                     // what _recueTo() already says about the boundary it shares.
-                    var nxt = isPaused
-                        ? null
-                        : (findNextValidSong(activeIdx) || findPrevValidSong(activeIdx));
+                    // It RETURNS rather than falling through: the rest of this
+                    // block arms auto-stop and paints the active row, and none
+                    // of that belongs to a song that is out of the show.
+                    if (isPaused) { RSDiag.blocked("SET/POS", "paused"); return; }
+                    var nxt = findNextValidSong(activeIdx) || findPrevValidSong(activeIdx);
                     // Reconnect guard: don't auto-seek off a skipped region on a
                     // stale post-outage tick; adopt REAPER's position for now and
                     // let it fire on the next proven-fresh tick.
@@ -13389,7 +13394,14 @@
                             selectedRegion = _selectionOf(_bnd.cue);
                             // The song the show actually reached. An edit can
                             // move what comes after it; it cannot move this.
-                            window._cueAnchorUid = _uidOf(activeRegion);
+                            //
+                            // Only when the cue was DERIVED — "whatever follows
+                            // this song". A cue promoted out of the queue is the
+                            // operator's own pick, and an anchor behind it would
+                            // let the next edit re-derive a different song and
+                            // discard their choice.
+                            if (_bnd.fromQueue) _clearCueAnchor('cue-came-from-queue');
+                            else window._cueAnchorUid = _uidOf(activeRegion);
                             _paintIntent();
                         }
                         return;
@@ -13451,7 +13463,14 @@
                             selectedRegion = _selectionOf(_bnd.cue);
                             // The song the show actually reached. An edit can
                             // move what comes after it; it cannot move this.
-                            window._cueAnchorUid = _uidOf(activeRegion);
+                            //
+                            // Only when the cue was DERIVED — "whatever follows
+                            // this song". A cue promoted out of the queue is the
+                            // operator's own pick, and an anchor behind it would
+                            // let the next edit re-derive a different song and
+                            // discard their choice.
+                            if (_bnd.fromQueue) _clearCueAnchor('cue-came-from-queue');
+                            else window._cueAnchorUid = _uidOf(activeRegion);
                             _paintIntent();
                         }
                         return;
@@ -13963,8 +13982,12 @@
             window._cueAnchorUid = null;
         }
 
+        // Deliberately does NOT retire the cue anchor. Losing the cued row is
+        // not the same event as retiring the question that produced it: when a
+        // row leaves the set, _dropIntentNaming() clears the selection and
+        // _recueTo() immediately asks the anchor again. Clearing it here took
+        // the answer away from the very path that needed it.
         function clearSelectedRegion(reason) {
-            _clearCueAnchor(reason);
             if (!selectedRegion) return;
             RSDiag.log('CLEAR_SELECT', { song: selectedRegion.id, reason: reason || '?' });
             selectedRegion = null;
@@ -14134,6 +14157,11 @@
             // usually follows is deterministic instead of depending on whether
             // the SET/POS reply has come back yet.
             clearManualTransportGuard('user-cue-nav');
+            // Next/Previous is the operator choosing a row, exactly as a tap is.
+            // It replaces whatever a boundary cued, so it retires the anchor
+            // behind it — otherwise the next add or drag re-cues off a song the
+            // show is past and throws their choice away.
+            _clearCueAnchor('cue-nav');
             selectedRegion = _selectionOf(region);
             noteActiveInstance(_ownerUidOf(region), 'cue-nav');
             RSDiag.log('USER_SELECT', { song: region.id, uid: _uidOf(region), start: _fmtPos(region.start), reason: 'cue-nav' });
@@ -14292,6 +14320,9 @@
             // The selection has been acted on. Leaving it set would make the
             // NEXT Play re-seek to it, which is exactly how pause/resume breaks.
             clearSelectedRegion('consumed-by-play');
+            // And the anchor with it: the cue it was recorded for has just been
+            // played, so it names a song the show is already past.
+            _clearCueAnchor('consumed-by-play');
         }
         // ── Topbar counters ─────────────────────────────────────────────
         var g_totalDur = 0, g_activeCount = 0;
