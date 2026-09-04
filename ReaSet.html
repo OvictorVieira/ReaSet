@@ -12802,10 +12802,13 @@
                 // Nothing active left to go to. Drop the cue rather than leave
                 // it pointing into a song that is out of the show.
                 window._pendingCuePos = null;
+                // Nowhere left to go: the anchor's question has no answer in
+                // this set any more, so it goes with the cue it produced.
+                _clearCueAnchor(reason || 'recue-no-target');
                 RSDiag.log('RECUE', { to: '-', reason: reason || '?' });
                 return;
             }
-            selectRegionForCue(target, reason || 'recue-after-edit');
+            selectRegionForCue(target, reason || 'recue-after-edit', true);
         }
 
         // After a structural edit that did not remove the cued row: adding a
@@ -12827,7 +12830,7 @@
             if (!next) return;
             if (selectedRegion && selectedRegion.uid === _uidOf(next)) return;
             RSDiag.log('RECUE', { to: next.id, after: anchor.id, reason: reason || '?' });
-            selectRegionForCue(next, reason || 'recue-after-edit');
+            selectRegionForCue(next, reason || 'recue-after-edit', true);
         }
         // Resolved by id and THEN searched, rather than by one selector built
         // from a uid. Even with selector-safe uids, interpolating an id into a
@@ -12901,7 +12904,17 @@
                     // forward-only scan from the last index answers null, so
                     // no seek was issued and the transport was left parked
                     // inside a song that is no longer in the show.
-                    var nxt = findNextValidSong(activeIdx) || findPrevValidSong(activeIdx);
+                    //
+                    // Never while PAUSED. A paused transport is parked at the
+                    // operator's own position and Play means "carry on from
+                    // here" — seeking it would resume a different song than the
+                    // one they paused inside. Deactivating the paused row is an
+                    // edit to the SET, not a command to move the playhead; the
+                    // rescue owns the stopped and rolling cases only, which is
+                    // what _recueTo() already says about the boundary it shares.
+                    var nxt = isPaused
+                        ? null
+                        : (findNextValidSong(activeIdx) || findPrevValidSong(activeIdx));
                     // Reconnect guard: don't auto-seek off a skipped region on a
                     // stale post-outage tick; adopt REAPER's position for now and
                     // let it fire on the next proven-fresh tick.
@@ -13937,7 +13950,21 @@
             }
         }
 
+        // The cue anchor is the song the show REACHED — recorded at a stopping
+        // boundary so that a later edit can ask again what follows it. It is
+        // only ever an answer to "the cue this boundary parked": once that cue
+        // has been consumed by Play, or replaced by a choice the operator made,
+        // the anchor names a song the show has moved past. Left standing, the
+        // next add or reorder would re-cue off it and overwrite the operator's
+        // own selection, so it dies with the cue it belongs to.
+        function _clearCueAnchor(reason) {
+            if (!window._cueAnchorUid) return;
+            RSDiag.log('CUE_ANCHOR_CLEAR', { uid: window._cueAnchorUid, reason: reason || '?' });
+            window._cueAnchorUid = null;
+        }
+
         function clearSelectedRegion(reason) {
+            _clearCueAnchor(reason);
             if (!selectedRegion) return;
             RSDiag.log('CLEAR_SELECT', { song: selectedRegion.id, reason: reason || '?' });
             selectedRegion = null;
@@ -13957,6 +13984,9 @@
         function promoteQueuedToSelected(reason) {
             if (!queuedRegion) return null;
             var q = queuedRegion;
+            // The operator's own pick replaces whatever the boundary cued, so
+            // the anchor behind that cue no longer describes this selection.
+            _clearCueAnchor(reason);
             selectedRegion = _selectionOf(q);
             queuedRegion = null;
             RSDiag.log('QUEUE_PROMOTE', { song: q.id, uid: _uidOf(q), reason: reason || '?' });
@@ -13975,9 +14005,14 @@
 
         // Tap while stopped or paused: record the choice, move the cursor, and
         // stop there. No Play, ever.
-        function selectRegionForCue(region, reason) {
+        // keepAnchor is for the recue paths only: they are re-asking the SAME
+        // anchor's question against an edited list, so the anchor has to
+        // survive their own call. Every other caller is a new decision — a tap
+        // — and retires it.
+        function selectRegionForCue(region, reason, keepAnchor) {
             // An explicit cue is a new user command and outranks the guard.
             clearManualTransportGuard('user-cue');
+            if (!keepAnchor) _clearCueAnchor(reason || 'tap');
             selectedRegion = _selectionOf(region);
             noteActiveInstance(_ownerUidOf(region), 'cue');
             RSDiag.log('USER_SELECT', { song: region.id, uid: _uidOf(region), start: _fmtPos(region.start), reason: reason || 'tap' });
