@@ -1657,7 +1657,7 @@ def test_off_setlist_songs_never_reach_playback(script_body: str) -> None:
         "the whole-project absorb is no longer conditional on the set being "
         "empty, so every new region silently joins the show again"
     )
-    # Only the picker may read it.
+    # Only membership/render paths and the off-set locator may read it.
     readers = [m for m in re.findall(r"function\s+(\w+)[^{]*\{", body)
                if "g_offSetlist" in _fn_body(body, m)]
     # renderAddSongList is the picker's list builder, split out of
@@ -1677,9 +1677,9 @@ def test_off_setlist_songs_never_reach_playback(script_body: str) -> None:
     # rule it must keep is the same one the picker keeps: nothing about an
     # off-set row may reach playback, which the edit-mode test below pins
     # (no .song-container, no drag handle, no playRegion).
-    allowed = {"syncRegions", "openAddSongPicker", "renderAddSongList",
+    allowed = {"syncRegions", "_renderSetlistChecksum", "openAddSongPicker", "renderAddSongList",
                "addSongToSetlist", "removeFromSetlist", "_syncApplyPayload",
-               "renderSetlist"}
+               "renderSetlist", "locateOffSetlistSong"}
     assert set(readers) <= allowed, (
         f"g_offSetlist is read outside the picker and its two actions: "
         f"{sorted(set(readers) - allowed)}"
@@ -3972,7 +3972,7 @@ def test_loop_is_transport_and_both_roles_hold_it() -> None:
         "the Repeat cancel is publish-class — a Controller can arm a native "
         "loop it can never disarm"
     )
-    assert "SET/EXTSTATE/ReaSet/" not in cls.replace("SET/EXTSTATEPERSIST/ReaSet/", ""), (
+    assert "SET/EXTSTATE/ReaSet/" not in cls.replace("SET/EXTSTATEPERSIST/ReaSet/", "").replace("SET/EXTSTATE/ReaSet/playRequest/", ""), (
         "plain SET/EXTSTATE is transport-class — that hands a Controller the "
         "whole shared-state namespace, not just the loop"
     )
@@ -4679,6 +4679,9 @@ def test_edit_mode_keeps_removed_songs_on_screen_with_an_add_button(script_body:
     assert "_matchesEditFilter(off)" in block, (
         "the edit search does not narrow the off-set rows"
     )
+    assert "locateOffSetlistSong" in block, (
+        "clicking an off-set search result does not locate its region in REAPER"
+    )
     assert "playRegion" not in block, (
         "an off-set row can start playback — it is not in the show"
     )
@@ -4698,6 +4701,50 @@ def test_edit_mode_keeps_removed_songs_on_screen_with_an_add_button(script_body:
         "a removed song no longer reaches g_offSetlist, so it appears "
         "nowhere at all"
     )
+
+
+@requires_node
+def test_off_setlist_rename_repaints_and_click_uses_fresh_region(script_body: str) -> None:
+    """A REAPER rename must refresh search results without a manual reload.
+
+    The DOM callback carries only the stable region id. Navigation resolves
+    that id against the latest project parse, so a simultaneous boundary move
+    cannot leave the click pointing at the old coordinates either.
+    """
+    checksum = extract_function(script_body, "_renderSetlistChecksum")
+    locate = extract_function(script_body, "locateOffSetlistSong")
+    out = run_node(checksum + locate + textwrap.dedent(
+        """
+        var displayList = [{ id: 'A', uid: 'uA', name: 'In set', start: 0,
+                             end: 10, chain: false, skipped: false, loop: false }];
+        var g_subRegionMap = {}, g_songOverrides = {};
+        var g_offSetlist = [{ id: 'B', name: 'Old name', displayName: 'Old name',
+                              start: 10, end: 20, color: null }];
+        function _hideSkippedEffective() { return false; }
+        var before = _renderSetlistChecksum();
+        g_offSetlist = [{ id: 'B', name: 'New name', displayName: 'New name',
+                          start: 30, end: 40, color: null }];
+        var after = _renderSetlistChecksum();
+
+        var commands = [], cleared = [];
+        var REASET_EDITING = true, g_mainRegions = { B: g_offSetlist[0] };
+        var window = { _playRegionLocked: 0, _pendingCuePos: 123 };
+        var RSDiag = { log: function () {}, blocked: function () {} };
+        function canEditSetlist() { return true; }
+        function canControlTransport() { return true; }
+        function clearManualTransportGuard(r) { cleared.push(r); }
+        function _clearCueAnchor(r) { cleared.push(r); }
+        function clearSelectedRegion(r) { cleared.push(r); }
+        function clearQueuedRegion(r) { cleared.push(r); }
+        function _fmtPos(v) { return String(v); }
+        function seekManualTransport(pos, starts) { commands.push([pos, starts]); }
+        locateOffSetlistSong('B');
+        console.log(JSON.stringify({ changed: before !== after, commands: commands,
+                                     pending: window._pendingCuePos }));
+        """
+    ))
+    got = json.loads(out)
+    assert got == {"changed": True, "commands": [[30, False]], "pending": None}
 
 
 # ── EDIT-mode search ────────────────────────────────────────────────────────
@@ -4765,7 +4812,7 @@ def test_the_search_filters_the_view_and_never_the_setlist(script_body: str) -> 
         "rebuild the setlist from the visible rows and drop the rest"
     )
     assert "return;" in guard.group(1), "the reorder guard does not actually stop"
-    assert end.index("if (g_editFilter)") < end.index("setlists[currentSetlistName] ="), (
+    assert end.index("if (g_editFilter)") < end.index("displayList = sortedDisplay"), (
         "the guard runs after the setlist has already been overwritten"
     )
 
@@ -5469,6 +5516,77 @@ def test_reordering_the_set_moves_the_cue_with_it(script_body: str) -> None:
         f"the cue moved on screen but REAPER's cursor did not ({sent}). Play "
         "resolves from that cursor, so the two have to agree"
     )
+
+
+@requires_node
+@pytest.mark.parametrize("transport", ["stopped", "playing", "paused"])
+def test_added_song_drag_persists_and_plays_mid_show(script_body: str, transport: str) -> None:
+    """Exercise the actual add, Sortable callback, save and Play together."""
+    drag_at = script_body.index("onEnd: function (evt)")
+    drag, _ = _brace_block(script_body, script_body.index("{", drag_at))
+    funcs = "".join(extract_function(script_body, f) for f in (
+        "saveCurrentState", "addSongToSetlist", "_makeInstance", "_newUid",
+        "playRegion", "togglePlay", "_renderSetlistChecksum",
+    ))
+    out = run_node(_bug2_harness(script_body, funcs + """
+        var UID_SEP = '_', _uidSeq = 0, _lastSavedSig = null;
+        var STORAGE_KEY = 'sets', CURRENT_KEY = 'current', stored = {};
+        var localStorage = { setItem: function(k, v) { stored[k] = v; } };
+        var published = [], persisted = [];
+        function _syncPushSoon() { published.push(displayList.map(function(r) { return r.id; })); }
+        function _libraryEnqueue() { persisted.push(JSON.parse(JSON.stringify(setlists.Default))); }
+        function getSongEnd() { return 'auto'; }
+        function getOverride() { return {}; }
+        function _hideSkippedEffective() { return false; }
+        function closeAddSongPicker() {}
+        function midiInitPreroll(pos) { return pos; }
+        function cancelPendingAutomaticTransport() {}
+        var isDragging = true, g_editFilter = '', REASET_EDITING = false;
+        var g_subRegionMap = {}, g_songOverrides = {};
+        var domOrder = [];
+        var document = {
+            body: { style: {} },
+            getElementById: function() { return { checked: true }; },
+            querySelectorAll: function() { return domOrder.map(function(r) {
+                return { getAttribute: function() { return r.uid; } };
+            }); }
+        };
+        g_offSetlist = [{ id: 'D', name: 'Added', start: 400, end: 500, duration: 100 }];
+        window._cueAnchorUid = 'uA';
+        selectedRegion = _selectionOf(displayList[1]);
+        currentPos = 100;
+    """ + f"isPlaying = {str(transport == 'playing').lower()}; isPaused = {str(transport == 'paused').lower()};" + """
+        addSongToSetlist('D');
+        var added = displayList[3];
+        domOrder = [displayList[0], added, displayList[1], displayList[2]];
+        (function(evt) {
+    """ + drag + """
+        })({});
+        var automaticSeeks = sent.slice();
+        var saved = JSON.parse(stored.sets).Default.map(function(r) { return r.id; });
+        // Once stopped, an explicit tap followed immediately by Play must
+        // start the newly added row even before another transport poll.
+        isPlaying = false; isPaused = false; sent = [];
+        playRegion(added.start, added.id, added.uid);
+        togglePlay();
+        console.log(JSON.stringify({
+            saved: saved, library: persisted[persisted.length - 1].map(function(r) { return r.id; }),
+            published: published[published.length - 1],
+            live: displayList.map(function(r) { return r.id; }),
+            automaticSeeks: automaticSeeks, commands: sent
+        }));
+    """))
+    result = json.loads(out)
+    expected = ["A", "D", "B", "C"]
+    assert result["saved"] == expected, "drag persisted the old order"
+    assert result["library"] == expected
+    assert result["published"] == expected
+    assert result["live"] == expected
+    assert result["commands"] == ["SET/POS/400", "SET/POS/400;1007"]
+    if transport == "stopped":
+        assert result["automaticSeeks"] == ["SET/POS/400"]
+    else:
+        assert result["automaticSeeks"] == []
 
 
 def test_the_boundary_cue_records_which_song_not_just_where(

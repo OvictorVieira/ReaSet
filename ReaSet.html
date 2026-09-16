@@ -2830,8 +2830,8 @@
            Removing a song from the set must not make it VANISH from the edit
            screen — it moves down here, dimmed, with a + to bring it back.
            These rows are rendered only while editing; they carry no drag
-           handle (Sortable cannot pick them up) and no transport actions
-           (they are not in the show, there is nothing to cue). */
+           handle (Sortable cannot pick them up). Tapping the title locates the
+           project region for editing, but never cues it into the show. */
         .offset-divider {
             list-style: none;
             padding: 14px 4px 6px;
@@ -6498,6 +6498,7 @@
                 sawWrite = true;
                 if (TRANSPORT_ACTION_IDS[seg] === 1) continue;
                 if (seg.indexOf('SET/POS/') === 0) continue;
+                if (seg.indexOf('SET/EXTSTATE/ReaSet/playRequest/') === 0) continue;
                 // The native-loop keys are TRANSPORT, not publish. Looping a
                 // section mid-song is performance control — the musician
                 // holding the Controller reaches for LOOP exactly like PLAY,
@@ -6752,11 +6753,19 @@
             // bury the timeline in noise for no diagnostic value — what they
             // observe is already logged by the TRANSPORT handler.
             if (isWrite) RSDiag.cmd(cmd, reason);
+            // A stop, pause or another seek supersedes any start the Lua
+            // mailbox has not consumed yet, including across devices.
+            if (window._nativeTransportReady && /(^|;)(1007|1008|1016|SET\/POS\/[^;]+)(;|$)/.test(String(cmd))) {
+                window._nativePlayRequest = null;
+                window._nativePlayPendingUntil = 0;
+                cmd = 'SET/EXTSTATE/ReaSet/playRequest/;SET/EXTSTATE/ReaSet/autoStopDone/;' +
+                      'SET/EXTSTATE/ReaSet/autoStopCancel/1;' + cmd;
+            }
             return _wwrReqReal.call(this, cmd);
         };
 
         // Batched recur like X-Raym: lyrics+chords+regions each on their own poll
-        wwr_req_recur("TRANSPORT", 33);  // ~30fps — tighter timing for loop count accuracy
+        wwr_req_recur("TRANSPORT;GET/EXTSTATE/ReaSet/autoStopDone", 33);
         wwr_req_recur("REGION", 1000);
         wwr_req_recur("MARKER", 1000);
         // ── Lyrics / chords polling ─────────────────────────────────────────
@@ -6817,6 +6826,7 @@
         // One-shot probe so the empty-state message is accurate immediately,
         // then a light refresh (these are tiny replies).
         var _diagProbe = "GET/EXTSTATE/ReaSet/autoStopArmed" +
+                         ";GET/EXTSTATE/ReaSet/transportReady" +
                          ";GET/EXTSTATE/ReaSet/nativeLoopReady" +
                          ";GET/EXTSTATE/ReaSet/lyricsTrack;GET/EXTSTATE/ReaSet/chordsTrack" +
                          ";GET/EXTSTATE/ReaSet/lyricsTrackMatches;GET/EXTSTATE/ReaSet/chordsTrackMatches" +
@@ -7444,6 +7454,9 @@
         var _manualGuardUntil = 0;
 
         function beginManualTransportIntent(type) {
+            window._nativePlayRequest = null;
+            window._nativePlayPendingUntil = 0;
+            window._nativePlayTarget = null;
             _manualIntent     = type;
             _manualGuardUntil = Date.now() + MANUAL_GUARD_MS;
             RSDiag.log('GUARD', { manual: type, forMs: MANUAL_GUARD_MS });
@@ -7491,7 +7504,8 @@
         // a reconnect (the reply stream cannot be trusted yet) and a manual
         // command (the reply stream is fine, the user has simply overruled it).
         function _suppressAutoTransport() {
-            return Date.now() < _resyncGuardUntil || isManualTransportGuardActive();
+            return Date.now() < _resyncGuardUntil || isManualTransportGuardActive() ||
+                   Date.now() < (window._playRegionLocked || 0);
         }
 
         // Ambient state stamped onto every diagnostic line (#10 Part A). Read
@@ -10470,6 +10484,14 @@
                         var nowPlaying = (nowState & 1) === 1;
                         var nowPaused  = (nowState & 2) === 2;
                         currentPos = parseFloat(tok[2]);
+                        var _nativeTarget = window._nativePlayTarget;
+                        if (nowPlaying && _nativeTarget &&
+                            currentPos >= _nativeTarget.start - MIDI_INIT_PREROLL &&
+                            currentPos < _nativeTarget.end) {
+                            window._nativePlayPendingUntil = 0;
+                            window._nativePlayRequest = null;
+                            window._nativePlayTarget = null;
+                        }
                         // Cancel the MIDI-init pre-roll artefact in ONE place. The
                         // pre-roll leaves the cursor a few ms before the song start,
                         // i.e. inside the PREVIOUS region when they are contiguous,
@@ -10595,6 +10617,9 @@
                         }
                         break;
                     case "EXTSTATE":
+                        if (tok[1] === "ReaSet" && tok[2] === "autoStopDone") {
+                            _consumeNativeStop(tok[3] || '');
+                        }
                         // Reaset.lua sets "ReaSet/nativeLoopReady=1"; the flag gates
                         // whether looping is handed to Lua or run in JS. It is NOT a
                         // health signal — SetExtState keeps it set until REAPER quits,
@@ -10645,6 +10670,9 @@
                         }
                         if (tok[1] === "ReaSet" && tok[2] === "nativeLoopReady") {
                             window.REASET_NATIVE_LOOP = (tok[3] === "1");
+                        }
+                        if (tok[1] === "ReaSet" && tok[2] === "transportReady") {
+                            window._nativeTransportReady = (tok[3] === "1");
                         }
                         // Lyrics/Chords bridge diagnostics published by Reaset.lua.
                         // "" (or key absent) = script not running; "!NOTRACK" = no
@@ -10955,6 +10983,25 @@
             var ov = getOverride(id).colorHex;
             if (ov) return ov;
             return reapColor || null;
+        }
+
+        // Everything whose change requires renderSetlist(). Off-set songs used
+        // to be missing here: syncRegions() refreshed their objects after a
+        // REAPER rename, but the unchanged setlist checksum kept the old DOM
+        // alive until a manual refresh or an unrelated edit.
+        function _renderSetlistChecksum() {
+            var setRows = displayList.map(function (r) {
+                return { id: r.id, uid: r.uid, chain: r.chain, skipped: r.skipped,
+                         loop: r.loop, name: r.name, displayName: r.displayName,
+                         start: r.start, end: r.end, color: r.color };
+            });
+            var offRows = g_offSetlist.map(function (r) {
+                return { id: r.id, name: r.name, displayName: r.displayName,
+                         start: r.start, end: r.end, color: r.color };
+            });
+            return JSON.stringify(setRows) + JSON.stringify(offRows) +
+                   (_hideSkippedEffective() ? 1 : 0) + JSON.stringify(g_subRegionMap) +
+                   JSON.stringify(g_songOverrides);
         }
 
         function syncRegions() {
@@ -11428,7 +11475,7 @@
             // REAPER has spoken: anything staged that it now agrees with is
             // confirmed, and the staging can go.
             _confirmStagedColors();
-            var cs = JSON.stringify(displayList.map(function (r) { return { id: r.id, uid: r.uid, chain: r.chain, skipped: r.skipped, loop: r.loop, name: r.name, color: r.color }; })) + (_hideSkippedEffective() ? 1 : 0) + JSON.stringify(g_subRegionMap) + JSON.stringify(g_songOverrides);
+            var cs = _renderSetlistChecksum();
             if (cs !== lastRenderChecksum) { lastRenderChecksum = cs; renderSetlist(); updatePlaybackUI(); }
         }
 
@@ -12117,6 +12164,7 @@
                     offLi.setAttribute('data-off-id', off.id);
                     var offRow = document.createElement('div');
                     offRow.className = 'song-row off-set';
+                    offRow.setAttribute('onclick', "locateOffSetlistSong('" + off.id + "')");
                     var offColor = _songColor(off.id, null) || off.color;
                     if (offColor) {
                         offRow.setAttribute('style', buildColorVarsFromHex(offColor));
@@ -12162,6 +12210,31 @@
         }
 
         // --- 7. ACTIONS ---
+        // Search results outside tonight's set are still project regions. A
+        // click should locate one in REAPER for editing, while keeping it out
+        // of displayList so auto-advance can never reach it. Resolve from the
+        // latest REGION parse by id; the DOM may have been rendered before a
+        // rename or boundary edit arrived.
+        function locateOffSetlistSong(regionId) {
+            if (!canEditSetlist() || !REASET_EDITING) {
+                RSDiag.blocked('locateOffSetlistSong', 'not-editing'); return;
+            }
+            if (!canControlTransport()) {
+                RSDiag.blocked('locateOffSetlistSong', 'role-cannot-control-transport'); return;
+            }
+            var region = g_mainRegions && g_mainRegions[regionId];
+            if (!region) { RSDiag.log('OFF_SET_LOCATE_MISS', { song: String(regionId) }); return; }
+
+            clearManualTransportGuard('off-set-locate');
+            _clearCueAnchor('off-set-locate');
+            clearSelectedRegion('off-set-locate');
+            clearQueuedRegion('off-set-locate');
+            window._pendingCuePos = null;
+            window._playRegionLocked = Date.now() + 500;
+            RSDiag.log('OFF_SET_LOCATE', { song: region.id, start: _fmtPos(region.start) });
+            seekManualTransport(region.start, false);
+        }
+
         // reorderPrompt() lived here. It was a SECOND reorder path, bound to the
         // song's index number, and the only one that raised a native prompt() —
         // a modal asking a musician to type a position, on a phone, during a
@@ -12860,6 +12933,7 @@
 
             var activeIdx = activeInstanceIdx();
             var activeRegion = (activeIdx !== -1) ? displayList[activeIdx] : null;
+            if (isPlaying && activeRegion) window._lastPlayingUid = _uidOf(activeRegion);
 
             // Show progress, refreshed on every transport tick.
             var _pEl = document.getElementById('show-timer-display');
@@ -12935,6 +13009,7 @@
                     // letting the gate refuse it keeps the diagnostic log about
                     // real events.
                     if (!canPublishSetlist()) return;
+                    if (_suppressAutoTransport()) return;
                     var wantStop = document.getElementById('autoStopToggle').checked
                                    && !activeRegion.chain && !activeRegion.loop
                                    && !getOverride(activeRegion.id).stopAfter;
@@ -14033,6 +14108,9 @@
         // survive their own call. Every other caller is a new decision — a tap
         // — and retires it.
         function selectRegionForCue(region, reason, keepAnchor) {
+            window._nativePlayRequest = null;
+            window._nativePlayPendingUntil = 0;
+            window._nativePlayTarget = null;
             // An explicit cue is a new user command and outranks the guard.
             clearManualTransportGuard('user-cue');
             if (!keepAnchor) _clearCueAnchor(reason || 'tap');
@@ -14118,7 +14196,10 @@
                 window._pendingCuePos    = null;
                 window._playIntent       = { id: id, uid: _uidOf(region), start: region.start };
                 RSDiag.log('USER_SEEK', { song: region.id, uid: _uidOf(region), reason: 'edit-mode-immediate-jump' });
-                seekManualTransport(midiInitPreroll(region.start), true);
+                cancelPendingAutomaticTransport('edit-mode-immediate-jump');
+                noteActiveInstance(_ownerUidOf(region), 'edit-mode-immediate-jump');
+                if (window._nativeTransportReady) _playSelectedViaLua(region);
+                else seekManualTransport(midiInitPreroll(region.start), true);
                 clearQueuedRegion('replaced-by-immediate-seek');
                 return;
             }
@@ -14150,6 +14231,9 @@
 
         function cueRegion(start, id, uid) {
             if (!canControlTransport()) { RSDiag.blocked('cueRegion', 'role-cannot-control-transport'); return; }
+            window._nativePlayRequest = null;
+            window._nativePlayPendingUntil = 0;
+            window._nativePlayTarget = null;
             var region = _resolveTapTarget(id, uid, start);
             // Next / Previous and the MIDI navigation actions land here. They
             // stop first — existing product behaviour, unchanged — but the
@@ -14252,12 +14336,26 @@
         }
         function togglePlay() {
             if (!canControlTransport()) { RSDiag.blocked('togglePlay', 'role-cannot-control-transport'); return; }
+            if (window._nativePlayRequest) {
+                if (Date.now() >= window._nativePlayPendingUntil) {
+                    // Retrying the same token is idempotent in Lua. Creating a
+                    // fresh start here would restart a song whose playing reply
+                    // is merely late, or lose the selection to the old cursor.
+                    window._nativePlayPendingUntil = Date.now() + 1500;
+                    window._playRegionLocked = Date.now() + 500;
+                    wwr_req(window._nativePlayRequest, 'user-play-retry');
+                } else RSDiag.blocked('togglePlay', 'play-awaiting-transport');
+                return;
+            }
             if (isPlaying) { pauseTransport(); return; }
 
             // An explicit Play outranks whatever the last manual command armed:
             // Stop followed 200ms later by Play must start, not be swallowed by
             // the guard its own predecessor set.
             clearManualTransportGuard('user-play');
+            cancelPendingAutomaticTransport('user-play');
+            window._playRegionLocked = Date.now() + 500;
+            window._pendingCuePos = null;
 
             // RESUME IS NOT A START.
             //
@@ -14303,8 +14401,12 @@
                 noteActiveInstance(_ownerUidOf(target.region), 'play-selected');
                 window._playRegionLocked = Date.now() + 500;
                 window._pendingCuePos    = null;
-                wwr_req('SET/POS/' + midiInitPreroll(target.region.start) + ';1007',
-                        'user-play-selected');
+                if (window._nativeTransportReady) {
+                    _playSelectedViaLua(target.region);
+                } else {
+                    wwr_req('SET/POS/' + midiInitPreroll(target.region.start) + ';1007',
+                            'user-play-selected');
+                }
             } else {
                 // Playing from wherever the cursor is: no row-level intent to
                 // record, so activeInstanceIdx() falls back to the first
@@ -14323,6 +14425,51 @@
             // And the anchor with it: the cue it was recorded for has just been
             // played, so it names a song the show is already past.
             _clearCueAnchor('consumed-by-play');
+        }
+
+        function _playSelectedViaLua(region) {
+            // Sections carry their parent uid. The stop belongs to the whole
+            // song, even when playback begins at a selected section.
+            var owner = _findInstanceByUid(_ownerUidOf(region)) || region;
+            var wantStop = document.getElementById('autoStopToggle').checked &&
+                           !owner.chain && !owner.loop && !getOverride(owner.id).stopAfter;
+            var token = Date.now() + '-' + (window._nativePlaySeq = (window._nativePlaySeq || 0) + 1);
+            _reaperNativeLoopOff();
+            window._nativePlayPendingUntil = Date.now() + 1500;
+            window._nativePlayTarget = { start: region.start, end: owner.end };
+            window._autoStopPublished = wantStop ? owner.start + ':' + owner.end : 'off';
+            window._nativePlayRequest = 'SET/EXTSTATE/ReaSet/playRequest/' + token + '|' +
+                    midiInitPreroll(region.start) + '|' + owner.start + '|' + owner.end + '|' +
+                    (wantStop ? '1' : '0');
+            wwr_req(window._nativePlayRequest, 'user-play-selected-native');
+        }
+
+        function _consumeNativeStop(value) {
+            if (!value || value === window._nativeStopSeen) return;
+            window._nativeStopSeen = value;
+            if (isPlaying || isPaused || isManualTransportGuardActive()) return;
+            // A new explicit cue wins over a completion reply still in flight.
+            if (selectedRegion && !window._cueAnchorUid) return;
+            var parts = value.split('|');
+            if (parts.length !== 3) return;
+            var start = Number(parts[1]), end = Number(parts[2]);
+            var finished = _findInstanceByUid(window._lastPlayingUid);
+            if (!finished || finished.start !== start || finished.end !== end) {
+                finished = null;
+                for (var i = 0; i < displayList.length; i++) {
+                    if (displayList[i].start === start && displayList[i].end === end) {
+                        finished = displayList[i]; break;
+                    }
+                }
+            }
+            if (!finished || finished.loop || effectiveSongEnd(finished) !== 'stop') return;
+            var next = queuedRegion || findNextValidSong(displayList.indexOf(finished));
+            if (!next) return;
+            var fromQueue = !!queuedRegion;
+            if (fromQueue) clearQueuedRegion('native-stop-completed');
+            window._cueAnchorUid = fromQueue ? null : _uidOf(finished);
+            RSDiag.log('NATIVE_STOP_DONE', { song: finished.id, next: next.id });
+            selectRegionForCue(next, 'native-stop-completed', true);
         }
         // ── Topbar counters ─────────────────────────────────────────────
         var g_totalDur = 0, g_activeCount = 0;
@@ -16085,15 +16232,18 @@
                 // to the same object — so dragging either would silently collapse
                 // the pair into a single entry on the next save.
                 var items = document.querySelectorAll("#setlist .song-container");
-                var newOrder = []; var sortedDisplay = [];
+                var sortedDisplay = [];
                 for (var i = 0; i < items.length; i++) {
                     var inst = _findInstanceByUid(items[i].getAttribute("data-uid"));
                     if (!inst) continue;
-                    newOrder.push({ id: inst.id, chain: inst.chain, skipped: inst.skipped, loop: inst.loop });
                     sortedDisplay.push(inst);
                 }
-                setlists[currentSetlistName] = newOrder; saveCurrentState(); displayList = sortedDisplay;
-                lastRenderChecksum = JSON.stringify(displayList.map(function (r) { return { id: r.id, uid: r.uid, chain: r.chain, skipped: r.skipped, loop: r.loop, name: r.name, color: r.color }; }));
+                // Save and publish the order the user just chose. Saving first
+                // compares the OLD list with _lastSavedSig and skips the write,
+                // leaving storage and followers behind until another poll.
+                displayList = sortedDisplay;
+                saveCurrentState();
+                lastRenderChecksum = _renderSetlistChecksum();
                 // Dragging a song above the cued one IS the instruction that it
                 // should play next. Without this the cue keeps naming the old
                 // row and the downbeat starts the song that used to be next.

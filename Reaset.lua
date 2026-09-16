@@ -149,6 +149,9 @@ end
 local s_stopArmed   = false
 local s_stopKey     = ""
 local s_stopPrefWas = nil   -- the user's global preference, to put back
+local s_stopStart, s_stopEnd = 0, 0
+local s_stopWasPlaying = false
+local s_stopRenderLead = 0
 
 local function autostop_cleanup()
     if s_stopPrefWas ~= nil and reaper.SNM_SetIntConfigVar then
@@ -160,6 +163,8 @@ local function autostop_cleanup()
     end
     s_stopArmed = false
     s_stopKey   = ""
+    s_stopWasPlaying = false
+    s_stopRenderLead = 0
     reaper.SetExtState(SEC, "autoStopArmed", "", false)
 end
 
@@ -174,6 +179,7 @@ local function autostop_arm(ls, le)
     reaper.GetSet_LoopTimeRange(true, true, ls, le, false)
     reaper.GetSetRepeat(0)
     s_stopArmed = true
+    s_stopStart, s_stopEnd = ls, le
     s_stopKey   = string.format("%.5f:%.5f", ls, le)
     -- The browser reads this flag so it does NOT also send its own stop. If
     -- arming cannot happen (no SWS, for instance) the flag stays empty and the
@@ -185,6 +191,31 @@ end
 
 -- `loop_active` comes from loop_tick: the loop owns the range when it is on.
 local function autostop_tick(loop_active)
+    -- Keep the completion in REAPER until the browser reads it. A suspended
+    -- tab cannot be required to observe the last 200 ms of every song.
+    -- GetPlayPosition retains the final audible position while stopped;
+    -- TRANSPORT instead reports the edit cursor (often the song's start).
+    local ps = reaper.GetPlayState()
+    local cancelled = reaper.GetExtState(SEC, "autoStopCancel") == "1"
+    if cancelled then reaper.SetExtState(SEC, "autoStopCancel", "", false) end
+    if s_stopArmed and (ps & 1) == 1 and (ps & 2) == 0 then
+        local audible = reaper.GetPlayPosition()
+        local rendered = reaper.GetPlayPosition2()
+        -- Measure the device's render lead. GetOutputLatency alone omits
+        -- buffering visible in GetPlayPosition2 (37 ms vs 6 ms on the probe).
+        -- Immediately after a seek, pos2 may still describe the old position.
+        if rendered >= audible and rendered <= s_stopEnd and audible >= s_stopStart then
+            s_stopRenderLead = rendered - audible
+        end
+    end
+    if s_stopArmed and s_stopWasPlaying and ps == 0 and not cancelled then
+        local final_pos = reaper.GetPlayPosition() + s_stopRenderLead
+        if final_pos >= s_stopEnd - 0.001 and final_pos < s_stopEnd + s_stopRenderLead + 0.1 then
+            reaper.SetExtState(SEC, "autoStopDone",
+                tostring(reaper.time_precise()) .. "|" .. s_stopStart .. "|" .. s_stopEnd, false)
+        end
+    end
+    s_stopWasPlaying = (ps & 1) == 1 and (ps & 2) == 0
     if loop_active then
         if s_stopArmed then autostop_cleanup() end
         return
@@ -202,6 +233,34 @@ local function autostop_tick(loop_active)
     end
     local key = string.format("%.5f:%.5f", ls, le)
     if key ~= s_stopKey then autostop_arm(ls, le) end
+end
+
+-- A selected-song start must prepare the range BEFORE audio starts. Browser
+-- SET/POS;1007 followed by a later autoStop update can cross the old range end
+-- during the 5 ms MIDI pre-roll, stopping the new song immediately.
+local s_lastPlayRequest = ""
+local function transport_play_tick()
+    local request = reaper.GetExtState(SEC, "playRequest")
+    if request == "" then return end
+    reaper.SetExtState(SEC, "playRequest", "", false)
+    if request == s_lastPlayRequest then return end
+    local token, pos, ls, le, stop = request:match("^([^|]+)|([^|]+)|([^|]+)|([^|]+)|([01])$")
+    pos, ls, le = tonumber(pos), tonumber(ls), tonumber(le)
+    if not (token and pos and ls and le and pos >= 0 and ls >= 0 and le > ls
+            and le < math.huge and pos < math.huge) then return end
+    s_lastPlayRequest = request
+    reaper.SetExtState(SEC, "autoStopDone", "", false)
+    reaper.SetExtState(SEC, "autoStopCancel", "", false)
+    if s_active then loop_cleanup() end
+    autostop_cleanup()
+    reaper.SetExtState(SEC, "nativeLoop", "off", false)
+    reaper.SetExtState(SEC, "autoStopStart", tostring(ls), false)
+    reaper.SetExtState(SEC, "autoStopEnd", tostring(le), false)
+    reaper.SetExtState(SEC, "autoStop", stop == "1" and "on" or "off", false)
+    if stop == "1" then autostop_arm(ls, le) end
+    reaper.SetEditCurPos(pos, true, true)
+    reaper.OnPlayButton()
+    reaper.SetExtState(SEC, "playRequestAck", token, false)
 end
 
 local function loop_tick()
@@ -953,6 +1012,7 @@ local function tick_body()
     -- Presence flag (never expires — only proves the script ran at least once).
     if _hb_tick % 150 == 0 then
         reaper.SetExtState(SEC, "nativeLoopReady", "1", false)
+        reaper.SetExtState(SEC, "transportReady", "1", false)
     end
 
     -- REAL heartbeat: a value that CHANGES while we are alive. The flag above
@@ -962,6 +1022,9 @@ local function tick_body()
     if _hb_tick % 15 == 0 then
         reaper.SetExtState(SEC, "tick", tostring(_hb_tick), false)
     end
+
+    -- A play request owns the range before loop/auto-stop maintenance runs.
+    transport_play_tick()
 
     -- 1) Loop engine
     loop_tick()
@@ -1028,6 +1091,8 @@ local function on_exit()
     autostop_cleanup()
     -- Drop the presence flag so ReaSet falls back to JS loop next session.
     reaper.SetExtState(SEC, "nativeLoopReady", "0", false)
+    reaper.SetExtState(SEC, "transportReady", "0", false)
+    reaper.SetExtState(SEC, "playRequest", "", false)
 end
 
 ----------------------------------------------------------------------------
@@ -1041,6 +1106,8 @@ end
 
 -- Announce presence immediately (non-persistent: vanishes when REAPER closes).
 reaper.SetExtState(SEC, "nativeLoopReady", "1", false)
+reaper.SetExtState(SEC, "transportReady", "1", false)
+reaper.SetExtState(SEC, "playRequest", "", false)
 
 reaper.atexit(on_exit)
 reaper.defer(main)

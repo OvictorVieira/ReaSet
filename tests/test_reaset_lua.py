@@ -34,6 +34,88 @@ def test_reaset_lua_parses() -> None:
     luaparser_ast.parse(REASET_LUA.read_text(encoding="utf-8"))
 
 
+@pytest.mark.parametrize('stop', ['0', '1'])
+def test_native_play_prepares_range_before_starting_audio(stop: str) -> None:
+    src = REASET_LUA.read_text(encoding='utf-8')
+    chunk = extract_lua_chunk(src, 'local s_active', 'local function bridge_new')
+    lua = lupa.LuaRuntime(unpack_returned_tuples=True)
+    lua.execute('''
+        SEC = 'ReaSet'
+        calls = {}
+        ext = { playRequest = '' }
+        rangeStart, rangeEnd, pref, starts = 0, 10, 1, 0
+        reaper = {
+            GetExtState = function(_, key) return ext[key] or '' end,
+            SetExtState = function(_, key, value) ext[key] = value end,
+            SNM_GetIntConfigVar = function() return pref end,
+            SNM_SetIntConfigVar = function(_, value) pref = value end,
+            GetSet_LoopTimeRange = function(_, _, a, b) rangeStart, rangeEnd = a, b end,
+            GetSetRepeat = function() end,
+            SetEditCurPos = function(pos) cursor = pos end,
+            OnPlayButton = function()
+                starts = starts + 1
+                calls[starts] = { rangeStart, rangeEnd, cursor, pref }
+            end,
+        }
+    ''')
+    api = lua.execute(chunk + '\nreturn {arm=autostop_arm, play=transport_play_tick}')
+    # State left by song A. Its range must no longer govern B's pre-roll.
+    api.arm(0, 10)
+    request = f'test|9.995|10|20|{stop}'
+    lua.globals().ext.playRequest = request
+    api.play()
+    observed = list(lua.globals().calls[1].values())
+    if stop == '1':
+        assert observed[:3] == [10, 20, 9.995]
+    else:
+        assert observed[:3] == [0, 0, 9.995]
+    assert lua.globals().ext.playRequestAck == 'test'
+    # A retransmission of the same command must not restart a playing song.
+    lua.globals().ext.playRequest = request
+    api.play()
+    assert lua.globals().starts == 1
+
+
+@pytest.mark.parametrize('state,final_pos,cancelled,completed', [
+    (0, 9.96, False, True),
+    (0, 9.96, True, False),
+    (0, 9.7, False, False),
+    (2, 9.96, False, False),
+])
+def test_native_stop_completion_survives_without_browser(state, final_pos, cancelled, completed):
+    src = REASET_LUA.read_text(encoding='utf-8')
+    chunk = extract_lua_chunk(src, 'local s_active', 'local function bridge_new')
+    lua = lupa.LuaRuntime(unpack_returned_tuples=True)
+    lua.execute('''
+        SEC = 'ReaSet'
+        ext = {autoStop='on',autoStopStart='0',autoStopEnd='10'}
+        ps, pos, pos2 = 1, 9.8, 9.84
+        reaper = {
+            GetExtState=function(_, k) return ext[k] or '' end,
+            SetExtState=function(_, k, v) ext[k]=v end,
+            GetPlayState=function() return ps end,
+            GetPlayPosition=function() return pos end,
+            GetPlayPosition2=function() return pos2 end,
+            time_precise=function() return 42 end,
+            SNM_GetIntConfigVar=function() return 0 end,
+            SNM_SetIntConfigVar=function() end,
+            GetSet_LoopTimeRange=function() end,
+            GetSetRepeat=function() end,
+        }
+    ''')
+    api = lua.execute(chunk + '\nreturn {arm=autostop_arm,tick=autostop_tick}')
+    api.arm(0, 10)
+    api.tick(False)
+    lua.globals().ps = state
+    lua.globals().pos = final_pos
+    lua.globals().ext.autoStopCancel = '1' if cancelled else ''
+    api.tick(False)
+    event = lua.globals().ext.autoStopDone
+    assert bool(event) == completed
+    api.tick(False)
+    assert lua.globals().ext.autoStopDone == event
+
+
 def extract_lua_chunk(source: str, first: str, last_before: str) -> str:
     start = source.index(first)
     end = source.index(last_before)

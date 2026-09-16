@@ -18,6 +18,7 @@ on:
       - Tools/sync_handoff_test.js
       - tests/test_reaset_html.py
       - tests/test_reaset_lua.py
+      - tests/test_transport_races.py
       - .github/workflows/reaset-html.yml
   pull_request:
     paths:
@@ -27,6 +28,7 @@ on:
       - Tools/sync_handoff_test.js
       - tests/test_reaset_html.py
       - tests/test_reaset_lua.py
+      - tests/test_transport_races.py
       - .github/workflows/reaset-html.yml
   workflow_dispatch:
 
@@ -58,6 +60,6 @@ jobs:
         # project; luaparser is the syntax check.
         run: python -m pip install --disable-pip-version-check pytest lupa luaparser
       - name: Check ReaSet.html contracts
-        run: python -m pytest tests/test_reaset_html.py -q
+        run: python -m pytest tests/test_reaset_html.py tests/test_transport_races.py -q
       - name: Check Reaset.lua contracts
         run: python -m pytest tests/test_reaset_lua.py -q
