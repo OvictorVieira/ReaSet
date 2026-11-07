@@ -7749,6 +7749,53 @@
             return 'p' + Math.abs(h).toString(36);
         }
 
+        // WHICH project is this? The fingerprint above is a hash of the region
+        // IDs, so it changes on ANY region edit: a region created, deleted or
+        // renamed in REAPER produced a new key, and ReaSet reloaded its
+        // storage as if REAPER had opened another project — setlists rebuilt
+        // from an empty one, the whole project absorbed into "Default", the
+        // Players' payloads rejected for carrying another `fp`. A new region
+        // is just a new region: it joins the "not in setlist" rows and nothing
+        // else moves.
+        //
+        // The IDs cannot decide it alone (they are small sequential numbers in
+        // every project: two projects share most of them), so the pairs
+        // id|name are compared. Another project shares almost none; an edit
+        // changes one. Half or more in common is the same project.
+        var g_projectPairs = null;
+
+        function _regionPairs(regions) {
+            var out = [];
+            for (var i = 0; i < (regions || []).length; i++) {
+                var r = regions[i];
+                if (!r || r.length <= 4 || r[1] === "ReaSet Loop") continue;   // NativeLoop.lua's temp region
+                if (Math.abs(parseFloat(r[4]) - parseFloat(r[3])) < 0.001) continue;
+                out.push(r[2] + '|' + r[1]);
+            }
+            return out;
+        }
+
+        function _sameProject(prevPairs, newPairs) {
+            if (!prevPairs || !prevPairs.length || !newPairs || !newPairs.length) return false;
+            var seen = {}, shared = 0, i;
+            for (i = 0; i < prevPairs.length; i++) seen[prevPairs[i]] = true;
+            for (i = 0; i < newPairs.length; i++) if (seen[newPairs[i]]) shared++;
+            return shared * 2 >= Math.max(prevPairs.length, newPairs.length);
+        }
+
+        // {key, pairs, switched}: the key to use now, and whether storage has to
+        // be reloaded for it (a real project switch, or the first list).
+        function _resolveProjectKey(currentKey, currentPairs, regions) {
+            var fp = _computeProjectFingerprint(regions);
+            if (!fp) return { key: currentKey, pairs: currentPairs, switched: false };   // REAPER said nothing
+            var pairs = _regionPairs(regions);
+            if (!currentKey) return { key: fp, pairs: pairs, switched: true };
+            if (fp === currentKey || _sameProject(currentPairs, pairs)) {
+                return { key: currentKey, pairs: pairs, switched: false };
+            }
+            return { key: fp, pairs: pairs, switched: true };
+        }
+
         function _pkSuffix() { return g_projectKey ? '_' + g_projectKey : ''; }
         function _overridesKey() { return 'reaset_song_overrides' + _pkSuffix(); }
         function _smoothSeekKey() { return 'reaset_smooth_seek' + _pkSuffix(); }
@@ -10614,9 +10661,10 @@
                     case "REGION_LIST_END":
                         // Project fingerprint: namespace all project-specific storage.
                         // Detects REAPER project switches without requiring a page reload.
-                        var _fp = _computeProjectFingerprint(g_regions);
-                        if (_fp && _fp !== g_projectKey) {
-                            _initProjectStorage(_fp);
+                        var _pk = _resolveProjectKey(g_projectKey, g_projectPairs, g_regions);
+                        g_projectPairs = _pk.pairs;
+                        if (_pk.switched) {
+                            _initProjectStorage(_pk.key);
                         }
                         syncRegions();
                         break;
@@ -11047,6 +11095,9 @@
             var mainMap = {};
             var subMap = {};
             var allEntries = [];
+            // A list built from an EMPTY setlist before the library index was read is only the project's regions, not
+            // anybody's setlist: it is kept locally but must not be written to the project or published.
+            var _unconfirmedBootstrap = false;
 
             // ── Pass 1: build allEntries from regions only ────────────────────
             // g_markers is now populated independently by the MARKER_LIST_END handler
@@ -11474,6 +11525,7 @@
                 var newItems = [];
                 for (var k in mainMap) { if (mainMap.hasOwnProperty(k) && !placed[k]) newItems.push(mainMap[k]); }
                 newItems.sort(function (a, b) { return a.start - b.start; });
+                if (bootstrap && REASET_MODE === 'director' && !_libReconciled) _unconfirmedBootstrap = true;
                 for (var n = 0; n < newItems.length; n++) {
                     if (bootstrap) {
                         displayList.push(_makeInstance(newItems[n], _newUid(newItems[n].id),
@@ -11508,8 +11560,8 @@
                 newItems2.sort(function (a, b) { return a.start - b.start; });
                 g_offSetlist = newItems2;
             }
-            saveCurrentState();
-            _syncPublishOnDirectorReady();
+            saveCurrentState(_unconfirmedBootstrap);
+            if (!_unconfirmedBootstrap) _syncPublishOnDirectorReady();
             // REAPER has spoken: anything staged that it now agrees with is
             // confirmed, and the staging can go.
             _confirmStagedColors();
@@ -11540,7 +11592,7 @@
             return active.concat(inactive);
         }
 
-        function saveCurrentState() {
+        function saveCurrentState(unconfirmedBootstrap) {
             displayList = _partitionActiveFirst(displayList);
             var fmt = displayList.map(function (r) { return { id: r.id, chain: r.chain, skipped: r.skipped, loop: r.loop }; });
 
@@ -11575,6 +11627,9 @@
             setlists[currentSetlistName] = fmt;
             localStorage.setItem(STORAGE_KEY, JSON.stringify(setlists));
             localStorage.setItem(CURRENT_KEY, currentSetlistName);
+            // The project's own regions, listed because the setlist was still empty and the library not yet read: nothing to
+            // send. Once the index is read the real setlist replaces this one.
+            if (unconfirmedBootstrap) return;
             // Every edit that reaches this single choke point (skip/loop/chain
             // toggles, reordering, import, pull) re-broadcasts to Players —
             // debounced so a drag reorder or a burst of clicks coalesces into one
