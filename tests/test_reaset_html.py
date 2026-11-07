@@ -5982,3 +5982,234 @@ def test_the_paused_rescue_returns_instead_of_falling_through(
         "the paused branch declines the seek and then falls through, so "
         "auto-stop is armed on the bounds of a song that is out of the show"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Regression: names with a bracketed prefix, and setlists lost to a stale disk
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PARSER_HARNESS = """
+    var MARKER_COLORS = { red: '#ef4444', blue: '#3b82f6' };
+""" 
+
+
+def _extract_by_indent(source: str, name: str) -> str:
+    """Slice `function NAME` up to the next sibling function.
+
+    extract_function() counts braces and is thrown by regex literals such as
+    a regex literal with an escaped brace in the parsers; these top-level functions are all indented
+    the same, so the next 8-space `function`/comment line ends them.
+    """
+    start = re.search(r"^ {8}function\s+" + re.escape(name) + r"\s*\(", source, re.M)
+    assert start, f"{name}() not found"
+    # the function ends at the first following 8-space line that is not its closing brace
+    for m in re.finditer(r"^ {8}(\S.*)$", source[start.end():], re.M):
+        if m.group(1) != "}":
+            return source[start.start(): start.end() + m.start()]
+    raise AssertionError(name)
+
+
+def _parse_names(script_body: str, fn: str, names: list[str]) -> list[dict]:
+    funcs = "".join(_extract_by_indent(script_body, f) for f in (fn, "_applyLoopFlags"))
+    harness = _PARSER_HARNESS + funcs + f"""
+        var out = {json.dumps(names)}.map(function (n) {{
+            var r = {fn}(n);
+            return {{ name: r.displayName, durationSec: r.durationSec,
+                      colorHex: r.colorHex, className: r.className,
+                      nosong: !!r.nosong }};
+        }});
+        console.log(JSON.stringify(out));
+    """
+    return json.loads(run_node(harness))
+
+
+@requires_node
+@pytest.mark.parametrize("fn", ["parseRegionFlags", "parseMarkerName"])
+def test_unknown_bracket_text_stays_in_the_displayed_name(script_body: str, fn: str) -> None:
+    """`[DJ] Song` must show as `[DJ] Song`.
+
+    [..] is only an attribute when it is one ReaSet knows (mm:ss, a palette
+    colour, .class, nosong). Anything else is part of the song's title; the
+    parser used to delete every bracket pair it met, so a region named
+    "[DJ] Nome da musica" rendered as "Nome da musica".
+    """
+    got = _parse_names(script_body, fn, [
+        "[DJ] Nome da musica",
+        "Nome da musica [DJ]",
+        "[Acoustic] Song [red]",
+        "[DJ] Song [3:30]",
+    ])
+    assert got[0]["name"] == "[DJ] Nome da musica"
+    assert got[1]["name"] == "Nome da musica [DJ]"
+    assert got[2]["name"] == "[Acoustic] Song" and got[2]["colorHex"] == "#ef4444"
+    assert got[3]["name"] == "[DJ] Song" and got[3]["durationSec"] == 210
+
+
+@requires_node
+@pytest.mark.parametrize("fn", ["parseRegionFlags", "parseMarkerName"])
+def test_known_bracket_attributes_are_still_stripped(script_body: str, fn: str) -> None:
+    got = _parse_names(script_body, fn, ["Song [blue]", "Song [.big]", "Song [2:05]"])
+    assert got[0]["name"] == "Song" and got[0]["colorHex"] == "#3b82f6"
+    assert got[1]["name"] == "Song" and got[1]["className"] == "big"
+    assert got[2]["name"] == "Song" and got[2]["durationSec"] == 125
+
+
+def test_parse_marker_name_still_handles_nosong(script_body: str) -> None:
+    got = _parse_names(script_body, "parseMarkerName", ["Talk [nosong]"])
+    assert got[0]["name"] == "Talk" and got[0]["nosong"] is True
+
+
+_LIBRARY_HARNESS = """
+    var STORAGE_KEY = 'k1', CURRENT_KEY = 'k2';
+    var store = {};
+    var localStorage = { setItem: function (k, v) { store[k] = v; } };
+    var REASET_MODE = 'director';
+    var SYNC_CHUNK_LEN = 1000, LIBRARY_FILE = 'lib.json';
+    var setlists = { Default: [{ id: 1 }], Show: [{ id: 1 }, { id: 2 }] };
+    var currentSetlistName = 'Default';
+    var displayList = [], initialized = true;
+    var _libRev = 0, _libQueue = [], _libDraining = false, _libConnected = false;
+    var _libReconciled = false;
+    var sent = [], sendDone = null;
+    function _b64uEncode(s) { return Buffer.from(String(s)).toString('base64'); }
+    function _syncSendSeq(cmds, tag, done) { sent.push(cmds); sendDone = done; }
+    function updateSetlistDropdown() {}
+    function syncRegions() {}
+    var DISK = null;
+    var fetch = function () {
+        return Promise.resolve({ ok: true, json: function () { return DISK; } });
+    };
+    function diskOf(map) {
+        return { v: 2, sets: Object.keys(map).map(function (k) { return { name: k, songs: map[k] }; }) };
+    }
+    var tick = function () { return new Promise(function (r) { setTimeout(r, 5); }); };
+"""
+
+
+def _library_run(script_body: str, scenario: str) -> dict:
+    funcs = "".join(extract_function(script_body, f) for f in (
+        "_libraryEnqueue", "_libraryDrain", "_librarySyncWithProject",
+    ))
+    # Optional state the fix introduces; harmless where it is absent.
+    extra = ""
+    for name in ("_libPending", "_libDeferred", "LIB_PENDING_GRACE", "LIB_PENDING_MAX"):
+        m = re.search(r"\bvar\s+" + name + r"\b[^;]*;", script_body)
+        assert m, f"{name} declaration not found; the harness would run without it"
+        extra += m.group(0) + "\n"
+    harness = _LIBRARY_HARNESS + extra + funcs + """
+        (async function () {
+    """ + scenario + """
+        })();
+    """
+    return json.loads(run_node(harness))
+
+
+@requires_node
+def test_a_new_setlist_survives_a_refresh_that_reads_a_stale_disk(script_body: str) -> None:
+    """Create a setlist, then open the picker before the write has landed.
+
+    The picker re-reads the project index on open. The new setlist was still
+    queued / in flight, so the disk did not have it yet, and the refresh
+    replaced `setlists` wholesale: the new setlist vanished from the list.
+    """
+    out = _library_run(script_body, """
+        DISK = diskOf({ Default: [{ id: 1 }], Show: [{ id: 1 }, { id: 2 }] });
+        _librarySyncWithProject(); await tick();            // boot: reconciled
+        setlists['Fresh'] = [{ id: 9 }];
+        currentSetlistName = 'Fresh';
+        _libraryEnqueue('Fresh');                           // write now in flight
+        _librarySyncWithProject(); await tick();            // stale disk read
+        console.log(JSON.stringify({ names: Object.keys(setlists), cur: currentSetlistName,
+                                     fresh: setlists['Fresh'] }));
+    """)
+    assert "Fresh" in out["names"], "the new setlist was wiped by a stale disk read"
+    assert out["cur"] == "Fresh"
+    assert out["fresh"] == [{"id": 9}]
+
+
+@requires_node
+def test_edits_to_an_existing_setlist_survive_a_stale_disk_read(script_body: str) -> None:
+    """Add + reorder songs in a saved setlist; the refresh must not revert it."""
+    out = _library_run(script_body, """
+        DISK = diskOf({ Default: [{ id: 1 }], Show: [{ id: 1 }, { id: 2 }] });
+        _librarySyncWithProject(); await tick();
+        currentSetlistName = 'Show';
+        setlists['Show'] = [{ id: 3 }, { id: 2 }, { id: 1 }];   // added 3, reordered
+        _libraryEnqueue('Show');
+        _librarySyncWithProject(); await tick();                // disk still has [1,2]
+        console.log(JSON.stringify({ show: setlists['Show'].map(function (r) { return r.id; }) }));
+    """)
+    assert out["show"] == [3, 2, 1], "the edit was reverted to what the disk still held"
+
+
+@requires_node
+def test_an_edit_made_before_the_first_index_read_is_not_dropped(script_body: str) -> None:
+    """`_libraryEnqueue` returned early until reconciled, losing the write."""
+    out = _library_run(script_body, """
+        setlists['Fresh'] = [{ id: 9 }];
+        _libraryEnqueue('Fresh');                               // not reconciled yet
+        DISK = diskOf({ Default: [{ id: 1 }] });
+        _librarySyncWithProject(); await tick();                // first read
+        var wrote = sent.some(function (cmds) {
+            return cmds[0].indexOf('libName') !== -1 &&
+                   cmds[0].indexOf(_b64uEncode('Fresh')) !== -1;
+        });
+        console.log(JSON.stringify({ names: Object.keys(setlists), wrote: wrote }));
+    """)
+    assert "Fresh" in out["names"]
+    assert out["wrote"], "the setlist created before the first read was never written to disk"
+
+
+@requires_node
+def test_disk_still_wins_when_nothing_is_pending(script_body: str) -> None:
+    """The fix must not turn the browser back into a store: no pending write,
+    the disk's content (e.g. a hand-edited file or another device) is adopted."""
+    out = _library_run(script_body, """
+        DISK = diskOf({ Default: [{ id: 1 }], Show: [{ id: 1 }, { id: 2 }] });
+        _librarySyncWithProject(); await tick();
+        DISK = diskOf({ Default: [{ id: 1 }], Show: [{ id: 7 }], Other: [{ id: 8 }] });
+        _librarySyncWithProject(); await tick();
+        console.log(JSON.stringify({ names: Object.keys(setlists).sort(),
+                                     show: setlists['Show'] }));
+    """)
+    assert out["names"] == ["Default", "Other", "Show"]
+    assert out["show"] == [{"id": 7}]
+
+
+@requires_node
+@pytest.mark.parametrize("fn", ["parseRegionFlags", "parseMarkerName"])
+def test_names_without_brackets_are_left_byte_for_byte(script_body: str, fn: str) -> None:
+    got = _parse_names(script_body, fn, ["Song  Title", "Intro[red]Song", "[DJ][red] Song"])
+    assert got[0]["name"] == "Song  Title", "whitespace was rewritten with no bracket involved"
+    assert got[2]["name"] == "[DJ] Song" and got[2]["colorHex"] == "#ef4444"
+
+
+@requires_node
+def test_pending_write_stops_protecting_once_the_disk_has_it(script_body: str) -> None:
+    out = _library_run(script_body, """
+        DISK = diskOf({ Default: [{ id: 1 }] });
+        _librarySyncWithProject(); await tick();
+        setlists['Fresh'] = [{ id: 9 }];
+        _libraryEnqueue('Fresh');
+        DISK = diskOf({ Default: [{ id: 1 }], Fresh: [{ id: 9 }] });   // write landed
+        _librarySyncWithProject(); await tick();
+        DISK = diskOf({ Default: [{ id: 1 }], Fresh: [{ id: 10 }] });  // later external edit
+        _librarySyncWithProject(); await tick();
+        console.log(JSON.stringify({ fresh: setlists['Fresh'] }));
+    """)
+    assert out["fresh"] == [{"id": 10}]
+
+
+@requires_node
+def test_a_send_that_never_completes_does_not_pin_the_copy_forever(script_body: str) -> None:
+    out = _library_run(script_body, """
+        DISK = diskOf({ Default: [{ id: 1 }], Show: [{ id: 1 }] });
+        _librarySyncWithProject(); await tick();
+        setlists['Show'] = [{ id: 5 }];
+        _libraryEnqueue('Show');                       // _syncSendSeq never calls back
+        var real = Date.now; Date.now = function () { return real() + 10 * 60 * 1000; };
+        _librarySyncWithProject(); await tick();
+        Date.now = real;
+        console.log(JSON.stringify({ show: setlists['Show'] }));
+    """)
+    assert out["show"] == [{"id": 1}], "an abandoned write still beats the disk after minutes"
