@@ -8079,10 +8079,26 @@
         var _libDraining  = false;
         var _libConnected = false;  // has the index been read at all this session?
         var _libReconciled = false; // nothing is pushed before that happens
+        // A setlist whose write has not provably reached the disk yet. The
+        // index is re-read on every picker open / set change / boot, and a read
+        // that lands before the write does would replace the browser's copy
+        // with the OLD disk — a new setlist vanished, an edited one reverted.
+        // name -> time until which the local copy beats the disk (Infinity
+        // while queued or in flight, a short grace after the send completes so
+        // REAPER's own tick can write the file and rebuild the index).
+        var _libPending = {};
+        var _libDeferred = [];      // enqueued before the first index read
+        var LIB_PENDING_GRACE = 4000;
 
         function _libraryEnqueue(name) {
-            if (!_libReconciled) return;
             if (REASET_MODE !== 'director') return;
+            _libPending[name] = Infinity;
+            if (!_libReconciled) {
+                // Dropping this lost the write for good; hold it until the
+                // index has been read, then send.
+                if (_libDeferred.indexOf(name) === -1) _libDeferred.push(name);
+                return;
+            }
             var i = _libQueue.indexOf(name);
             if (i !== -1) _libQueue.splice(i, 1);
             _libQueue.push(name);
@@ -8117,6 +8133,7 @@
             // setlist's chunks, and the gap keeps the whole-library case from
             // monopolising the connection the transport polls also need.
             _syncSendSeq(cmds, 'library-push', function () {
+                if (_libQueue.indexOf(name) === -1) _libPending[name] = Date.now() + LIB_PENDING_GRACE;
                 setTimeout(_libraryDrain, LIB_SEND_GAP);
             });
         }
@@ -8146,6 +8163,16 @@
                         if (s && typeof s.name === 'string' && s.songs) { next[s.name] = s.songs; n++; }
                     }
 
+                    // Local copies of setlists whose write is still on its way
+                    // beat the (older) disk; everything else is the disk's.
+                    var _now = Date.now();
+                    for (var pname in _libPending) {
+                        if (!_libPending.hasOwnProperty(pname)) continue;
+                        if (_libPending[pname] <= _now) { delete _libPending[pname]; continue; }
+                        if (setlists[pname]) next[pname] = setlists[pname];
+                        else delete next[pname];
+                    }
+
                     // One-time migration: this browser comes from the era when
                     // localStorage was the store, and the disk has nothing yet.
                     // Push what is here before the empty disk becomes the truth
@@ -8154,12 +8181,13 @@
                     var localHasContent = localNames.some(function (k) { return (setlists[k] || []).length > 0; });
                     if (n === 0 && localHasContent) {
                         _libReconciled = true;
+                        _libDeferred = [];
                         for (var m = 0; m < localNames.length; m++) _libraryEnqueue(localNames[m]);
                         updateSetlistDropdown();
                         return;
                     }
 
-                    if (n > 0) {
+                    if (n > 0 || Object.keys(next).length > 0) {
                         setlists = next;
                         if (!setlists[currentSetlistName]) currentSetlistName = Object.keys(setlists)[0];
                         localStorage.setItem(STORAGE_KEY, JSON.stringify(setlists));
@@ -8167,8 +8195,10 @@
                         displayList = []; initialized = false;
                     }
                     _libReconciled = true;
+                    var _def = _libDeferred; _libDeferred = [];
+                    for (var d = 0; d < _def.length; d++) _libraryEnqueue(_def[d]);
                     updateSetlistDropdown();
-                    if (n > 0 && typeof syncRegions === 'function') syncRegions();
+                    if ((n > 0 || Object.keys(next).length > 0) && typeof syncRegions === 'function') syncRegions();
                 });
         }
 
@@ -11632,13 +11662,12 @@
                 s = s.trim();
             }
 
-            // Features 7/9/12: Square bracket attributes [attr]
-            var bracketRe = /\[([^\]]+)\]/;
-            var bm;
-            while ((bm = bracketRe.exec(s)) !== null) {
-                var attr = bm[1].trim();
-                s = (s.slice(0, bm.index) + s.slice(bm.index + bm[0].length)).trim();
-                var attrLow = attr.toLowerCase();
+            // Features 7/9/12: Square bracket attributes [attr].
+            // Only a bracket ReaSet RECOGNISES is an attribute and leaves the
+            // title. Anything else — "[DJ] Song" — is part of the name and is
+            // kept: deleting every [..] hid prefixes people typed on purpose.
+            s = s.replace(/\[([^\]]+)\]/g, function (whole, inner) {
+                var attrLow = inner.trim().toLowerCase();
                 if (/^\d+:\d+$/.test(attrLow)) {
                     var tp = attrLow.split(':');
                     out.durationSec = parseInt(tp[0]) * 60 + parseInt(tp[1]);
@@ -11646,9 +11675,11 @@
                     out.className = attrLow.slice(1);
                 } else if (MARKER_COLORS[attrLow]) {
                     out.colorHex = MARKER_COLORS[attrLow];
+                } else {
+                    return whole;
                 }
-                bracketRe = /\[([^\]]+)\]/;
-            }
+                return '';
+            }).replace(/\s{2,}/g, ' ').trim();
 
             // Loop flags (+LOOP, +LOOPFULL, +LOOP:N)
             s = _applyLoopFlags(s, out);
@@ -11701,13 +11732,10 @@
                 s = s.trim();
             }
 
-            // Features 7/8/9/12: Square bracket attributes [attr]
-            var bracketRe = /\[([^\]]+)\]/;
-            var bm;
-            while ((bm = bracketRe.exec(s)) !== null) {
-                var attr = bm[1].trim();
-                s = (s.slice(0, bm.index) + s.slice(bm.index + bm[0].length)).trim();
-                var attrLow = attr.toLowerCase();
+            // Features 7/8/9/12: Square bracket attributes [attr]. Unknown
+            // brackets ("[DJ] Song") stay in the title; see parseRegionFlags.
+            s = s.replace(/\[([^\]]+)\]/g, function (whole, inner) {
+                var attrLow = inner.trim().toLowerCase();
                 if (attrLow === 'nosong') {
                     r.nosong = true;
                 } else if (/^\d+:\d+$/.test(attrLow)) {
@@ -11717,8 +11745,11 @@
                     r.className = attrLow.slice(1);
                 } else if (MARKER_COLORS[attrLow]) {
                     r.colorHex = MARKER_COLORS[attrLow];
+                } else {
+                    return whole;
                 }
-            }
+                return '';
+            }).replace(/\s{2,}/g, ' ').trim();
 
             // Loop flags (+LOOP, +LOOPFULL, +LOOP:N) — applies to marker-based sections too
             s = _applyLoopFlags(s, r);
