@@ -5997,13 +5997,12 @@ def _extract_by_indent(source: str, name: str) -> str:
     """Slice `function NAME` up to the next sibling function.
 
     extract_function() counts braces and is thrown by regex literals such as
-    /\{([^}]*)\}/ in the parsers; these top-level functions are all indented
+    a regex literal with an escaped brace in the parsers; these top-level functions are all indented
     the same, so the next 8-space `function`/comment line ends them.
     """
     start = re.search(r"^ {8}function\s+" + re.escape(name) + r"\s*\(", source, re.M)
     assert start, f"{name}() not found"
-    end = re.search(r"^ {8}\S", source[start.end():], re.M)
-    # first following line at 8-space indent that is not the closing brace
+    # the function ends at the first following 8-space line that is not its closing brace
     for m in re.finditer(r"^ {8}(\S.*)$", source[start.end():], re.M):
         if m.group(1) != "}":
             return source[start.start(): start.end() + m.start()]
@@ -6093,10 +6092,10 @@ def _library_run(script_body: str, scenario: str) -> dict:
     ))
     # Optional state the fix introduces; harmless where it is absent.
     extra = ""
-    for name in ("_libPending", "_libDeferred", "LIB_PENDING_GRACE"):
+    for name in ("_libPending", "_libDeferred", "LIB_PENDING_GRACE", "LIB_PENDING_MAX"):
         m = re.search(r"\bvar\s+" + name + r"\b[^;]*;", script_body)
-        if m:
-            extra += m.group(0) + "\n"
+        assert m, f"{name} declaration not found; the harness would run without it"
+        extra += m.group(0) + "\n"
     harness = _LIBRARY_HARNESS + extra + funcs + """
         (async function () {
     """ + scenario + """
@@ -6175,3 +6174,42 @@ def test_disk_still_wins_when_nothing_is_pending(script_body: str) -> None:
     """)
     assert out["names"] == ["Default", "Other", "Show"]
     assert out["show"] == [{"id": 7}]
+
+
+@requires_node
+@pytest.mark.parametrize("fn", ["parseRegionFlags", "parseMarkerName"])
+def test_names_without_brackets_are_left_byte_for_byte(script_body: str, fn: str) -> None:
+    got = _parse_names(script_body, fn, ["Song  Title", "Intro[red]Song", "[DJ][red] Song"])
+    assert got[0]["name"] == "Song  Title", "whitespace was rewritten with no bracket involved"
+    assert got[2]["name"] == "[DJ] Song" and got[2]["colorHex"] == "#ef4444"
+
+
+@requires_node
+def test_pending_write_stops_protecting_once_the_disk_has_it(script_body: str) -> None:
+    out = _library_run(script_body, """
+        DISK = diskOf({ Default: [{ id: 1 }] });
+        _librarySyncWithProject(); await tick();
+        setlists['Fresh'] = [{ id: 9 }];
+        _libraryEnqueue('Fresh');
+        DISK = diskOf({ Default: [{ id: 1 }], Fresh: [{ id: 9 }] });   // write landed
+        _librarySyncWithProject(); await tick();
+        DISK = diskOf({ Default: [{ id: 1 }], Fresh: [{ id: 10 }] });  // later external edit
+        _librarySyncWithProject(); await tick();
+        console.log(JSON.stringify({ fresh: setlists['Fresh'] }));
+    """)
+    assert out["fresh"] == [{"id": 10}]
+
+
+@requires_node
+def test_a_send_that_never_completes_does_not_pin_the_copy_forever(script_body: str) -> None:
+    out = _library_run(script_body, """
+        DISK = diskOf({ Default: [{ id: 1 }], Show: [{ id: 1 }] });
+        _librarySyncWithProject(); await tick();
+        setlists['Show'] = [{ id: 5 }];
+        _libraryEnqueue('Show');                       // _syncSendSeq never calls back
+        var real = Date.now; Date.now = function () { return real() + 10 * 60 * 1000; };
+        _librarySyncWithProject(); await tick();
+        Date.now = real;
+        console.log(JSON.stringify({ show: setlists['Show'] }));
+    """)
+    assert out["show"] == [{"id": 1}], "an abandoned write still beats the disk after minutes"

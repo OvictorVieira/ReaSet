@@ -8088,11 +8088,12 @@
         // REAPER's own tick can write the file and rebuild the index).
         var _libPending = {};
         var _libDeferred = [];      // enqueued before the first index read
-        var LIB_PENDING_GRACE = 4000;
+        var LIB_PENDING_GRACE = 30000;
+        var LIB_PENDING_MAX   = 60000;  // a send that never completes must not pin the copy forever
 
         function _libraryEnqueue(name) {
             if (REASET_MODE !== 'director') return;
-            _libPending[name] = Infinity;
+            _libPending[name] = Date.now() + LIB_PENDING_MAX;
             if (!_libReconciled) {
                 // Dropping this lost the write for good; hold it until the
                 // index has been read, then send.
@@ -8134,6 +8135,7 @@
             // monopolising the connection the transport polls also need.
             _syncSendSeq(cmds, 'library-push', function () {
                 if (_libQueue.indexOf(name) === -1) _libPending[name] = Date.now() + LIB_PENDING_GRACE;
+                else _libPending[name] = Date.now() + LIB_PENDING_MAX;
                 setTimeout(_libraryDrain, LIB_SEND_GAP);
             });
         }
@@ -8169,6 +8171,12 @@
                     for (var pname in _libPending) {
                         if (!_libPending.hasOwnProperty(pname)) continue;
                         if (_libPending[pname] <= _now) { delete _libPending[pname]; continue; }
+                        // The disk already holds exactly what we have: the write
+                        // landed, so the disk is authoritative again.
+                        if (next[pname] && setlists[pname] &&
+                            JSON.stringify(next[pname]) === JSON.stringify(setlists[pname])) {
+                            delete _libPending[pname]; continue;
+                        }
                         if (setlists[pname]) next[pname] = setlists[pname];
                         else delete next[pname];
                     }
@@ -11666,6 +11674,7 @@
             // Only a bracket ReaSet RECOGNISES is an attribute and leaves the
             // title. Anything else — "[DJ] Song" — is part of the name and is
             // kept: deleting every [..] hid prefixes people typed on purpose.
+            var _bracketCut = false;
             s = s.replace(/\[([^\]]+)\]/g, function (whole, inner) {
                 var attrLow = inner.trim().toLowerCase();
                 if (/^\d+:\d+$/.test(attrLow)) {
@@ -11678,8 +11687,11 @@
                 } else {
                     return whole;
                 }
+                _bracketCut = true;
                 return '';
-            }).replace(/\s{2,}/g, ' ').trim();
+            });
+            if (_bracketCut) s = s.replace(/\s{2,}/g, ' ');
+            s = s.trim();
 
             // Loop flags (+LOOP, +LOOPFULL, +LOOP:N)
             s = _applyLoopFlags(s, out);
@@ -11734,6 +11746,7 @@
 
             // Features 7/8/9/12: Square bracket attributes [attr]. Unknown
             // brackets ("[DJ] Song") stay in the title; see parseRegionFlags.
+            var _bracketCut = false;
             s = s.replace(/\[([^\]]+)\]/g, function (whole, inner) {
                 var attrLow = inner.trim().toLowerCase();
                 if (attrLow === 'nosong') {
@@ -11748,8 +11761,11 @@
                 } else {
                     return whole;
                 }
+                _bracketCut = true;
                 return '';
-            }).replace(/\s{2,}/g, ' ').trim();
+            });
+            if (_bracketCut) s = s.replace(/\s{2,}/g, ' ');
+            s = s.trim();
 
             // Loop flags (+LOOP, +LOOPFULL, +LOOP:N) — applies to marker-based sections too
             s = _applyLoopFlags(s, r);
